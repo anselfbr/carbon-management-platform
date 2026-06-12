@@ -21,7 +21,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
-app = FastAPI(title="年度產品產量與分類平台", version="3.0.0")
+app = FastAPI(title="Carbon Management Platform", version="6.0.0")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -302,18 +302,12 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     masters = build_masters()
     df = pd.read_excel(path, dtype=str)
     df = df.loc[:, ~df.columns.duplicated()].copy()
-
-    # v6: 保留來源檔案欄位；若由舊流程單檔進來，補上檔名
-    if "Source file" not in df.columns:
-        df["Source file"] = path.name
-
     cols = {key: find_col(df, aliases) for key, aliases in REQUIRED_ALIASES.items()}
     missing = [key for key, col in cols.items() if col is None]
     if missing:
         raise ValueError(f"缺少必要欄位：{', '.join(missing)}")
 
     out = pd.DataFrame()
-    out["Source file"] = df["Source file"].astype(str).str.strip()
     out["Order"] = df[cols["order"]]
     out["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
     out["Material Number"] = df[cols["material_number"]].astype(str).str.strip()
@@ -368,24 +362,16 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
         .agg(筆數="count", 生產量="sum")
     )
 
-    # v6: 來源檔案摘要分頁
-    file_summary = (
-        out.groupby(["Source file"], dropna=False, as_index=False)["Delivered quantity"]
-        .agg(筆數="count", 生產量="sum")
-        .sort_values(["Source file"])
-    )
-
     wip = out[out["Is_WIP"] == "Y"].copy()
 
     file_id = uuid.uuid4().hex[:10]
-    output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
+    output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v3_{year or 'ALL'}_{file_id}.xlsx"
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         out.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
         type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
         customer_summary.to_excel(writer, index=False, sheet_name="Plant_客戶年度產量")
         source_summary.to_excel(writer, index=False, sheet_name="判斷來源摘要")
-        file_summary.to_excel(writer, index=False, sheet_name="來源檔案摘要")
         wip.to_excel(writer, index=False, sheet_name="WIP清單")
         for sheet in writer.book.worksheets:
             sheet.freeze_panes = "A2"
@@ -401,7 +387,6 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
         "wip_rows": int(len(wip)),
-        "source_files": int(out["Source file"].nunique()) if len(out) else 0,
         "output_filename": output_path.name,
         "year": year or "ALL",
     }
@@ -451,7 +436,7 @@ def index(request: Request):
 async def process(
     files: Optional[list[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),
-    year: Optional[int] = Form(None),
+    year: Optional[str] = Form(None),
 ):
     upload_files: list[UploadFile] = []
     if files:
@@ -464,6 +449,18 @@ async def process(
             {"ok": False, "message": "請至少上傳一個 Excel 檔案"},
             status_code=400,
         )
+
+    # 修正 422：前端 Reporting Year 留空時會送出空字串。
+    # FastAPI 若直接宣告 Optional[int] 會在進入函式前驗證失敗。
+    year_value: Optional[int] = None
+    if year is not None and str(year).strip() != "":
+        try:
+            year_value = int(str(year).strip())
+        except ValueError:
+            return JSONResponse(
+                {"ok": False, "message": "Reporting Year 請輸入西元年份，例如 2024，或留空表示全部年度。"},
+                status_code=400,
+            )
 
     token = uuid.uuid4().hex[:10]
     saved_paths = []
@@ -480,18 +477,15 @@ async def process(
 
             df = pd.read_excel(saved, dtype=str)
             df = df.loc[:, ~df.columns.duplicated()].copy()
-            df["Source file"] = upload.filename
             frames.append(df)
 
-        if len(frames) == 1:
-            process_path = saved_paths[0]
-        else:
-            combined = pd.concat(frames, ignore_index=True, sort=False)
-            combined = combined.loc[:, ~combined.columns.duplicated()].copy()
-            process_path = UPLOAD_DIR / f"combined_work_orders_{token}.xlsx"
-            combined.to_excel(process_path, index=False)
+        # 統一寫成 combined_work_orders，確保單檔/多檔都會保留 Source file 欄位。
+        combined = pd.concat(frames, ignore_index=True, sort=False)
+        combined = combined.loc[:, ~combined.columns.duplicated()].copy()
+        process_path = UPLOAD_DIR / f"combined_work_orders_{token}.xlsx"
+        combined.to_excel(process_path, index=False)
 
-        output_path, summary = process_file(process_path, year)
+        output_path, summary = process_file(process_path, year_value)
         summary["files"] = len(upload_files)
 
     except Exception as exc:
