@@ -1,0 +1,1 @@
+覆蓋 main.py。本版新增 /process-bom-expansion endpoint。請確認專案根目錄同時有 bom_formatter.py。
