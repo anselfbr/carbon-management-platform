@@ -21,7 +21,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
-app = FastAPI(title="Carbon Management Platform", version="6.0.0")
+app = FastAPI(title="年度產品產量與分類平台", version="3.0.0")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -69,8 +69,6 @@ REQUIRED_ALIASES = {
 def ensure_master_files() -> None:
     rule_path = DATA_DIR / "rule_master.csv"
     material_rule_path = DATA_DIR / "material_rule_master.csv"
-    product_series_path = DATA_DIR / "product_series_master.csv"
-
     if not rule_path.exists():
         rule_path.write_text(
             "Prefix,Product Type,Customer Code Logic,Enabled\n"
@@ -80,18 +78,8 @@ def ensure_master_files() -> None:
             "SK,DT Keyboard,DT_3_4_CHAR,Y\n",
             encoding="utf-8-sig",
         )
-
     if not material_rule_path.exists():
-        material_rule_path.write_text(
-            "Material Number,Product Type,Customer,Enabled\n",
-            encoding="utf-8-sig",
-        )
-
-    if not product_series_path.exists():
-        product_series_path.write_text(
-            "Plant,Product series,產品類型,客戶代碼,客戶名稱\n",
-            encoding="utf-8-sig",
-        )
+        material_rule_path.write_text("Material Number,Product Type,Customer,Enabled\n", encoding="utf-8-sig")
 
 
 ensure_master_files()
@@ -301,7 +289,6 @@ def classify(material_number: object, series: str, plant: object, masters: dict)
 def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     masters = build_masters()
     df = pd.read_excel(path, dtype=str)
-    df = df.loc[:, ~df.columns.duplicated()].copy()
     cols = {key: find_col(df, aliases) for key, aliases in REQUIRED_ALIASES.items()}
     missing = [key for key, col in cols.items() if col is None]
     if missing:
@@ -429,20 +416,40 @@ def save_uploaded_rule(file_path: Path) -> int:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return templates.TemplateResponse(request, "index.html")
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.post("/process")
-async def process(
-    files: Optional[list[UploadFile]] = File(None),
-    file: Optional[UploadFile] = File(None),
-    year: Optional[str] = Form(None),
-):
-    upload_files: list[UploadFile] = []
-    if files:
-        upload_files.extend(files)
-    if file:
-        upload_files.append(file)
+async def process(request: Request):
+    """
+    Robust Step 1 upload endpoint.
+    Avoid FastAPI 422 pre-validation by reading multipart form manually.
+
+    Supported frontend fields:
+    - files: multiple Excel files
+    - file: single Excel file
+    - year: optional reporting year; blank means ALL
+    """
+    try:
+        form = await request.form()
+    except Exception as exc:
+        return JSONResponse(
+            {"ok": False, "message": f"無法讀取上傳表單：{exc}"},
+            status_code=400,
+        )
+
+    upload_files = []
+
+    # Support both new multi-file field and older single-file field.
+    for field_name in ("files", "file"):
+        try:
+            values = form.getlist(field_name)
+        except Exception:
+            values = []
+
+        for item in values:
+            if hasattr(item, "filename") and item.filename:
+                upload_files.append(item)
 
     if not upload_files:
         return JSONResponse(
@@ -450,12 +457,11 @@ async def process(
             status_code=400,
         )
 
-    # 修正 422：前端 Reporting Year 留空時會送出空字串。
-    # FastAPI 若直接宣告 Optional[int] 會在進入函式前驗證失敗。
+    year_raw = form.get("year", "")
     year_value: Optional[int] = None
-    if year is not None and str(year).strip() != "":
+    if year_raw is not None and str(year_raw).strip() != "":
         try:
-            year_value = int(str(year).strip())
+            year_value = int(str(year_raw).strip())
         except ValueError:
             return JSONResponse(
                 {"ok": False, "message": "Reporting Year 請輸入西元年份，例如 2024，或留空表示全部年度。"},
@@ -463,25 +469,28 @@ async def process(
             )
 
     token = uuid.uuid4().hex[:10]
-    saved_paths = []
     frames = []
 
     try:
         for upload in upload_files:
-            if not upload.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-                return JSONResponse({"ok": False, "message": "請上傳 Excel 檔案"}, status_code=400)
+            filename = str(upload.filename or "")
+            if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+                return JSONResponse(
+                    {"ok": False, "message": f"請上傳 Excel 檔案：{filename}"},
+                    status_code=400,
+                )
 
-            saved = UPLOAD_DIR / f"work_order_{token}_{upload.filename}"
+            saved = UPLOAD_DIR / f"work_order_{token}_{filename}"
             saved.write_bytes(await upload.read())
-            saved_paths.append(saved)
 
             df = pd.read_excel(saved, dtype=str)
             df = df.loc[:, ~df.columns.duplicated()].copy()
+            df["Source file"] = filename
             frames.append(df)
 
-        # 統一寫成 combined_work_orders，確保單檔/多檔都會保留 Source file 欄位。
         combined = pd.concat(frames, ignore_index=True, sort=False)
         combined = combined.loc[:, ~combined.columns.duplicated()].copy()
+
         process_path = UPLOAD_DIR / f"combined_work_orders_{token}.xlsx"
         combined.to_excel(process_path, index=False)
 
@@ -490,9 +499,16 @@ async def process(
 
     except Exception as exc:
         traceback.print_exc()
-        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+        return JSONResponse(
+            {"ok": False, "message": str(exc)},
+            status_code=400,
+        )
 
-    return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
+    return {
+        "ok": True,
+        "summary": summary,
+        "download_url": f"/download/{output_path.name}",
+    }
 
 
 @app.post("/upload-material-rule")
@@ -516,48 +532,20 @@ def download(filename: str):
     return FileResponse(path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
-@app.get("/download-rule-master")
-def download_rule_master():
-    """Download Rule Master used by the current UI button."""
-    path = DATA_DIR / "rule_master.csv"
-    if not path.exists():
-        ensure_master_files()
-    return FileResponse(
-        path,
-        filename="rule_master.csv",
-        media_type="text/csv; charset=utf-8",
-    )
-
-
-@app.get("/download-product-series-master")
-def download_product_series_master():
-    """Download Product Series Master used by the current UI button."""
-    path = DATA_DIR / "product_series_master.csv"
-    if not path.exists():
-        ensure_master_files()
-    return FileResponse(
-        path,
-        filename="product_series_master.csv",
-        media_type="text/csv; charset=utf-8",
-    )
-
-
 @app.get("/download-material-rule")
 def download_material_rule():
     path = DATA_DIR / "material_rule_master.csv"
     if not path.exists():
         ensure_master_files()
-    return FileResponse(
-        path,
-        filename="material_rule_master.csv",
-        media_type="text/csv; charset=utf-8",
-    )
+    return FileResponse(path, filename="material_rule_master.csv", media_type="text/csv")
 
 
 @app.get("/download-prefix-rule")
 def download_prefix_rule():
-    # Backward-compatible alias for older frontend versions.
-    return download_rule_master()
+    path = DATA_DIR / "rule_master.csv"
+    if not path.exists():
+        ensure_master_files()
+    return FileResponse(path, filename="rule_master.csv", media_type="text/csv")
 
 # =========================================================
 # Step 2 · Batch Data Formatting
