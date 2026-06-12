@@ -3,73 +3,745 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Carbon Management Platform</title>
+  <title>Carbon Management Platform | Product Data Preparation</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <header>
-    <div class="brand">📊 Annual Output Platform v6</div>
-    <div class="sub">Multi-file Upload｜Rule Master → Product Series Master → WIP</div>
-  </header>
-  <main>
-    <section class="card left">
-      <h2>年度產量與分類</h2>
-      <form id="form">
-        <label>1. 上傳 SAP 生產工單（可多選）</label>
-        <input id="files" name="files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
-        <label>2. 篩選年度</label>
-        <input id="year" name="year" type="number" placeholder="例如：2024；留空=全部" />
-        <button type="submit">▶ 執行年度產量與分類</button>
-      </form>
-      <a id="download" class="download disabled" href="#">⬇ 下載結果 Excel</a>
-
-      <hr />
-      <h2>分類規則管理</h2>
-      <p class="hint">v6 使用 2 個規則檔：rule_master + product_series_master。支援多工單上傳、動態 Series Prefix 抽取、Touch pad module → TP、SCMC 系列辨識、851-/852-/Assy 等 WIP 規則。</p>
-      <form id="ruleForm">
-        <input id="ruleFile" name="file" type="file" accept=".xlsx,.xls,.xlsm,.csv" />
-        <button type="submit">⬆ 匯入 Rule Master</button>
-      </form>
-      <a class="download" href="/download-rule-master">⬇ 下載 Rule Master</a>
-      <a class="download" href="/download-product-series-master">⬇ 下載 Product Series Master</a>
-    </section>
-    <section class="card right">
-      <nav>
-        <button class="tab active" data-tab="log">執行記錄</button>
-        <button class="tab" data-tab="summary">結果摘要</button>
-        <button class="tab" data-tab="rule">欄位與規則</button>
-      </nav>
-      <pre id="log" class="panel active">尚未執行，請上傳 SAP 生產工單後按下執行。</pre>
-      <div id="summary" class="panel"></div>
-      <div id="rule" class="panel">
-        <h3>v6 判斷順序</h3>
-        <ol>
-          <li><b>Product Series Engine</b>：先保留標點符號切段，再用全文 Regex Prefix Search。</li>
-          <li><b>Rule Master</b>：依 Priority 由小到大判斷。</li>
-          <li><b>Product Series Master</b>：Rule Master 未命中時，用產品系列 Master 補分類。</li>
-          <li><b>Default WIP</b>：以上都找不到時，直接寫 WIP。</li>
-        </ol>
-        <h3>Rule Master 欄位</h3>
-        <p>Priority、Rule Type、Key、Product Type、Customer、Customer Code Logic、Is_WIP、Enabled</p>
-        <h3>預設規則</h3>
-        <ul>
-          <li>851- / 852- 開頭 → WIP</li>
-          <li>Material description 含 Touch pad module → TP</li>
-          <li>SCMC 開頭 → 預設 WIP（可由描述規則覆蓋）</li>
-          <li>Material description 含 ASSY → WIP</li>
-          <li>SN → NB；SP → TP；SM → DT Mouse；SK → DT Keyboard</li>
-        </ul>
-        <h3>SAP 必要欄位</h3>
-        <p>Order、Plant、Material Number、Material description、Delivered quantity (GMEIN)、Actual finish date</p>
+  <div class="app-shell sidebar-expanded">
+    <aside class="sidebar">
+      <div class="sidebar-top-actions">
+        <button id="menuToggle" class="menu-toggle" type="button" aria-label="Toggle menu">☰</button>
+        <button id="homeButton" class="home-toggle" type="button" aria-label="Go home">
+    <svg viewBox="0 0 24 24" fill="none">
+        <path d="M4 10.5L12 4L20 10.5V20H4V10.5Z"
+              stroke="white"
+              stroke-width="2.4"
+              stroke-linejoin="round"/>
+    </svg>
+</button>
       </div>
-    </section>
-  </main>
+
+      <div class="logo-block" id="homeLogo" role="button" tabindex="0">
+        <div class="logo-mark">CMP</div>
+        <div>
+          <div class="logo-title">Carbon Management Platform</div>
+          <div class="logo-subtitle">Manufacturing Data Layer</div>
+        </div>
+      </div>
+
+      <nav class="side-nav" aria-label="Platform modules">
+        <div class="nav-label">Modules</div>
+
+        <button class="nav-item active" type="button" data-main="prep">
+          <span class="module-index">1</span>
+          <span class="nav-icon">▣</span>
+          <span class="nav-text"><b>Product Data Preparation</b></span>
+        </button>
+
+        <div class="sub-nav">
+          <button class="sub-nav-item" type="button" data-page="rule-management">
+            <span class="sub-dot"></span>
+            <span>Rule Management</span>
+          </button>
+        </div>
+
+        <button class="nav-item" type="button" data-main="bom">
+          <span class="module-index">2</span>
+          <span class="nav-icon">⌘</span>
+          <span class="nav-text"><b>BOM Expansion</b></span>
+        </button>
+
+        <button class="nav-item" type="button" data-main="factor">
+          <span class="module-index">3</span>
+          <span class="nav-icon">◇</span>
+          <span class="nav-text"><b>Carbon Emission Factor Selection</b></span>
+        </button>
+
+        <button class="nav-item" type="button" data-main="pcf">
+          <span class="module-index">4</span>
+          <span class="nav-icon">♻</span>
+          <span class="nav-text"><b>PCF Calculation</b></span>
+        </button>
+      </nav>
+
+      <div class="system-card">
+        <span class="status-dot"></span>
+        <div>
+          <b>Production Environment</b>
+          <p>Online | Version 1.0</p>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Carbon Management Platform</p>
+          <h1 id="pageTitle">Carbon Management Platform</h1>
+          <p class="lead" id="pageLead">
+            Prepare manufacturing data, expand BOM structures, select emission factors,
+            and calculate product carbon footprints.
+          </p>
+        </div>
+        <div class="top-actions">
+          <span class="badge">Rule Master Enabled</span>
+          <span class="badge badge-blue">Multi-file Upload</span>
+          <span class="badge badge-green">Version 1.0</span>
+        </div>
+      </header>
+
+      <section id="moduleNotice" class="module-notice hidden">
+        <b id="moduleNoticeTitle"></b>
+        <span id="moduleNoticeText"></span>
+      </section>
+
+      <section id="dashboard" class="page-section active">
+        <section class="dashboard-module-grid">
+          <button class="dashboard-module-card" type="button" data-dashboard-target="prep">
+            <span class="module-number-box module-blue"><em>Module</em><b>01</b></span>
+            <span class="module-card-copy">
+              <strong>Product Data<br>Preparation</strong>
+              <i></i>
+              <small><span class="mini-icon">▣</span>Work order & batch preparation</small>
+            </span>
+          </button>
+          <button class="dashboard-module-card" type="button" data-dashboard-target="bom">
+            <span class="module-number-box module-purple"><em>Module</em><b>02</b></span>
+            <span class="module-card-copy">
+              <strong>BOM<br>Expansion</strong>
+              <i></i>
+              <small><span class="mini-icon">▱</span>Multi-level BOM explosion</small>
+            </span>
+          </button>
+          <button class="dashboard-module-card" type="button" data-dashboard-target="factor">
+            <span class="module-number-box module-cyan"><em>Module</em><b>03</b></span>
+            <span class="module-card-copy">
+              <strong>Carbon Emission<br>Factor Selection</strong>
+              <i></i>
+              <small><span class="mini-icon">◇</span>Factor mapping and selection</small>
+            </span>
+          </button>
+          <button class="dashboard-module-card" type="button" data-dashboard-target="pcf">
+            <span class="module-number-box module-green"><em>Module</em><b>04</b></span>
+            <span class="module-card-copy">
+              <strong>PCF<br>Calculation</strong>
+              <i></i>
+              <small><span class="mini-icon">▥</span>Product carbon footprint</small>
+            </span>
+          </button>
+        </section>
+      </section>
+
+      <section id="product-data" class="page-section">
+        <section class="workspace">
+          <section class="card primary-card">
+            <div class="section-title">
+              <div>
+                <h2>Step 1 · Work Order Processing</h2>
+                <p>Upload one or multiple SAP production work order files.</p>
+              </div>
+              <span class="step-chip">Step 1</span>
+            </div>
+
+            <form id="form" class="form-panel">
+              <label>Upload SAP Production Work Orders</label>
+              <input id="files" name="files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
+
+              <label>Reporting Year</label>
+              <input id="year" name="year" type="number" placeholder="e.g. 2024；blank = all years" />
+
+              <button type="submit" class="btn-primary">
+                <span class="btn-icon">▶</span>
+                Run Consolidation & Classification
+              </button>
+            </form>
+
+            <div id="processingStatus" class="processing-status idle">
+              <div class="status-header">
+                <div class="spinner"></div>
+                <div>
+                  <b id="statusTitle">Ready for processing</b>
+                  <p id="statusText">Upload SAP work orders and start the classification workflow.</p>
+                </div>
+                <span id="statusTime" class="status-time">Idle</span>
+              </div>
+              <div class="progress-track">
+                <div id="progressBar" class="progress-bar"></div>
+              </div>
+            </div>
+
+            <a id="download" class="download disabled" href="#">Download Step 1 Output Excel</a>
+
+            <div class="divider"></div>
+
+            <div class="section-title">
+              <div>
+                <h2>Step 2 · Batch Data Formatting</h2>
+                <p>Convert Step 1 output and batch file template into a standardized batch file.</p>
+              </div>
+              <span class="step-chip">Step 2</span>
+            </div>
+
+            <div class="placeholder-flow">
+              <div class="flow-card">
+                <b>Step 1 Output</b>
+                <span>Annual output & classification result</span>
+              </div>
+              <div class="flow-arrow">+</div>
+              <div class="flow-card">
+                <b>Batch Template</b>
+                <span>Required batch file format</span>
+              </div>
+              <div class="flow-arrow">→</div>
+              <div class="flow-card strong">
+                <b>Formatted Batch File</b>
+                <span>Ready for downstream processing</span>
+              </div>
+            </div>
+
+            <form id="bulkForm" class="form-panel">
+              <label>Upload Step 1 Output File</label>
+              <input id="step1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+
+              <label>Upload Bulk Template File</label>
+              <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+
+              <button type="submit" class="btn-secondary">
+                <span class="btn-icon">⚙</span>
+                Generate Formatted Bulk File
+              </button>
+            </form>
+
+            <div id="bulkProcessingStatus" class="processing-status idle">
+              <div class="status-header">
+                <div class="spinner"></div>
+                <div>
+                  <b id="bulkStatusTitle">Ready for batch formatting</b>
+                  <p id="bulkStatusText">Upload Step 1 output and bulk template to generate formatted bulk file.</p>
+                </div>
+                <span id="bulkStatusTime" class="status-time">Idle</span>
+              </div>
+              <div class="progress-track">
+                <div id="bulkProgressBar" class="progress-bar"></div>
+              </div>
+            </div>
+
+            <a id="bulkDownload" class="download disabled" href="#">Download Formatted Bulk File</a>
+
+            <p class="hint">
+              Step 2 extracts required fields from the Step 1 output and writes them into the bulk template.
+              Activity Data and Products sheets will be populated automatically.
+            </p>
+          </section>
+
+          <section class="card insight-card">
+            <nav class="tabs">
+              <button class="tab active" data-tab="log">Execution Log</button>
+              <button class="tab" data-tab="summary">Summary</button>
+              <button class="tab" data-tab="rule">Rules</button>
+            </nav>
+
+            <pre id="log" class="panel active">Ready. Upload SAP production work orders and start processing.</pre>
+            <div id="summary" class="panel"></div>
+
+            <div id="rule" class="panel">
+              <h3>Version 1.0 Decision Flow</h3>
+              <ol>
+                <li><b>Product Series Engine</b>: punctuation-based segmentation, then full-text Regex Prefix Search.</li>
+                <li><b>Rule Master</b>: priority-based classification logic.</li>
+                <li><b>Product Series Master</b>: fallback mapping by product series.</li>
+                <li><b>Default WIP</b>: classify as WIP if no rule is matched.</li>
+              </ol>
+
+              <h3>Required SAP Fields</h3>
+              <p>Order、Plant、Material Number、Material description、Delivered quantity (GMEIN)、Actual finish date</p>
+            </div>
+          </section>
+        </section>
+      </section>
+
+
+      <section id="bom-expansion" class="page-section">
+        <section class="workspace">
+          <section class="card primary-card">
+            <form id="bomForm" class="form-panel">
+              <label>Upload Standard BOM</label>
+              <input id="bomFile" name="bom_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+
+              <label>Upload Raw Material Bulk Template</label>
+              <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+              <button type="submit" class="btn-secondary">
+                <span class="btn-icon">⌘</span>
+                Process BOM Expansion
+              </button>
+            </form>
+
+            <div id="bomProcessingStatus" class="processing-status idle">
+              <div class="status-header">
+                <div class="spinner"></div>
+                <div>
+                  <b id="bomStatusTitle">Ready for BOM Expansion</b>
+                  <p id="bomStatusText">Upload standard BOM and raw material bulk template to start processing.</p>
+                </div>
+                <span id="bomStatusTime" class="status-time">Idle</span>
+              </div>
+              <div class="progress-track">
+                <div id="bomProgressBar" class="progress-bar"></div>
+              </div>
+            </div>
+
+            <a id="bomDownload" class="download disabled" href="#">Download Raw Material Bulk</a>
+
+
+          </section>
+
+          <section class="card insight-card">
+            <h2>BOM Expansion Logic</h2>
+            <p>Configure source column names for BOM Expansion. Use <b>Default</b> for system settings or <b>Confirm</b> to apply your input.</p>
+
+            <div class="logic-mapping-table">
+              <div class="logic-mapping-row" data-default="Parent Node">
+                <span class="logic-mapping-label">Parent Material</span>
+                <div class="logic-mapping-control">
+                  <input form="bomForm" name="parent_col" type="text" placeholder="Enter BOM column name" />
+                  <button class="mapping-default-btn" type="button">Default</button>
+                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <div class="mapping-current">Current Setting: <b>Parent Node</b></div>
+                </div>
+              </div>
+
+              <div class="logic-mapping-row" data-default="Component">
+                <span class="logic-mapping-label">Component</span>
+                <div class="logic-mapping-control">
+                  <input form="bomForm" name="component_col" type="text" placeholder="Enter BOM column name" />
+                  <button class="mapping-default-btn" type="button">Default</button>
+                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <div class="mapping-current">Current Setting: <b>Component</b></div>
+                </div>
+              </div>
+
+              <div class="logic-mapping-row" data-default="CS03 Qty">
+                <span class="logic-mapping-label">Quantity</span>
+                <div class="logic-mapping-control">
+                  <input form="bomForm" name="qty_col" type="text" placeholder="Enter BOM column name" />
+                  <button class="mapping-default-btn" type="button">Default</button>
+                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <div class="mapping-current">Current Setting: <b>CS03 Qty</b></div>
+                </div>
+              </div>
+
+              <div class="logic-mapping-row" data-default="CS03 UoM">
+                <span class="logic-mapping-label">Unit</span>
+                <div class="logic-mapping-control">
+                  <input form="bomForm" name="unit_col" type="text" placeholder="Enter BOM column name" />
+                  <button class="mapping-default-btn" type="button">Default</button>
+                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <div class="mapping-current">Current Setting: <b>CS03 UoM</b></div>
+                </div>
+              </div>
+
+              <div class="logic-mapping-row" data-default="Component Description">
+                <span class="logic-mapping-label">Component Description</span>
+                <div class="logic-mapping-control">
+                  <input form="bomForm" name="description_col" type="text" placeholder="Enter BOM column name" />
+                  <button class="mapping-default-btn" type="button">Default</button>
+                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <div class="mapping-current">Current Setting: <b>Component Description</b></div>
+                </div>
+              </div>
+
+              <div class="logic-mapping-row" data-default="Material group">
+                <span class="logic-mapping-label">Material Group</span>
+                <div class="logic-mapping-control">
+                  <input form="bomForm" name="material_group_col" type="text" placeholder="Enter BOM column name" />
+                  <button class="mapping-default-btn" type="button">Default</button>
+                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <div class="mapping-current">Current Setting: <b>Material group</b></div>
+                </div>
+              </div>
+
+              <div class="logic-mapping-row" data-default="BOM Valid From">
+                <span class="logic-mapping-label">Valid From</span>
+                <div class="logic-mapping-control">
+                  <input form="bomForm" name="valid_from_col" type="text" placeholder="Enter BOM column name" />
+                  <button class="mapping-default-btn" type="button">Default</button>
+                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <div class="mapping-current">Current Setting: <b>BOM Valid From</b></div>
+                </div>
+              </div>
+
+              <div class="logic-mapping-row read-only">
+                <span class="logic-mapping-label">Semi-finished Rule</span>
+                <div class="logic-readonly-value">Component also exists as Parent Node</div>
+              </div>
+
+              <div class="logic-mapping-row read-only">
+                <span class="logic-mapping-label">Quantity Roll-up</span>
+                <div class="logic-readonly-value">Multiply quantities across all BOM levels</div>
+              </div>
+            </div>
+
+            <h2>Raw Material Bulk Output</h2>
+            <p>Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.</p>
+
+            <pre id="bomLog" class="rule-log">BOM Expansion is ready.</pre>
+          </section>
+        </section>
+      </section>
+
+
+      <section id="rule-management" class="page-section">
+        <section class="workspace">
+          <section class="card primary-card">
+            <div class="section-title">
+              <div>
+                <h2>Rule Management</h2>
+                <p>Import and download classification rule masters for Product Data Preparation.</p>
+              </div>
+              <span class="step-chip">Rule Master</span>
+            </div>
+
+            <p class="hint">
+              Rule Management is a sub-function under Product Data Preparation. It controls product type classification,
+              product series mapping, WIP judgment and customer mapping logic.
+            </p>
+
+            <form id="ruleForm" class="rule-form">
+              <label>Upload Rule Master</label>
+              <input id="ruleFile" name="file" type="file" accept=".xlsx,.xls,.xlsm,.csv" />
+              <button type="submit" class="btn-secondary">
+                <span class="btn-icon">⬆</span>
+                Import Rule Master
+              </button>
+            </form>
+
+            <div class="download-row">
+              <a class="link-button" href="/download-rule-master">Download Rule Master</a>
+              <a class="link-button" href="/download-product-series-master">Download Product Series Master</a>
+            </div>
+          </section>
+
+          <section class="card insight-card">
+            <h2>Rule Master Fields</h2>
+            <p>Priority、Rule Type、Key、Product Type、Customer、Customer Code Logic、Is_WIP、Enabled</p>
+
+            <h2>Default Rules</h2>
+            <ul>
+              <li>851- / 852- prefix → WIP</li>
+              <li>Material description contains Touch pad module → TP</li>
+              <li>SCMC prefix → default WIP, can be overridden by description rules</li>
+              <li>Material description contains ASSY → WIP</li>
+              <li>SN → NB；SP → TP；SM → DT Mouse；SK → DT Keyboard</li>
+            </ul>
+
+            <pre id="ruleLog" class="rule-log">Rule Management is ready.</pre>
+          </section>
+        </section>
+      </section>
+    </main>
+  </div>
+
 <script>
+const menuToggle = document.getElementById('menuToggle');
+const appShell = document.querySelector('.app-shell');
+
+menuToggle.onclick = () => {
+  appShell.classList.toggle('sidebar-expanded');
+};
+
 const form = document.getElementById('form');
 const log = document.getElementById('log');
 const download = document.getElementById('download');
 const summary = document.getElementById('summary');
 const ruleForm = document.getElementById('ruleForm');
+const ruleLog = document.getElementById('ruleLog');
+const bulkForm = document.getElementById('bulkForm');
+const bulkProcessingStatus = document.getElementById('bulkProcessingStatus');
+const bulkStatusTitle = document.getElementById('bulkStatusTitle');
+const bulkStatusText = document.getElementById('bulkStatusText');
+const bulkStatusTime = document.getElementById('bulkStatusTime');
+const bulkProgressBar = document.getElementById('bulkProgressBar');
+const bulkDownload = document.getElementById('bulkDownload');
+const processingStatus = document.getElementById('processingStatus');
+const statusTitle = document.getElementById('statusTitle');
+const statusText = document.getElementById('statusText');
+const statusTime = document.getElementById('statusTime');
+const progressBar = document.getElementById('progressBar');
+const moduleNotice = document.getElementById('moduleNotice');
+const moduleNoticeTitle = document.getElementById('moduleNoticeTitle');
+const moduleNoticeText = document.getElementById('moduleNoticeText');
+const pageTitle = document.getElementById('pageTitle');
+const pageLead = document.getElementById('pageLead');
+const homeLogo = document.getElementById('homeLogo');
+const homeButton = document.getElementById('homeButton');
+
+const bomForm = document.getElementById('bomForm');
+const bomDownload = document.getElementById('bomDownload');
+const bomProcessingStatus = document.getElementById('bomProcessingStatus');
+const bomStatusTitle = document.getElementById('bomStatusTitle');
+const bomStatusText = document.getElementById('bomStatusText');
+const bomStatusTime = document.getElementById('bomStatusTime');
+const bomProgressBar = document.getElementById('bomProgressBar');
+const bomLog = document.getElementById('bomLog');
+
+let progressTimer = null;
+
+const moduleMessages = {
+  prep: {
+    title: '1. Product Data Preparation',
+    text: 'Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.'
+  },
+  bom: {
+    title: '2. BOM Expansion',
+    text: 'Reserved module. This area can be extended for multi-level BOM explosion.'
+  },
+  factor: {
+    title: '3. Carbon Emission Factor Selection',
+    text: 'Reserved module. This area can be extended for emission factor mapping and selection.'
+  },
+  pcf: {
+    title: '4. PCF Calculation',
+    text: 'Reserved module. This area can be extended for product carbon footprint calculation.'
+  }
+};
+
+const pageMessages = {
+  "dashboard": {
+    title: "Carbon Management Platform",
+    lead: "Prepare manufacturing data, expand BOM structures, select emission factors, and calculate product carbon footprints."
+  },
+  "product-data": {
+    title: "Product Data Preparation",
+    lead: "Prepare production output and batch data for product carbon footprint workflows."
+  },
+  "rule-management": {
+    title: "Rule Management",
+    lead: "Maintain Product Data Preparation rules, including Rule Master and Product Series Master."
+  }
+};
+
+
+function activateDashboard() {
+  document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+  document.getElementById('dashboard').classList.add('active');
+
+  document.querySelectorAll('.sub-nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+
+  moduleNotice.classList.add('hidden');
+  pageTitle.textContent = pageMessages.dashboard.title;
+  pageLead.textContent = pageMessages.dashboard.lead;
+  pageLead.style.display = 'block';
+  document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
+}
+
+homeLogo.onclick = activateDashboard;
+homeButton.onclick = activateDashboard;
+homeLogo.onkeydown = (e) => {
+  if (e.key === 'Enter' || e.key === ' ') activateDashboard();
+};
+
+function activatePrepPage(pageId) {
+  document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+  document.getElementById(pageId).classList.add('active');
+
+  document.querySelectorAll('.sub-nav-item').forEach(b => b.classList.remove('active'));
+  const activeSubItem = document.querySelector(`[data-page="${pageId}"]`);
+  if (activeSubItem) activeSubItem.classList.add('active');
+
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-main="prep"]').classList.add('active');
+
+  moduleNotice.classList.add('hidden');
+  pageTitle.textContent = pageMessages[pageId].title;
+  pageLead.textContent = pageMessages[pageId].lead;
+  pageLead.style.display = pageMessages[pageId].lead ? 'block' : 'none';
+  document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
+}
+
+document.querySelectorAll('.sub-nav-item').forEach(btn => {
+  btn.onclick = () => activatePrepPage(btn.dataset.page);
+});
+
+
+function activateBomPage() {
+  document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+  document.getElementById('bom-expansion').classList.add('active');
+
+  document.querySelectorAll('.sub-nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-main="bom"]').classList.add('active');
+
+  moduleNotice.classList.add('hidden');
+  pageTitle.textContent = 'BOM Expansion';
+  pageLead.textContent = 'Expand multi-level BOM structures, roll up raw material quantities, and generate raw material bulk files.';
+  pageLead.style.display = 'block';
+  document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function setBomProcessingState(mode, title, text, timeText, progress) {
+  bomProcessingStatus.classList.remove('idle', 'running', 'success', 'error');
+  bomProcessingStatus.classList.add(mode);
+  bomStatusTitle.textContent = title;
+  bomStatusText.textContent = text;
+  bomStatusTime.textContent = timeText;
+  bomProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+}
+
+function startBomEstimatedProgress() {
+  clearInterval(progressTimer);
+
+  const estimatedSeconds = 45;
+  const start = Date.now();
+
+  setBomProcessingState(
+    'running',
+    'BOM Expansion in progress',
+    'Reading standard BOM and validating raw material bulk template.',
+    `~${estimatedSeconds}s remaining`,
+    6
+  );
+
+  progressTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - start) / 1000);
+    const remaining = Math.max(1, estimatedSeconds - elapsed);
+    const progress = Math.min(92, 6 + (elapsed / estimatedSeconds) * 86);
+
+    bomStatusTime.textContent = `~${remaining}s remaining`;
+    bomProgressBar.style.width = `${progress}%`;
+
+    const stages = [
+      'Reading BOM structure...',
+      'Detecting semi-finished components...',
+      'Expanding multi-level BOM...',
+      'Calculating material quantity roll-up...',
+      'Copying raw material bulk template...',
+      'Writing Activity Data and Raw Material sheets...'
+    ];
+    const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
+    bomStatusText.textContent = stages[stageIndex];
+  }, 1000);
+}
+
+function stopBomProgressSuccess(summary) {
+  clearInterval(progressTimer);
+  setBomProcessingState(
+    'success',
+    'BOM Expansion completed',
+    `Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Max BOM Level: ${summary.max_level}.`,
+    'Completed',
+    100
+  );
+
+  bomLog.textContent =
+    `Completed.\nProducts: ${summary.products}\nSemi-finished Components: ${summary.semi_finished}\nActivity Data Rows: ${summary.activity_rows}\nRaw Materials: ${summary.raw_materials}\nMax BOM Level: ${summary.max_level}`;
+}
+
+function stopBomProgressError(message) {
+  clearInterval(progressTimer);
+  setBomProcessingState(
+    'error',
+    'BOM Expansion failed',
+    message || 'Please review the BOM and raw material bulk template.',
+    'Error',
+    100
+  );
+  bomLog.textContent = 'Error: ' + (message || 'BOM Expansion failed');
+}
+
+
+document.querySelectorAll('.logic-mapping-row[data-default]').forEach(row => {
+  const input = row.querySelector('input');
+  const current = row.querySelector('.mapping-current b');
+  const defaultBtn = row.querySelector('.mapping-default-btn');
+  const confirmBtn = row.querySelector('.mapping-confirm-btn');
+  const defaultValue = row.dataset.default;
+
+  defaultBtn.addEventListener('click', () => {
+    input.value = defaultValue;
+    current.textContent = defaultValue;
+    row.classList.remove('mapping-custom');
+    row.classList.add('mapping-default');
+  });
+
+  confirmBtn.addEventListener('click', () => {
+    const confirmedValue = input.value.trim() || defaultValue;
+    input.value = confirmedValue;
+    current.textContent = confirmedValue;
+    row.classList.remove('mapping-default');
+    row.classList.add('mapping-custom');
+  });
+});
+
+bomForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  bomDownload.classList.add('disabled');
+  bomDownload.href = '#';
+  bomLog.textContent = 'Processing BOM Expansion...';
+
+  startBomEstimatedProgress();
+
+  const fd = new FormData(bomForm);
+
+  try {
+    const res = await fetch('/process-bom-expansion', { method: 'POST', body: fd });
+    const data = await res.json();
+
+    if (!data.ok) throw new Error(data.message || 'BOM Expansion failed');
+
+    bomDownload.href = data.download_url;
+    bomDownload.classList.remove('disabled');
+    stopBomProgressSuccess(data.summary);
+  } catch (err) {
+    stopBomProgressError(err.message);
+  }
+});
+
+
+
+document.querySelectorAll('[data-dashboard-target]').forEach(card => {
+  card.onclick = () => {
+    const target = card.dataset.dashboardTarget;
+    if (target === 'prep') {
+      activatePrepPage('product-data');
+      return;
+    }
+    if (target === 'bom') {
+      activateBomPage();
+      return;
+    }
+    const navButton = document.querySelector(`[data-main="${target}"]`);
+    if (navButton) navButton.click();
+  };
+});
+
+
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const key = btn.dataset.main;
+    if (key === 'prep') {
+      activatePrepPage('product-data');
+      return;
+    }
+    if (key === 'bom') {
+      activateBomPage();
+      return;
+    }
+
+    document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+    moduleNoticeTitle.textContent = moduleMessages[key].title;
+    moduleNoticeText.textContent = moduleMessages[key].text;
+    moduleNotice.classList.remove('hidden');
+    pageTitle.textContent = moduleMessages[key].title.replace(/^\d+\.\s*/, '');
+    pageLead.textContent = moduleMessages[key].text;
+    pageLead.style.display = 'block';
+    document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
+  };
+});
 
 document.querySelectorAll('.tab').forEach(btn => {
   btn.onclick = () => {
@@ -80,45 +752,219 @@ document.querySelectorAll('.tab').forEach(btn => {
   };
 });
 
+function setProcessingState(mode, title, text, timeText, progress) {
+  processingStatus.classList.remove('idle', 'running', 'success', 'error');
+  processingStatus.classList.add(mode);
+  statusTitle.textContent = title;
+  statusText.textContent = text;
+  statusTime.textContent = timeText;
+  progressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+}
+
+function startEstimatedProgress(fileCount) {
+  clearInterval(progressTimer);
+  const estimatedSeconds = Math.max(20, Math.min(180, fileCount * 25));
+  const start = Date.now();
+
+  setProcessingState(
+    'running',
+    'Processing in progress',
+    'Reading Excel files and applying classification rules. Please keep this page open.',
+    `~${estimatedSeconds}s remaining`,
+    6
+  );
+
+  progressTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - start) / 1000);
+    const remaining = Math.max(1, estimatedSeconds - elapsed);
+    const progress = Math.min(92, 6 + (elapsed / estimatedSeconds) * 86);
+
+    statusTime.textContent = `~${remaining}s remaining`;
+    progressBar.style.width = `${progress}%`;
+
+    const stages = [
+      'Reading uploaded Excel files...',
+      'Merging SAP production work orders...',
+      'Filtering reporting year...',
+      'Extracting product series...',
+      'Applying Rule Master and Product Series Master...',
+      'Generating output Excel...'
+    ];
+    const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
+    statusText.textContent = stages[stageIndex];
+  }, 1000);
+}
+
+function stopEstimatedProgressSuccess() {
+  clearInterval(progressTimer);
+  setProcessingState(
+    'success',
+    'Processing completed',
+    'Classification result is ready. You can download the Excel output.',
+    'Completed',
+    100
+  );
+}
+
+function stopEstimatedProgressError(message) {
+  clearInterval(progressTimer);
+  setProcessingState(
+    'error',
+    'Processing failed',
+    message || 'Please review the error message and input file format.',
+    'Error',
+    100
+  );
+}
+
 form.onsubmit = async (e) => {
   e.preventDefault();
   download.classList.add('disabled');
   download.href = '#';
-  log.textContent = '執行中...\n讀取多個 Excel → 合併工單 → 篩選年度 → 彙總產量 → Product Series Engine → Rule Master → Product Series Master → WIP 判定 → 產出 Excel';
+
+  const fileCount = document.getElementById('files').files.length || 1;
+  startEstimatedProgress(fileCount);
+
+  log.textContent = 'Processing...\\nReading Excel files → Merging work orders → Filtering year → Annual output summary → Product Series Engine → Rule Master → Product Series Master → WIP decision → Excel export';
+
   const fd = new FormData(form);
   try {
     const res = await fetch('/process', {method: 'POST', body: fd});
     const data = await res.json();
-    if (!data.ok) throw new Error(data.message || '處理失敗');
+    if (!data.ok) throw new Error(data.message || 'Processing failed');
+
     const s = data.summary;
-    log.textContent = `完成！\n年度：${s.year}\n上傳檔案數：${s.files}\n工單明細筆數：${s.rows}\n彙總後筆數：${s.annual_rows}\n總生產量：${s.total_qty}\nWIP 筆數：${s.wip_rows}`;
+    log.textContent = `Completed.\\nYear: ${s.year}\\nUploaded files: ${s.files}\\nWork order rows: ${s.rows}\\nSummary rows: ${s.annual_rows}\\nTotal output: ${s.total_qty}\\nWIP rows: ${s.wip_rows}`;
     summary.innerHTML = `
-      <div class="metric"><b>年度</b><span>${s.year}</span></div>
-      <div class="metric"><b>上傳檔案數</b><span>${s.files}</span></div>
-      <div class="metric"><b>工單明細筆數</b><span>${s.rows}</span></div>
-      <div class="metric"><b>彙總後筆數</b><span>${s.annual_rows}</span></div>
-      <div class="metric"><b>總生產量</b><span>${s.total_qty.toLocaleString()}</span></div>
-      <div class="metric"><b>WIP 筆數</b><span>${s.wip_rows}</span></div>`;
+      <div class="metric"><b>Year</b><span>${s.year}</span></div>
+      <div class="metric"><b>Uploaded Files</b><span>${s.files}</span></div>
+      <div class="metric"><b>Work Order Rows</b><span>${s.rows}</span></div>
+      <div class="metric"><b>Summary Rows</b><span>${s.annual_rows}</span></div>
+      <div class="metric"><b>Total Output</b><span>${s.total_qty.toLocaleString()}</span></div>
+      <div class="metric"><b>WIP Rows</b><span>${s.wip_rows}</span></div>`;
+
     download.href = data.download_url;
     download.classList.remove('disabled');
+    stopEstimatedProgressSuccess();
   } catch (err) {
-    log.textContent = '錯誤：' + err.message;
+    log.textContent = 'Error: ' + err.message;
+    stopEstimatedProgressError(err.message);
   }
 };
+
+
+
+
+
+
+
+
+function setBulkProcessingState(mode, title, text, timeText, progress) {
+  bulkProcessingStatus.classList.remove('idle', 'running', 'success', 'error');
+  bulkProcessingStatus.classList.add(mode);
+  bulkStatusTitle.textContent = title;
+  bulkStatusText.textContent = text;
+  bulkStatusTime.textContent = timeText;
+  bulkProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+}
+
+function startBulkEstimatedProgress() {
+  clearInterval(progressTimer);
+
+  const estimatedSeconds = 35;
+  const start = Date.now();
+
+  setBulkProcessingState(
+    'running',
+    'Batch formatting in progress',
+    'Reading Step 1 output and validating the bulk template.',
+    `~${estimatedSeconds}s remaining`,
+    8
+  );
+
+  progressTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - start) / 1000);
+    const remaining = Math.max(1, estimatedSeconds - elapsed);
+    const progress = Math.min(92, 8 + (elapsed / estimatedSeconds) * 84);
+
+    bulkStatusTime.textContent = `~${remaining}s remaining`;
+    bulkProgressBar.style.width = `${progress}%`;
+
+    const stages = [
+      'Reading Step 1 output file...',
+      'Copying original bulk template...',
+      'Writing Input Sheet Activity Data...',
+      'Writing Input Sheet Products...',
+      'Preserving template formatting and validation...',
+      'Generating formatted bulk file...'
+    ];
+    const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
+    bulkStatusText.textContent = stages[stageIndex];
+  }, 1000);
+}
+
+function stopBulkProgressSuccess(summary) {
+  clearInterval(progressTimer);
+  setBulkProcessingState(
+    'success',
+    'Batch formatting completed',
+    `Activity Data: ${summary.activity_rows} rows; Products: ${summary.product_rows} rows; Excluded WIP: ${summary.excluded_wip_rows} rows.`,
+    'Completed',
+    100
+  );
+}
+
+function stopBulkProgressError(message) {
+  clearInterval(progressTimer);
+  setBulkProcessingState(
+    'error',
+    'Batch formatting failed',
+    message || 'Please review the input files and template format.',
+    'Error',
+    100
+  );
+}
+
+bulkForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  bulkDownload.classList.add('disabled');
+  bulkDownload.href = '#';
+
+  startBulkEstimatedProgress();
+
+  const fd = new FormData(bulkForm);
+
+  try {
+    const res = await fetch('/generate-bulk-file', { method: 'POST', body: fd });
+    const data = await res.json();
+
+    if (!data.ok) throw new Error(data.message || 'Bulk file generation failed');
+
+    bulkDownload.href = data.download_url;
+    bulkDownload.classList.remove('disabled');
+    stopBulkProgressSuccess(data.summary);
+  } catch (err) {
+    stopBulkProgressError(err.message);
+  }
+});
 
 ruleForm.onsubmit = async (e) => {
   e.preventDefault();
   const f = document.getElementById('ruleFile');
-  if (!f.files.length) { alert('請先選擇規則檔'); return; }
+  if (!f.files.length) { alert('Please select a rule file first.'); return; }
+
+  ruleLog.textContent = 'Importing Rule Master...';
+
   const fd = new FormData(ruleForm);
-  log.textContent = '正在匯入 Rule Master...';
   try {
     const res = await fetch('/upload-rule-master', {method: 'POST', body: fd});
     const data = await res.json();
-    if (!data.ok) throw new Error(data.message || '匯入失敗');
-    log.textContent = `Rule Master 匯入完成，共 ${data.count} 筆。`;
+    if (!data.ok) throw new Error(data.message || 'Import failed');
+
+    ruleLog.textContent = `Rule Master imported successfully. Total rules: ${data.count}.`;
   } catch (err) {
-    log.textContent = '錯誤：' + err.message;
+    ruleLog.textContent = 'Error: ' + err.message;
   }
 };
 </script>
