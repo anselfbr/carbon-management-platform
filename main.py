@@ -302,12 +302,18 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     masters = build_masters()
     df = pd.read_excel(path, dtype=str)
     df = df.loc[:, ~df.columns.duplicated()].copy()
+
+    # v6: 保留來源檔案欄位；若由舊流程單檔進來，補上檔名
+    if "Source file" not in df.columns:
+        df["Source file"] = path.name
+
     cols = {key: find_col(df, aliases) for key, aliases in REQUIRED_ALIASES.items()}
     missing = [key for key, col in cols.items() if col is None]
     if missing:
         raise ValueError(f"缺少必要欄位：{', '.join(missing)}")
 
     out = pd.DataFrame()
+    out["Source file"] = df["Source file"].astype(str).str.strip()
     out["Order"] = df[cols["order"]]
     out["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
     out["Material Number"] = df[cols["material_number"]].astype(str).str.strip()
@@ -362,16 +368,24 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
         .agg(筆數="count", 生產量="sum")
     )
 
+    # v6: 來源檔案摘要分頁
+    file_summary = (
+        out.groupby(["Source file"], dropna=False, as_index=False)["Delivered quantity"]
+        .agg(筆數="count", 生產量="sum")
+        .sort_values(["Source file"])
+    )
+
     wip = out[out["Is_WIP"] == "Y"].copy()
 
     file_id = uuid.uuid4().hex[:10]
-    output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v3_{year or 'ALL'}_{file_id}.xlsx"
+    output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         out.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
         type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
         customer_summary.to_excel(writer, index=False, sheet_name="Plant_客戶年度產量")
         source_summary.to_excel(writer, index=False, sheet_name="判斷來源摘要")
+        file_summary.to_excel(writer, index=False, sheet_name="來源檔案摘要")
         wip.to_excel(writer, index=False, sheet_name="WIP清單")
         for sheet in writer.book.worksheets:
             sheet.freeze_panes = "A2"
@@ -387,6 +401,7 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
         "wip_rows": int(len(wip)),
+        "source_files": int(out["Source file"].nunique()) if len(out) else 0,
         "output_filename": output_path.name,
         "year": year or "ALL",
     }
@@ -465,6 +480,7 @@ async def process(
 
             df = pd.read_excel(saved, dtype=str)
             df = df.loc[:, ~df.columns.duplicated()].copy()
+            df["Source file"] = upload.filename
             frames.append(df)
 
         if len(frames) == 1:
