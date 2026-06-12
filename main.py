@@ -11,6 +11,8 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from bulk_formatter import generate_product_activity_bulk_file
+from bom_formatter import generate_raw_material_bulk_file
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -597,11 +599,11 @@ def debug_version():
         "app": "Carbon Management Platform",
         "version": "PROCESS_MANUAL_FORM_V6",
         "process_endpoint": "manual form compatible",
-        "supports": ["files multi-upload", "file single-upload", "blank year"],
+        "supports": ["files multi-upload", "blank year", "step2 generate-bulk-file", "bom process-bom-expansion"],
     }
 
 @app.post("/process")
-async def process(files: list[UploadFile] = File(...), year: Optional[int] = Form(None)):
+async def process(files: list[UploadFile] = File(...), year: Optional[str] = Form(None)):
     if not files:
         return JSONResponse({"ok": False, "message": "請至少上傳一個 Excel 工單檔案"}, status_code=400)
 
@@ -614,7 +616,11 @@ async def process(files: list[UploadFile] = File(...), year: Optional[int] = For
         saved_paths.append(saved)
 
     try:
-        output_path, summary = process_files(saved_paths, year)
+        year_value: Optional[int] = None
+        if year is not None and str(year).strip() != "":
+            year_value = int(str(year).strip())
+
+        output_path, summary = process_files(saved_paths, year_value)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -657,3 +663,123 @@ def download_product_series_master():
     if not path.exists():
         ensure_master_files()
     return FileResponse(path, filename="product_series_master.csv", media_type="text/csv")
+
+
+# =========================================================
+# Step 2 · Batch Data Formatting
+# Step1 Output + Bulk Template -> Formatted Product Activity Bulk
+# =========================================================
+@app.post("/generate-bulk-file")
+async def generate_bulk_file(
+    step1_file: UploadFile = File(...),
+    template_file: UploadFile = File(...),
+):
+    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse(
+            {"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"},
+            status_code=400,
+        )
+
+    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse(
+            {"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"},
+            status_code=400,
+        )
+
+    token = uuid.uuid4().hex[:10]
+
+    step1_path = UPLOAD_DIR / f"step1_output_{token}_{step1_file.filename}"
+    template_path = UPLOAD_DIR / f"bulk_template_{token}_{template_file.filename}"
+    output_path = OUTPUT_DIR / f"formatted_product_activity_data_bulk_create_{token}.xlsx"
+
+    step1_path.write_bytes(await step1_file.read())
+    template_path.write_bytes(await template_file.read())
+
+    try:
+        summary = generate_product_activity_bulk_file(
+            step1_output_path=step1_path,
+            bulk_template_path=template_path,
+            output_path=output_path,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse(
+            {"ok": False, "message": str(exc)},
+            status_code=400,
+        )
+
+    return {
+        "ok": True,
+        "message": "Bulk file generated successfully.",
+        "summary": summary,
+        "download_url": f"/download/{output_path.name}",
+    }
+
+
+# =========================================================
+# Module 2 · BOM Expansion
+# Standard BOM + Raw Material Bulk Template -> Raw Material Bulk
+# =========================================================
+@app.post("/process-bom-expansion")
+async def process_bom_expansion(
+    bom_file: UploadFile = File(...),
+    template_file: UploadFile = File(...),
+    parent_col: str = Form(""),
+    component_col: str = Form(""),
+    qty_col: str = Form(""),
+    unit_col: str = Form(""),
+    description_col: str = Form(""),
+    material_group_col: str = Form(""),
+    valid_from_col: str = Form(""),
+):
+    if not bom_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse(
+            {"ok": False, "message": "Standard BOM 請上傳 Excel 檔案"},
+            status_code=400,
+        )
+
+    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse(
+            {"ok": False, "message": "Raw Material Bulk Template 請上傳 Excel 檔案"},
+            status_code=400,
+        )
+
+    token = uuid.uuid4().hex[:10]
+
+    bom_path = UPLOAD_DIR / f"standard_bom_{token}_{bom_file.filename}"
+    template_path = UPLOAD_DIR / f"raw_material_template_{token}_{template_file.filename}"
+    output_path = OUTPUT_DIR / f"raw_material_activity_data_bulk_{token}.xlsx"
+
+    bom_path.write_bytes(await bom_file.read())
+    template_path.write_bytes(await template_file.read())
+
+    mapping = {
+        "parent_col": parent_col,
+        "component_col": component_col,
+        "qty_col": qty_col,
+        "unit_col": unit_col,
+        "description_col": description_col,
+        "material_group_col": material_group_col,
+        "valid_from_col": valid_from_col,
+    }
+
+    try:
+        summary = generate_raw_material_bulk_file(
+            bom_path=bom_path,
+            raw_material_template_path=template_path,
+            output_path=output_path,
+            mapping=mapping,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse(
+            {"ok": False, "message": str(exc)},
+            status_code=400,
+        )
+
+    return {
+        "ok": True,
+        "message": "BOM Expansion completed successfully.",
+        "summary": summary,
+        "download_url": f"/download/{output_path.name}",
+    }
