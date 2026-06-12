@@ -1,7 +1,7 @@
-
 from __future__ import annotations
 
 import re
+import traceback
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -20,16 +20,21 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
-app = FastAPI(title="年度產品產量與分類平台", version="3.0.0")
+app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
+print("===== CMP MAIN VERSION: PROCESS_MANUAL_FORM_V6 =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 # =========================================================
-# v3 分類優先順序：
-# 1. Material Number Rule（使用者自訂成品料號規則）
-# 2. Naming Rule（Prefix 命名規則）
-# 3. Product Series Master（產品系列.xlsx 轉入）
-# 4. WIP（以上都找不到時，視為半品）
+# v6 分類邏輯：
+# 1. rule_master.csv 依 Priority 由小到大判斷
+#    - Material Number Exact
+#    - Material Number Prefix
+#    - Description Contains
+#    - Series Prefix
+#    - Default
+# 2. 若 rule_master 未命中，再查 product_series_master.csv
+# 3. 若都未命中，寫 WIP
 # =========================================================
 
 NB_CUSTOMERS = {
@@ -53,7 +58,14 @@ GENERIC_WORDS = {
     "FG", "ASSY", "ASSEMBLY", "MODULE", "MOD", "BL", "BLANK", "NEW", "EURO",
     "NOEURO", "NO", "PCBA", "KB", "KEYBOARD", "TOUCH", "PAD", "CH",
 }
-SERIES_RE = re.compile(r"^([A-Z]{2}[A-Z0-9]*\d[A-Z0-9]*)")
+SERIES_RE = re.compile(r"([A-Z]{2}[A-Z0-9]*\d[A-Z0-9]*)")
+
+# Product Series 抽取用：遇到這些描述詞時要截斷，避免把 Assy/Touchpad/Module 等描述文字吃進系列名稱
+SERIES_STOP_WORDS = [
+    "ASSY", "ASSEMBLY", "MODULE", "TOUCHPAD", "TOUCH", "HAPTIC", "FORCE",
+    "KEYBOARD", "MOUSE", "TRIBUTO", "LIGHTGRAY", "NOKEYCAP", "NOKEYCA",
+    "NOKEY", "BLANK", "NEW", "EURO", "NOEURO",
+]
 
 REQUIRED_ALIASES = {
     "order": ["Order"],
@@ -64,102 +76,99 @@ REQUIRED_ALIASES = {
     "finish_date": ["Actual finish date", "Actual Finish Date", "Finish date", "Actual finish"],
 }
 
+RULE_COLUMNS = [
+    "Priority", "Rule Type", "Key", "Product Type", "Customer",
+    "Customer Code Logic", "Is_WIP", "Enabled",
+]
+
+DEFAULT_RULE_MASTER = (
+    "Priority,Rule Type,Key,Product Type,Customer,Customer Code Logic,Is_WIP,Enabled\n"
+    "1,Material Number Prefix,851-,WIP,,,Y,Y\n"
+    "2,Material Number Prefix,852-,WIP,,,Y,Y\n"
+    "10,Series Prefix,SN,NB,,NB_3RD_CHAR,N,Y\n"
+    "11,Series Prefix,FU,NB,,NB_3RD_CHAR,N,Y\n"
+    "12,Series Prefix,SP,TP,,NB_3RD_CHAR,N,Y\n"
+    "13,Series Prefix,SM,DT Mouse,,DT_3_4_CHAR,N,Y\n"
+    "14,Series Prefix,SA,DT Accessory,,DT_3_4_CHAR,N,Y\n"
+    "15,Description Contains,RECEIVER,DT Dongle,,,N,Y\n"
+    "16,Series Prefix,SK,DT Keyboard,,DT_3_4_CHAR,N,Y\n"
+    "17,Series Prefix,SB,DT Keyboard+Mouse,,DT_3_4_CHAR,N,Y\n"
+    "18,Series Prefix,ST,DT Tablet Keyboard,,DT_3_4_CHAR,N,Y\n"
+    "19,Description Contains,TOUCH PAD MODULE,TP,,,N,Y\n"
+    "20,Description Contains,TOUCHPAD MODULE,TP,,,N,Y\n"
+    "21,Series Prefix,SCMC,WIP,,,Y,Y\n"
+    "90,Description Contains,ASSY,WIP,,,Y,Y\n"
+    "999,Default,*,WIP,,,Y,Y\n"
+)
+
 
 def ensure_master_files() -> None:
     rule_path = DATA_DIR / "rule_master.csv"
-    material_rule_path = DATA_DIR / "material_rule_master.csv"
+    series_path = DATA_DIR / "product_series_master.csv"
     if not rule_path.exists():
-        rule_path.write_text(
-            "Prefix,Product Type,Customer Code Logic,Enabled\n"
-            "SN,NB,NB_3RD_CHAR,Y\n"
-            "SP,TP,NB_3RD_CHAR,Y\n"
-            "SM,DT Mouse,DT_3_4_CHAR,Y\n"
-            "SK,DT Keyboard,DT_3_4_CHAR,Y\n",
-            encoding="utf-8-sig",
-        )
-    if not material_rule_path.exists():
-        material_rule_path.write_text("Material Number,Product Type,Customer,Enabled\n", encoding="utf-8-sig")
+        rule_path.write_text(DEFAULT_RULE_MASTER, encoding="utf-8-sig")
+    if not series_path.exists():
+        series_path.write_text("Plant,Product series,產品類型,客戶代碼,客戶名稱\n", encoding="utf-8-sig")
 
 
 ensure_master_files()
 
 
-def read_csv_flexible(path: Path, columns: list[str]) -> pd.DataFrame:
+def read_csv_flexible(path: Path, columns: Optional[list[str]] = None) -> pd.DataFrame:
     if not path.exists():
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=columns or [])
     try:
         df = pd.read_csv(path, dtype=str, encoding="utf-8-sig").fillna("")
     except UnicodeDecodeError:
-        df = pd.read_csv(path, dtype=str, encoding="big5", errors="ignore").fillna("")
-    for col in columns:
-        if col not in df.columns:
-            df[col] = ""
-    return df[columns].copy()
+        df = pd.read_csv(path, dtype=str, encoding="big5").fillna("")
+    if columns is not None:
+        for col in columns:
+            if col not in df.columns:
+                df[col] = ""
+        df = df[columns].copy()
+    return df
 
 
 def load_rule_master() -> pd.DataFrame:
-    df = read_csv_flexible(DATA_DIR / "rule_master.csv", ["Prefix", "Product Type", "Customer Code Logic", "Enabled"])
-    for c in df.columns:
+    df = read_csv_flexible(DATA_DIR / "rule_master.csv", RULE_COLUMNS)
+    for c in RULE_COLUMNS:
         df[c] = df[c].astype(str).str.strip()
-    df["Prefix"] = df["Prefix"].str.upper()
     df["Enabled"] = df["Enabled"].str.upper().replace("", "Y")
-    return df[df["Enabled"].isin(["Y", "YES", "TRUE", "1"])]
-
-
-def load_material_rule_master() -> pd.DataFrame:
-    df = read_csv_flexible(DATA_DIR / "material_rule_master.csv", ["Material Number", "Product Type", "Customer", "Enabled"])
-    for c in df.columns:
-        df[c] = df[c].astype(str).str.strip()
-    df["Material Number"] = df["Material Number"].str.upper()
-    df["Enabled"] = df["Enabled"].str.upper().replace("", "Y")
-    return df[df["Enabled"].isin(["Y", "YES", "TRUE", "1"])]
+    df["Rule Type"] = df["Rule Type"].str.strip()
+    df["Key"] = df["Key"].str.upper().str.strip()
+    df["Priority_num"] = pd.to_numeric(df["Priority"], errors="coerce").fillna(9999)
+    df = df[df["Enabled"].isin(["Y", "YES", "TRUE", "1"])]
+    return df.sort_values(["Priority_num", "Rule Type", "Key"], kind="stable").reset_index(drop=True)
 
 
 def load_product_series_master() -> pd.DataFrame:
     path = DATA_DIR / "product_series_master.csv"
-    if not path.exists():
-        return pd.DataFrame(columns=["Plant", "Product series", "產品類型", "客戶代碼", "客戶名稱"])
-    df = pd.read_csv(path, dtype=str, encoding="utf-8-sig").fillna("")
+    df = read_csv_flexible(path)
     for col in ["Plant", "Product series", "產品類型", "客戶代碼", "客戶名稱"]:
         if col not in df.columns:
             df[col] = ""
         df[col] = df[col].astype(str).str.strip()
     df["Plant"] = df["Plant"].str.replace(r"\.0$", "", regex=True)
     df["Product series"] = df["Product series"].str.upper().str.replace(r"\s+", "", regex=True)
-    return df
+    return df[["Plant", "Product series", "產品類型", "客戶代碼", "客戶名稱"]].copy()
 
 
 def build_masters() -> dict:
     rule_master = load_rule_master()
-    material_master = load_material_rule_master()
     series_master = load_product_series_master()
 
-    material_by_number = {}
-    for _, row in material_master.iterrows():
-        mn = row["Material Number"]
-        if mn:
-            material_by_number[mn] = row
-
-    prefix_rules = []
-    for _, row in rule_master.iterrows():
-        prefix = row["Prefix"]
-        if prefix:
-            prefix_rules.append(row)
-    prefix_rules.sort(key=lambda r: len(str(r["Prefix"])), reverse=True)
-
-    by_plant_series = {}
-    by_series = {}
+    by_plant_series: dict[tuple[str, str], pd.Series] = {}
+    by_series: dict[str, pd.Series] = {}
     for _, row in series_master.iterrows():
-        series = row.get("Product series", "")
-        plant = str(row.get("Plant", "") or "").replace(".0", "")
+        series = str(row.get("Product series", "") or "").upper().strip()
+        plant = str(row.get("Plant", "") or "").replace(".0", "").strip()
         if series:
             by_plant_series[(plant, series)] = row
             if series not in by_series:
                 by_series[series] = row
 
     return {
-        "material_by_number": material_by_number,
-        "prefix_rules": prefix_rules,
+        "rules": rule_master,
         "by_plant_series": by_plant_series,
         "by_series": by_series,
     }
@@ -174,24 +183,114 @@ def find_col(df: pd.DataFrame, aliases: list[str]) -> Optional[str]:
     return None
 
 
-def parse_product_series(description: object) -> tuple[str, str]:
+def get_series_prefixes(masters: Optional[dict] = None) -> list[str]:
+    """從 rule_master.csv 動態讀取 Series Prefix，讓新增 SN/SP/SM/SK/FU... 不用再改 Python。"""
+    prefixes: list[str] = []
+    try:
+        rules = masters.get("rules") if masters else load_rule_master()
+        if isinstance(rules, pd.DataFrame):
+            for _, row in rules.iterrows():
+                rule_type = normalize_rule_type(row.get("Rule Type", ""))
+                key = str(row.get("Key", "") or "").upper().strip()
+                if rule_type in ["series prefix", "product series prefix", "產品系列前綴", "系列前綴"] and key and key not in ["*", "DEFAULT"]:
+                    prefixes.append(re.escape(key))
+    except Exception:
+        prefixes = []
+
+    # fallback：避免 rule_master 空白時完全抓不到
+    if not prefixes:
+        prefixes = ["SN", "SP", "SM", "SK", "SB", "ST", "SA", "FU"]
+
+    return sorted(set(prefixes), key=len, reverse=True)
+
+
+def trim_series_candidate(candidate: str) -> str:
+    """把候選字串在描述詞前截斷，例如 SP2B20XF0ASSYHAPTIC... -> SP2B20XF0。"""
+    candidate = re.sub(r"[^A-Z0-9].*$", "", str(candidate or "").upper())
+    cut_positions = [pos for word in SERIES_STOP_WORDS if (pos := candidate.find(word)) > 0]
+    if cut_positions:
+        candidate = candidate[:min(cut_positions)]
+    return candidate
+
+
+def _series_candidate_from_text(text: str, pattern: re.Pattern) -> Optional[str]:
+    """在一段文字中尋找第一個符合 Series Prefix 的候選值，並套用描述詞截斷。"""
+    if not text:
+        return None
+
+    # 移除空白與非英數符號，讓 CHSN4396BL1 / AssyCH SN5372BL 都能被抓到。
+    # 標點符號的優先判斷在 parse_product_series() 的第一階段完成，這裡只處理單一區段。
+    compact_text = re.sub(r"[^A-Z0-9]+", "", str(text).upper())
+
+    for match in pattern.finditer(compact_text):
+        candidate = trim_series_candidate(match.group(0))
+        if not candidate or candidate in GENERIC_WORDS:
+            continue
+        if not re.search(r"\d", candidate):
+            continue
+        if len(candidate) < 5:
+            continue
+        return candidate
+
+    return None
+
+
+def parse_product_series(description: object, masters: Optional[dict] = None) -> tuple[str, str]:
+    """
+    v6 Product Series 抽取邏輯：
+    1. 保留標點符號判斷：先依逗號 / 分號 / 底線切段，在每個區段內搜尋 Series。
+    2. 若標點切段找不到，再用整段 Material description 做 Regex Prefix Search。
+    3. Prefix 由 rule_master.csv 的 Series Prefix 動態讀取，不用寫死在 Python。
+    4. 遇到 ASSY / TOUCHPAD / HAPTIC / MODULE / BLANK / NEW 等描述詞自動截斷。
+
+    可處理：
+    - AssyCH SN5372BL,110K,JPBlank,nokeycapNEW -> SN5372BL
+    - Assy,CHSN4396BL1,UK,106KBlank,nokeycaNEW -> SN4396BL1
+    - SP2B20XF0AssyHapticForce Touchpad module -> SP2B20XF0
+    - SP2B20XF0Assy Touchpad TributoLightGray -> SP2B20XF0
+    """
     if pd.isna(description):
         return "", "Material description 空白"
-    text = str(description).upper().replace("_", ",").replace(";", ",")
-    parts = text.split(",")
+
+    raw_text = str(description).upper()
+    prefixes = get_series_prefixes(masters)
+    prefix_pattern = "|".join(prefixes)
+    pattern = re.compile(rf"({prefix_pattern})[A-Z0-9]{{3,40}}")
+
+    # 第一階段：保留標點符號作為重要邊界，先分段判斷。
+    # 這可以避免 SN5372BL,110K 被抓成 SN5372BL110K。
+    segments = [seg for seg in re.split(r"[,;_]+", raw_text) if str(seg).strip()]
+    for idx, segment in enumerate(segments, start=1):
+        candidate = _series_candidate_from_text(segment, pattern)
+        if candidate:
+            if idx == 1:
+                return candidate, "標點切段解析產品系列"
+            return candidate, f"標點切段解析產品系列：取第{idx}段"
+
+    # 第二階段：若資料完全沒有標點，改用整段搜尋。
+    candidate = _series_candidate_from_text(raw_text, pattern)
+    if candidate:
+        return candidate, "全文 Regex Prefix Search 解析產品系列"
+
+    # fallback：若 rule_master 沒有涵蓋 prefix，仍保留舊邏輯，但同樣套用截斷
+    parts = raw_text.replace("_", ",").replace(";", ",").split(",")
     for idx, part in enumerate(parts, start=1):
         compact = re.sub(r"\s+", "", part)
-        compact = re.sub(r"[^A-Z0-9].*$", "", compact)
+        compact = trim_series_candidate(compact)
         if not compact or compact in GENERIC_WORDS:
             continue
         match = SERIES_RE.match(compact)
         if match:
-            series = match.group(1)
-            return series, "第1段有效產品系列" if idx == 1 else f"前段非系列，取第{idx}段有效產品系列"
+            series = trim_series_candidate(match.group(0))
+            if series and re.search(r"\d", series) and len(series) >= 5:
+                return series, "fallback：逗號分段解析產品系列" if idx == 1 else f"fallback：前段非系列，取第{idx}段"
+
     return "", "未找到符合產品系列格式的英數碼"
 
 
-def get_customer(series: str, logic: str) -> tuple[str, str]:
+def get_customer(series: str, logic: str, customer_override: str = "") -> tuple[str, str]:
+    if customer_override:
+        return "", customer_override
     series = str(series or "").upper()
     logic = str(logic or "").upper().strip()
     if logic == "NB_3RD_CHAR" and len(series) >= 3:
@@ -203,55 +302,79 @@ def get_customer(series: str, logic: str) -> tuple[str, str]:
     return "", ""
 
 
-def classify_by_material_rule(material_number: object, masters: dict) -> dict:
-    mn = str(material_number or "").upper().strip()
-    row = masters["material_by_number"].get(mn)
-    if row is None:
-        return {}
-    product_type = str(row.get("Product Type", "") or "").strip()
-    customer = str(row.get("Customer", "") or "").strip()
-    return {
-        "產品類型": product_type,
-        "客戶代碼": "",
-        "客戶名稱": customer,
-        "判斷來源": "Material Number Rule",
-        "規則判定結果": "符合" if product_type else "待補產品分類",
-        "命中規則": f"Material Number={mn}",
-    }
+def normalize_rule_type(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
-def classify_by_naming_rule(series: str, masters: dict) -> dict:
-    series = str(series or "").upper().strip()
-    if not series:
-        return {}
-    for row in masters["prefix_rules"]:
-        prefix = str(row.get("Prefix", "") or "").upper().strip()
-        if prefix and series.startswith(prefix):
-            product_type = str(row.get("Product Type", "") or "").strip()
-            logic = str(row.get("Customer Code Logic", "") or "").strip()
-            code, customer = get_customer(series, logic)
-            return {
-                "產品類型": product_type,
-                "客戶代碼": code,
-                "客戶名稱": customer,
-                "判斷來源": "Naming Rule",
-                "規則判定結果": "符合" if product_type else "待補產品分類",
-                "命中規則": f"Prefix={prefix}",
-            }
+def rule_matches(rule_type: str, key: str, material_number: str, description: str, series: str) -> bool:
+    rt = normalize_rule_type(rule_type)
+    key_u = str(key or "").upper().strip()
+    if not key_u:
+        return False
+
+    # 支援英文與常見中文寫法
+    if rt in ["material number exact", "material exact", "成品料號", "成品料號完全符合"]:
+        return material_number == key_u
+    if rt in ["material number prefix", "material prefix", "成品料號前綴", "料號前綴"]:
+        return material_number.startswith(key_u)
+    if rt in ["description contains", "material description contains", "描述包含", "品名包含"]:
+        return key_u in description
+    if rt in ["series prefix", "product series prefix", "產品系列前綴", "系列前綴"]:
+        return series.startswith(key_u)
+    if rt in ["series exact", "product series exact", "產品系列", "產品系列完全符合"]:
+        return series == key_u
+    if rt in ["default", "預設"]:
+        return key_u in ["*", "DEFAULT", ""]
+    return False
+
+
+def classify_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> dict:
+    material_number_u = str(material_number or "").upper().strip()
+    description_u = str(description or "").upper().strip()
+    series_u = str(series or "").upper().strip()
+
+    rules: pd.DataFrame = masters["rules"]
+    for _, row in rules.iterrows():
+        rule_type = str(row.get("Rule Type", "") or "").strip()
+        key = str(row.get("Key", "") or "").strip()
+
+        # Default 規則只作為文件與下載範本保留；實際 Default WIP 放在 Product Series Master 之後。
+        if normalize_rule_type(rule_type) in ["default", "預設"]:
+            continue
+
+        if not rule_matches(rule_type, key, material_number_u, description_u, series_u):
+            continue
+
+        product_type = str(row.get("Product Type", "") or "").strip()
+        customer_override = str(row.get("Customer", "") or "").strip()
+        logic = str(row.get("Customer Code Logic", "") or "").strip()
+        code, customer = get_customer(series_u, logic, customer_override)
+        is_wip = str(row.get("Is_WIP", "") or "").upper().strip()
+        if not is_wip:
+            is_wip = "Y" if product_type.upper() == "WIP" else "N"
+
+        return {
+            "產品類型": product_type,
+            "客戶代碼": code,
+            "客戶名稱": customer,
+            "判斷來源": "Rule Master",
+            "規則判定結果": "符合" if product_type else "待補產品分類",
+            "命中規則": f"{rule_type}={key}",
+            "Is_WIP": "Y" if is_wip in ["Y", "YES", "TRUE", "1"] else "N",
+        }
     return {}
 
 
 def classify_by_series_master(plant: object, series: str, masters: dict) -> dict:
     plant_str = str(plant or "").strip().replace(".0", "")
-    series = str(series or "").upper().strip()
-    if not series:
+    series_u = str(series or "").upper().strip()
+    if not series_u:
         return {}
-    # pandas Series 不能直接用 `or` 判斷，否則會出現：
-    # ValueError: The truth value of a Series is ambiguous
-    row = masters["by_plant_series"].get((plant_str, series))
-    if row is None:
-        row = masters["by_series"].get(series)
 
+    # 注意：不能使用 row_a or row_b，Pandas Series 不能直接做布林判斷
+    row = masters["by_plant_series"].get((plant_str, series_u))
+    if row is None:
+        row = masters["by_series"].get(series_u)
     if row is None:
         return {}
 
@@ -264,58 +387,77 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
         "客戶名稱": customer,
         "判斷來源": "Product Series Master",
         "規則判定結果": "符合" if product_type else "待補產品分類",
-        "命中規則": f"Product series={series}",
+        "命中規則": f"Product series={series_u}",
+        "Is_WIP": "Y" if product_type.upper() == "WIP" else "N",
     }
 
 
-def classify(material_number: object, series: str, plant: object, masters: dict) -> dict:
-    for fn in (
-        lambda: classify_by_material_rule(material_number, masters),
-        lambda: classify_by_naming_rule(series, masters),
-        lambda: classify_by_series_master(plant, series, masters),
-    ):
-        result = fn()
-        if result and result.get("產品類型"):
-            result["Is_WIP"] = "Y" if result.get("產品類型") == "WIP" else "N"
-            return result
+def classify(material_number: object, description: object, series: str, plant: object, masters: dict) -> dict:
+    result = classify_by_rule_master(material_number, description, series, masters)
+    if result.get("產品類型"):
+        return result
 
-    # 不在分類規則 / master 中者視為半品 WIP
+    result = classify_by_series_master(plant, series, masters)
+    if result.get("產品類型"):
+        return result
+
     return {
         "產品類型": "WIP",
         "客戶代碼": "",
         "客戶名稱": "",
-        "判斷來源": "WIP",
+        "判斷來源": "Default WIP",
         "規則判定結果": "WIP",
         "命中規則": "No rule matched → WIP",
         "Is_WIP": "Y",
     }
 
 
-def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
-    masters = build_masters()
-    df = pd.read_excel(path, dtype=str)
-    cols = {key: find_col(df, aliases) for key, aliases in REQUIRED_ALIASES.items()}
-    missing = [key for key, col in cols.items() if col is None]
-    if missing:
-        raise ValueError(f"缺少必要欄位：{', '.join(missing)}")
+def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    errors: list[str] = []
 
-    out = pd.DataFrame()
-    out["Order"] = df[cols["order"]]
-    out["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
-    out["Material Number"] = df[cols["material_number"]].astype(str).str.strip()
-    out["Material description"] = df[cols["material_description"]]
-    out["Delivered quantity"] = pd.to_numeric(df[cols["delivered_quantity"]], errors="coerce").fillna(0)
-    out["Actual finish date"] = pd.to_datetime(df[cols["finish_date"]], errors="coerce")
-    out["Year"] = out["Actual finish date"].dt.year
+    for path in paths:
+        df = pd.read_excel(path, dtype=str)
+        cols = {key: find_col(df, aliases) for key, aliases in REQUIRED_ALIASES.items()}
+        missing = [key for key, col in cols.items() if col is None]
+        if missing:
+            errors.append(f"{path.name} 缺少必要欄位：{', '.join(missing)}")
+            continue
+
+        part = pd.DataFrame(index=df.index)
+        part["Source file"] = path.name
+        part["Order"] = df[cols["order"]]
+        part["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+        part["Material Number"] = df[cols["material_number"]].astype(str).str.strip()
+        part["Material description"] = df[cols["material_description"]]
+        part["Delivered quantity"] = pd.to_numeric(df[cols["delivered_quantity"]], errors="coerce").fillna(0)
+        part["Actual finish date"] = pd.to_datetime(df[cols["finish_date"]], errors="coerce")
+        part["Year"] = part["Actual finish date"].dt.year
+        frames.append(part)
+
+    if errors:
+        raise ValueError("；".join(errors))
+    if not frames:
+        raise ValueError("沒有可處理的工單資料")
+
+    return pd.concat(frames, ignore_index=True)
+
+
+def process_files(paths: list[Path], year: Optional[int]) -> tuple[Path, dict]:
+    masters = build_masters()
+    out = load_production_dataframe(paths)
 
     if year:
         out = out[out["Year"] == int(year)].copy()
 
-    parsed = out["Material description"].apply(parse_product_series)
+    parsed = out["Material description"].apply(lambda desc: parse_product_series(desc, masters))
     out["Product series"] = parsed.apply(lambda x: x[0])
     out["解析說明"] = parsed.apply(lambda x: x[1])
 
-    classified = out.apply(lambda r: classify(r["Material Number"], r["Product series"], r["Plant"], masters), axis=1)
+    classified = out.apply(
+        lambda r: classify(r["Material Number"], r["Material description"], r["Product series"], r["Plant"], masters),
+        axis=1,
+    )
     out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
     out["客戶代碼"] = classified.apply(lambda x: x.get("客戶代碼", ""))
     out["客戶名稱"] = classified.apply(lambda x: x.get("客戶名稱", ""))
@@ -350,20 +492,27 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     )
 
     source_summary = (
-        out.groupby(["判斷來源", "規則判定結果"], dropna=False, as_index=False)["Delivered quantity"]
+        out.groupby(["判斷來源", "規則判定結果", "命中規則"], dropna=False, as_index=False)["Delivered quantity"]
         .agg(筆數="count", 生產量="sum")
+    )
+
+    file_summary = (
+        out.groupby(["Source file"], dropna=False, as_index=False)["Delivered quantity"]
+        .agg(筆數="count", 生產量="sum")
+        .sort_values(["Source file"])
     )
 
     wip = out[out["Is_WIP"] == "Y"].copy()
 
     file_id = uuid.uuid4().hex[:10]
-    output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v3_{year or 'ALL'}_{file_id}.xlsx"
+    output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         out.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
         type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
         customer_summary.to_excel(writer, index=False, sheet_name="Plant_客戶年度產量")
         source_summary.to_excel(writer, index=False, sheet_name="判斷來源摘要")
+        file_summary.to_excel(writer, index=False, sheet_name="來源檔案摘要")
         wip.to_excel(writer, index=False, sheet_name="WIP清單")
         for sheet in writer.book.worksheets:
             sheet.freeze_panes = "A2"
@@ -375,6 +524,7 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
                 sheet.column_dimensions[letter].width = min(max_len, 45)
 
     summary = {
+        "files": int(len(paths)),
         "rows": int(len(out)),
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
@@ -385,37 +535,51 @@ def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     return output_path, summary
 
 
-def save_uploaded_rule(file_path: Path) -> int:
-    """匯入使用者維護的 Material Number Rule。支援 xlsx / csv。"""
-    if file_path.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
-        df = pd.read_excel(file_path, dtype=str).fillna("")
-    else:
-        df = pd.read_csv(file_path, dtype=str, encoding="utf-8-sig").fillna("")
+def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
+    """Backward-compatible wrapper for single-file processing."""
+    return process_files([path], year)
 
-    # 支援中英文欄位名稱
+
+def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
     rename_map = {}
     for c in df.columns:
         key = str(c).strip().lower()
-        if key in ["material number", "成品料號", "料號"]:
-            rename_map[c] = "Material Number"
+        if key in ["priority", "優先順序", "排序"]:
+            rename_map[c] = "Priority"
+        elif key in ["rule type", "規則類型", "判斷類型"]:
+            rename_map[c] = "Rule Type"
+        elif key in ["key", "規則值", "關鍵字", "prefix", "前綴"]:
+            rename_map[c] = "Key"
         elif key in ["product type", "產品分類", "產品類型"]:
             rename_map[c] = "Product Type"
         elif key in ["customer", "客戶", "客戶名稱"]:
             rename_map[c] = "Customer"
+        elif key in ["customer code logic", "客戶代碼邏輯"]:
+            rename_map[c] = "Customer Code Logic"
+        elif key in ["is_wip", "is wip", "wip", "半品"]:
+            rename_map[c] = "Is_WIP"
         elif key in ["enabled", "啟用"]:
             rename_map[c] = "Enabled"
-    df = df.rename(columns=rename_map)
-    for col in ["Material Number", "Product Type", "Customer", "Enabled"]:
+    df = df.rename(columns=rename_map).fillna("")
+    for col in RULE_COLUMNS:
         if col not in df.columns:
             df[col] = ""
-    df = df[["Material Number", "Product Type", "Customer", "Enabled"]].copy()
-    df["Material Number"] = df["Material Number"].astype(str).str.strip().str.upper()
-    df["Product Type"] = df["Product Type"].astype(str).str.strip()
-    df["Customer"] = df["Customer"].astype(str).str.strip()
-    df["Enabled"] = df["Enabled"].astype(str).str.strip().replace("", "Y")
-    df = df[(df["Material Number"] != "") & (df["Product Type"] != "")]
-    df = df.drop_duplicates(subset=["Material Number"], keep="last")
-    df.to_csv(DATA_DIR / "material_rule_master.csv", index=False, encoding="utf-8-sig")
+    df = df[RULE_COLUMNS].copy()
+    for c in RULE_COLUMNS:
+        df[c] = df[c].astype(str).str.strip()
+    df["Enabled"] = df["Enabled"].replace("", "Y")
+    df["Is_WIP"] = df["Is_WIP"].replace("", "N")
+    df = df[(df["Rule Type"] != "") & (df["Key"] != "") & (df["Product Type"] != "")]
+    return df
+
+
+def save_uploaded_rule(file_path: Path) -> int:
+    if file_path.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
+        df = pd.read_excel(file_path, dtype=str).fillna("")
+    else:
+        df = pd.read_csv(file_path, dtype=str, encoding="utf-8-sig").fillna("")
+    df = normalize_rule_upload(df)
+    df.to_csv(DATA_DIR / "rule_master.csv", index=False, encoding="utf-8-sig")
     return len(df)
 
 
@@ -424,22 +588,41 @@ def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+
+
+@app.get("/debug-version")
+def debug_version():
+    return {
+        "ok": True,
+        "app": "Carbon Management Platform",
+        "version": "PROCESS_MANUAL_FORM_V6",
+        "process_endpoint": "manual form compatible",
+        "supports": ["files multi-upload", "file single-upload", "blank year"],
+    }
+
 @app.post("/process")
-async def process(file: UploadFile = File(...), year: Optional[int] = Form(None)):
-    if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse({"ok": False, "message": "請上傳 Excel 檔案"}, status_code=400)
-    saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
-    content = await file.read()
-    saved.write_bytes(content)
+async def process(files: list[UploadFile] = File(...), year: Optional[int] = Form(None)):
+    if not files:
+        return JSONResponse({"ok": False, "message": "請至少上傳一個 Excel 工單檔案"}, status_code=400)
+
+    saved_paths: list[Path] = []
+    for file in files:
+        if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{file.filename} 不是 Excel 檔案"}, status_code=400)
+        saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
+        saved.write_bytes(await file.read())
+        saved_paths.append(saved)
+
     try:
-        output_path, summary = process_file(saved, year)
+        output_path, summary = process_files(saved_paths, year)
     except Exception as exc:
+        traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
     return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
 
 
-@app.post("/upload-material-rule")
-async def upload_material_rule(file: UploadFile = File(...)):
+@app.post("/upload-rule-master")
+async def upload_rule_master(file: UploadFile = File(...)):
     if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls", ".csv")):
         return JSONResponse({"ok": False, "message": "請上傳 Excel 或 CSV 檔案"}, status_code=400)
     saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
@@ -447,14 +630,9 @@ async def upload_material_rule(file: UploadFile = File(...)):
     try:
         count = save_uploaded_rule(saved)
     except Exception as exc:
+        traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
     return {"ok": True, "count": count}
-
-
-@app.post("/upload-rule-master")
-async def upload_rule_master(file: UploadFile = File(...)):
-    # Frontend compatibility alias.
-    return await upload_material_rule(file)
 
 
 @app.get("/download/{filename}")
@@ -465,62 +643,17 @@ def download(filename: str):
     return FileResponse(path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
-@app.get("/download-material-rule")
-def download_material_rule():
-    path = DATA_DIR / "material_rule_master.csv"
-    if not path.exists():
-        ensure_master_files()
-    return FileResponse(path, filename="material_rule_master.csv", media_type="text/csv")
-
-
-@app.get("/download-prefix-rule")
-def download_prefix_rule():
+@app.get("/download-rule-master")
+def download_rule_master():
     path = DATA_DIR / "rule_master.csv"
     if not path.exists():
         ensure_master_files()
     return FileResponse(path, filename="rule_master.csv", media_type="text/csv")
 
-# =========================================================
-# Step 2 · Batch Data Formatting
-# Step1 Output + Bulk Template -> Formatted Bulk File
-# 方案 1：直接複製原始 Bulk Template，只覆蓋指定分頁儲存格內容
-# =========================================================
-from bulk_formatter import generate_product_activity_bulk_file
 
-
-@app.post("/generate-bulk-file")
-async def generate_bulk_file(
-    step1_file: UploadFile = File(...),
-    template_file: UploadFile = File(...),
-):
-    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
-
-    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
-
-    token = uuid.uuid4().hex[:10]
-
-    step1_path = UPLOAD_DIR / f"step1_output_{token}_{step1_file.filename}"
-    template_path = UPLOAD_DIR / f"bulk_template_{token}_{template_file.filename}"
-    output_path = OUTPUT_DIR / f"formatted_product_activity_data_bulk_create_{token}.xlsx"
-
-    step1_path.write_bytes(await step1_file.read())
-    template_path.write_bytes(await template_file.read())
-
-    try:
-        summary = generate_product_activity_bulk_file(
-            step1_output_path=step1_path,
-            bulk_template_path=template_path,
-            output_path=output_path,
-        )
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-
-    return {
-        "ok": True,
-        "message": "Bulk file generated successfully.",
-        "summary": summary,
-        "download_url": f"/download/{output_path.name}",
-    }
+@app.get("/download-product-series-master")
+def download_product_series_master():
+    path = DATA_DIR / "product_series_master.csv"
+    if not path.exists():
+        ensure_master_files()
+    return FileResponse(path, filename="product_series_master.csv", media_type="text/csv")
