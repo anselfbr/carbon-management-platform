@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 import uuid
-import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -247,9 +246,15 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
     series = str(series or "").upper().strip()
     if not series:
         return {}
-    row = masters["by_plant_series"].get((plant_str, series)) or masters["by_series"].get(series)
+    # pandas Series 不能直接用 `or` 判斷，否則會出現：
+    # ValueError: The truth value of a Series is ambiguous
+    row = masters["by_plant_series"].get((plant_str, series))
+    if row is None:
+        row = masters["by_series"].get(series)
+
     if row is None:
         return {}
+
     product_type = str(row.get("產品類型", "") or "").strip()
     code = str(row.get("客戶代碼", "") or "").strip()
     customer = str(row.get("客戶名稱", "") or "").strip()
@@ -420,95 +425,17 @@ def index(request: Request):
 
 
 @app.post("/process")
-async def process(request: Request):
-    """
-    Robust Step 1 upload endpoint.
-    Avoid FastAPI 422 pre-validation by reading multipart form manually.
-
-    Supported frontend fields:
-    - files: multiple Excel files
-    - file: single Excel file
-    - year: optional reporting year; blank means ALL
-    """
+async def process(file: UploadFile = File(...), year: Optional[int] = Form(None)):
+    if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "請上傳 Excel 檔案"}, status_code=400)
+    saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
+    content = await file.read()
+    saved.write_bytes(content)
     try:
-        form = await request.form()
+        output_path, summary = process_file(saved, year)
     except Exception as exc:
-        return JSONResponse(
-            {"ok": False, "message": f"無法讀取上傳表單：{exc}"},
-            status_code=400,
-        )
-
-    upload_files = []
-
-    # Support both new multi-file field and older single-file field.
-    for field_name in ("files", "file"):
-        try:
-            values = form.getlist(field_name)
-        except Exception:
-            values = []
-
-        for item in values:
-            if hasattr(item, "filename") and item.filename:
-                upload_files.append(item)
-
-    if not upload_files:
-        return JSONResponse(
-            {"ok": False, "message": "請至少上傳一個 Excel 檔案"},
-            status_code=400,
-        )
-
-    year_raw = form.get("year", "")
-    year_value: Optional[int] = None
-    if year_raw is not None and str(year_raw).strip() != "":
-        try:
-            year_value = int(str(year_raw).strip())
-        except ValueError:
-            return JSONResponse(
-                {"ok": False, "message": "Reporting Year 請輸入西元年份，例如 2024，或留空表示全部年度。"},
-                status_code=400,
-            )
-
-    token = uuid.uuid4().hex[:10]
-    frames = []
-
-    try:
-        for upload in upload_files:
-            filename = str(upload.filename or "")
-            if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-                return JSONResponse(
-                    {"ok": False, "message": f"請上傳 Excel 檔案：{filename}"},
-                    status_code=400,
-                )
-
-            saved = UPLOAD_DIR / f"work_order_{token}_{filename}"
-            saved.write_bytes(await upload.read())
-
-            df = pd.read_excel(saved, dtype=str)
-            df = df.loc[:, ~df.columns.duplicated()].copy()
-            df["Source file"] = filename
-            frames.append(df)
-
-        combined = pd.concat(frames, ignore_index=True, sort=False)
-        combined = combined.loc[:, ~combined.columns.duplicated()].copy()
-
-        process_path = UPLOAD_DIR / f"combined_work_orders_{token}.xlsx"
-        combined.to_excel(process_path, index=False)
-
-        output_path, summary = process_file(process_path, year_value)
-        summary["files"] = len(upload_files)
-
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse(
-            {"ok": False, "message": str(exc)},
-            status_code=400,
-        )
-
-    return {
-        "ok": True,
-        "summary": summary,
-        "download_url": f"/download/{output_path.name}",
-    }
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
 
 
 @app.post("/upload-material-rule")
@@ -522,6 +449,12 @@ async def upload_material_rule(file: UploadFile = File(...)):
     except Exception as exc:
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
     return {"ok": True, "count": count}
+
+
+@app.post("/upload-rule-master")
+async def upload_rule_master(file: UploadFile = File(...)):
+    # Frontend compatibility alias.
+    return await upload_material_rule(file)
 
 
 @app.get("/download/{filename}")
@@ -553,7 +486,6 @@ def download_prefix_rule():
 # 方案 1：直接複製原始 Bulk Template，只覆蓋指定分頁儲存格內容
 # =========================================================
 from bulk_formatter import generate_product_activity_bulk_file
-from bom_formatter import generate_raw_material_bulk_file
 
 
 @app.post("/generate-bulk-file")
@@ -592,72 +524,3 @@ async def generate_bulk_file(
         "summary": summary,
         "download_url": f"/download/{output_path.name}",
     }
-
-# =========================================================
-# Module 2 · BOM Expansion
-# Standard BOM + Raw Material Bulk Template -> Raw Material Bulk
-# =========================================================
-@app.post("/process-bom-expansion")
-async def process_bom_expansion(
-    bom_file: UploadFile = File(...),
-    template_file: UploadFile = File(...),
-    parent_col: str = Form(""),
-    component_col: str = Form(""),
-    qty_col: str = Form(""),
-    unit_col: str = Form(""),
-    description_col: str = Form(""),
-    material_group_col: str = Form(""),
-    valid_from_col: str = Form(""),
-):
-    if not bom_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Standard BOM 請上傳 Excel 檔案"},
-            status_code=400,
-        )
-
-    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Raw Material Bulk Template 請上傳 Excel 檔案"},
-            status_code=400,
-        )
-
-    token = uuid.uuid4().hex[:10]
-
-    bom_path = UPLOAD_DIR / f"standard_bom_{token}_{bom_file.filename}"
-    template_path = UPLOAD_DIR / f"raw_material_template_{token}_{template_file.filename}"
-    output_path = OUTPUT_DIR / f"raw_material_activity_data_bulk_{token}.xlsx"
-
-    bom_path.write_bytes(await bom_file.read())
-    template_path.write_bytes(await template_file.read())
-
-    mapping = {
-        "parent_col": parent_col,
-        "component_col": component_col,
-        "qty_col": qty_col,
-        "unit_col": unit_col,
-        "description_col": description_col,
-        "material_group_col": material_group_col,
-        "valid_from_col": valid_from_col,
-    }
-
-    try:
-        summary = generate_raw_material_bulk_file(
-            bom_path=bom_path,
-            raw_material_template_path=template_path,
-            output_path=output_path,
-            mapping=mapping,
-        )
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse(
-            {"ok": False, "message": str(exc)},
-            status_code=400,
-        )
-
-    return {
-        "ok": True,
-        "message": "BOM Expansion completed successfully.",
-        "summary": summary,
-        "download_url": f"/download/{output_path.name}",
-    }
-
