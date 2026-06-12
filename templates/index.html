@@ -9,17 +9,7 @@
 <body>
   <div class="app-shell sidebar-expanded">
     <aside class="sidebar">
-      <div class="sidebar-top-actions">
-        <button id="menuToggle" class="menu-toggle" type="button" aria-label="Toggle menu">☰</button>
-        <button id="homeButton" class="home-toggle" type="button" aria-label="Go home">
-    <svg viewBox="0 0 24 24" fill="none">
-        <path d="M4 10.5L12 4L20 10.5V20H4V10.5Z"
-              stroke="white"
-              stroke-width="2.4"
-              stroke-linejoin="round"/>
-    </svg>
-</button>
-      </div>
+      <button id="menuToggle" class="menu-toggle" type="button" aria-label="Toggle menu">☰</button>
 
       <div class="logo-block" id="homeLogo" role="button" tabindex="0">
         <div class="logo-mark">CMP</div>
@@ -97,37 +87,37 @@
 
       <section id="dashboard" class="page-section active">
         <section class="dashboard-module-grid">
-          <button class="dashboard-module-card" type="button" data-dashboard-target="prep">
-            <span class="module-number-box module-blue"><em>Module</em><b>01</b></span>
-            <span class="module-card-copy">
-              <strong>Product Data<br>Preparation</strong>
-              <i></i>
-              <small><span class="mini-icon">▣</span>Work order & batch preparation</small>
-            </span>
+          <button class="dashboard-module-card module-card-01" type="button" data-dashboard-target="prep">
+            <div class="module-number-block"><span>Module</span><strong>01</strong></div>
+            <div class="module-card-content">
+              <h3>Product Data Preparation</h3>
+              <div class="module-divider"></div>
+              <p>Work order & batch preparation</p>
+            </div>
           </button>
-          <button class="dashboard-module-card" type="button" data-dashboard-target="bom">
-            <span class="module-number-box module-purple"><em>Module</em><b>02</b></span>
-            <span class="module-card-copy">
-              <strong>BOM<br>Expansion</strong>
-              <i></i>
-              <small><span class="mini-icon">▱</span>Multi-level BOM explosion</small>
-            </span>
+          <button class="dashboard-module-card module-card-02" type="button" data-dashboard-target="bom">
+            <div class="module-number-block"><span>Module</span><strong>02</strong></div>
+            <div class="module-card-content">
+              <h3>BOM Expansion</h3>
+              <div class="module-divider"></div>
+              <p>Multi-level BOM explosion</p>
+            </div>
           </button>
-          <button class="dashboard-module-card" type="button" data-dashboard-target="factor">
-            <span class="module-number-box module-cyan"><em>Module</em><b>03</b></span>
-            <span class="module-card-copy">
-              <strong>Carbon Emission<br>Factor Selection</strong>
-              <i></i>
-              <small><span class="mini-icon">◇</span>Factor mapping and selection</small>
-            </span>
+          <button class="dashboard-module-card module-card-03" type="button" data-dashboard-target="factor">
+            <div class="module-number-block"><span>Module</span><strong>03</strong></div>
+            <div class="module-card-content">
+              <h3>Carbon Emission Factor Selection</h3>
+              <div class="module-divider"></div>
+              <p>Factor mapping and selection</p>
+            </div>
           </button>
-          <button class="dashboard-module-card" type="button" data-dashboard-target="pcf">
-            <span class="module-number-box module-green"><em>Module</em><b>04</b></span>
-            <span class="module-card-copy">
-              <strong>PCF<br>Calculation</strong>
-              <i></i>
-              <small><span class="mini-icon">▥</span>Product carbon footprint</small>
-            </span>
+          <button class="dashboard-module-card module-card-04" type="button" data-dashboard-target="pcf">
+            <div class="module-number-block"><span>Module</span><strong>04</strong></div>
+            <div class="module-card-content">
+              <h3>PCF Calculation</h3>
+              <div class="module-divider"></div>
+              <p>Product carbon footprint</p>
+            </div>
           </button>
         </section>
       </section>
@@ -145,7 +135,7 @@
 
             <form id="form" class="form-panel">
               <label>Upload SAP Production Work Orders</label>
-              <input id="files" name="files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
+              <input id="files" name="file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <label>Reporting Year</label>
               <input id="year" name="year" type="number" placeholder="e.g. 2024；blank = all years" />
@@ -473,7 +463,6 @@ const moduleNoticeText = document.getElementById('moduleNoticeText');
 const pageTitle = document.getElementById('pageTitle');
 const pageLead = document.getElementById('pageLead');
 const homeLogo = document.getElementById('homeLogo');
-const homeButton = document.getElementById('homeButton');
 
 const bomForm = document.getElementById('bomForm');
 const bomDownload = document.getElementById('bomDownload');
@@ -536,7 +525,6 @@ function activateDashboard() {
 }
 
 homeLogo.onclick = activateDashboard;
-homeButton.onclick = activateDashboard;
 homeLogo.onkeydown = (e) => {
   if (e.key === 'Enter' || e.key === ' ') activateDashboard();
 };
@@ -828,12 +816,6 @@ form.onsubmit = async (e) => {
   log.textContent = 'Processing...\\nReading Excel files → Merging work orders → Filtering year → Annual output summary → Product Series Engine → Rule Master → Product Series Master → WIP decision → Excel export';
 
   const fd = new FormData(form);
-  const fileInput = document.getElementById('files');
-  if (fileInput) {
-    fd.delete('file');
-    fd.delete('files');
-    Array.from(fileInput.files || []).forEach(file => fd.append('files', file));
-  }
   try {
     const res = await fetch('/process', {method: 'POST', body: fd});
     const data = await res.json();
