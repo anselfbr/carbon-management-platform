@@ -1,0 +1,27 @@
+﻿Priority,Rule Type,Key,Product Type,Customer,Customer Code Logic,Is_WIP,Enabled
+1,Material Number Prefix,850-,WIP,,,Y,Y
+2,Material Number Prefix,851-,WIP,,,Y,Y
+3,Material Number Prefix,852-,WIP,,,Y,Y
+4,Material Number Prefix,H50-,WIP,,,Y,Y
+5,Material Number Prefix,40201-,WIP,,,Y,Y
+6,Material Number Prefix,40202-,WIP,,,Y,Y
+7,Material Number Prefix,40301-,WIP,,,Y,Y
+8,Material Number Prefix,40302-,WIP,,,Y,Y
+9,Material Number Prefix,40303-,WIP,,,Y,Y
+10,Material Number Prefix,40402-,WIP,,,Y,Y
+11,Material Number Prefix,41002-,WIP,,,Y,Y
+12,Description Contains,SFG,WIP,,,Y,Y
+20,Series Prefix,SN,NB,,NB_3RD_CHAR,N,Y
+21,Series Prefix,FU,NB,,NB_3RD_CHAR,N,Y
+22,Series Prefix,SP,TP,,NB_3RD_CHAR,N,Y
+23,Series Prefix,SM,DT Mouse,,DT_3_4_CHAR,N,Y
+24,Series Prefix,SA,DT Accessory,,DT_3_4_CHAR,N,Y
+25,Description Contains,RECEIVER,DT Dongle,,,N,Y
+26,Series Prefix,SK,DT Keyboard,,DT_3_4_CHAR,N,Y
+27,Series Prefix,SB,DT Keyboard+Mouse,,DT_3_4_CHAR,N,Y
+28,Series Prefix,ST,DT Tablet Keyboard,,DT_3_4_CHAR,N,Y
+29,Description Contains,TOUCH PAD MODULE,TP,,,N,Y
+30,Description Contains,TOUCHPAD MODULE,TP,,,N,Y
+31,Series Prefix,SCMC,WIP,,,Y,Y
+90,Description Contains,ASSY,WIP,,,Y,Y
+999,Default,*,WIP,,,Y,Y

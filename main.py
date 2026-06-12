@@ -301,6 +301,7 @@ def classify(material_number: object, series: str, plant: object, masters: dict)
 def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     masters = build_masters()
     df = pd.read_excel(path, dtype=str)
+    df = df.loc[:, ~df.columns.duplicated()].copy()
     cols = {key: find_col(df, aliases) for key, aliases in REQUIRED_ALIASES.items()}
     missing = [key for key, col in cols.items() if col is None]
     if missing:
@@ -428,20 +429,59 @@ def save_uploaded_rule(file_path: Path) -> int:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
 
 
 @app.post("/process")
-async def process(file: UploadFile = File(...), year: Optional[int] = Form(None)):
-    if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse({"ok": False, "message": "請上傳 Excel 檔案"}, status_code=400)
-    saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
-    content = await file.read()
-    saved.write_bytes(content)
+async def process(
+    files: Optional[list[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
+    year: Optional[int] = Form(None),
+):
+    upload_files: list[UploadFile] = []
+    if files:
+        upload_files.extend(files)
+    if file:
+        upload_files.append(file)
+
+    if not upload_files:
+        return JSONResponse(
+            {"ok": False, "message": "請至少上傳一個 Excel 檔案"},
+            status_code=400,
+        )
+
+    token = uuid.uuid4().hex[:10]
+    saved_paths = []
+    frames = []
+
     try:
-        output_path, summary = process_file(saved, year)
+        for upload in upload_files:
+            if not upload.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+                return JSONResponse({"ok": False, "message": "請上傳 Excel 檔案"}, status_code=400)
+
+            saved = UPLOAD_DIR / f"work_order_{token}_{upload.filename}"
+            saved.write_bytes(await upload.read())
+            saved_paths.append(saved)
+
+            df = pd.read_excel(saved, dtype=str)
+            df = df.loc[:, ~df.columns.duplicated()].copy()
+            frames.append(df)
+
+        if len(frames) == 1:
+            process_path = saved_paths[0]
+        else:
+            combined = pd.concat(frames, ignore_index=True, sort=False)
+            combined = combined.loc[:, ~combined.columns.duplicated()].copy()
+            process_path = UPLOAD_DIR / f"combined_work_orders_{token}.xlsx"
+            combined.to_excel(process_path, index=False)
+
+        output_path, summary = process_file(process_path, year)
+        summary["files"] = len(upload_files)
+
     except Exception as exc:
+        traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
     return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
 
 
