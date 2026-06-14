@@ -15,7 +15,7 @@
 
   const zh = {
     "Carbon Management Platform | Product Data Preparation": "碳管理平台 | 產品資料準備",
-
+    "Production Quantity Work Orders": "生產數量工單",
     "Carbon Management Platform": "碳管理平台",
     "Manufacturing Data Layer": "製造資料層",
     "Modules": "模組",
@@ -45,7 +45,7 @@
     "Step 1 · Work Order Processing": "步驟 1 · 工單處理",
     "Upload one or multiple SAP production work order files.": "上傳一份或多份 SAP 生產工單檔案。",
     "Step 1": "步驟 1",
-    "Upload SAP Production Work Orders": "上傳 SAP 生產工單",
+    "Upload SAP Production Work Orders": "上傳 SAP 生產數量工單",
     "Reporting Year": "報告年度",
     "Run Consolidation & Classification": "執行合併與分類",
     "Ready for processing": "準備處理",
