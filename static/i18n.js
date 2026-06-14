@@ -281,6 +281,24 @@
     }
   }
 
+  function translateDashboardCardTitles(targetLang) {
+    document.querySelectorAll(".dashboard-module-card strong").forEach(function (el) {
+      const text = el.textContent.replace(/\s+/g, " ").trim();
+
+      if (targetLang === "zh") {
+        if (text === "Product Data Preparation") el.textContent = "產品資料準備";
+        if (text === "BOM Expansion") el.textContent = "BOM 展開";
+        if (text === "Carbon Emission Factor Selection") el.textContent = "碳排放係數選擇";
+        if (text === "PCF Calculation") el.textContent = "產品碳足跡計算";
+      } else {
+        if (text === "產品資料準備") el.textContent = "Product Data Preparation";
+        if (text === "BOM 展開") el.textContent = "BOM Expansion";
+        if (text === "碳排放係數選擇") el.textContent = "Carbon Emission Factor Selection";
+        if (text === "產品碳足跡計算") el.textContent = "PCF Calculation";
+      }
+    });
+  }
+
   function applyLanguage(targetLang) {
     if (isApplying) return;
     isApplying = true;
@@ -292,6 +310,7 @@
 
     translateTextNodes(document.body, currentLang);
     translateAttributes(currentLang);
+    translateDashboardCardTitles(currentLang);
 
     isApplying = false;
   }
