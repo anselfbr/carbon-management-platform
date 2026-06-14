@@ -959,5 +959,19 @@ ruleForm.onsubmit = async (e) => {
   }
 };
 </script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function(){
+ const langToggle=document.getElementById('langToggle');
+ if(!langToggle) return;
+ let currentLang='en';
+ langToggle.addEventListener('click',function(){
+   currentLang=currentLang==='en'?'zh':'en';
+   langToggle.textContent=currentLang==='en'?'中':'EN';
+   const logo=document.querySelector('.logo-title');
+   if(logo){logo.textContent=currentLang==='en'?'Carbon Management Platform':'碳管理平台';}
+ });
+});
+</script>
 </body>
 </html>

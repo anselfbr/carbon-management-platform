@@ -1653,3 +1653,16 @@ pre.panel,
     font-size: 18px;
   }
 }
+
+
+.lang-toggle{
+width:44px;height:44px;min-width:44px;min-height:44px;border:0;border-radius:14px;
+background:rgba(255,255,255,.10);color:#fff;font-size:15px;font-weight:800;cursor:pointer;
+display:flex;align-items:center;justify-content:center;
+transition:transform .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.lang-toggle:hover{
+transform:translateY(-2px);
+background:linear-gradient(135deg, rgba(0,167,200,.40), rgba(10,110,209,.55));
+box-shadow:0 10px 24px rgba(0,167,200,.20);
+}
