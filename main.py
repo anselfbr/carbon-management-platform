@@ -752,7 +752,7 @@ def process_files(
     out["Product series"] = parsed.apply(lambda x: x[0])
     out["解析說明"] = parsed.apply(lambda x: x[1])
 
-    classified = out.apply(lambda r: classify(r["Material Number"], r["Product series"], r["Plant"], masters), axis=1)
+    classified = out.apply(lambda r: classify(r["Material Number"], r["Material description"], r["Product series"], r["Plant"], masters), axis=1)
     out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
     out["客戶代碼"] = classified.apply(lambda x: x.get("客戶代碼", ""))
     out["客戶名稱"] = classified.apply(lambda x: x.get("客戶名稱", ""))
@@ -867,106 +867,31 @@ def index(request: Request):
 
 
 @app.post("/process")
-async def process(request: Request):
-    """Step 1 processing endpoint.
-
-    Ultra tolerant multipart reader:
-    - no FastAPI File/Form validation
-    - reads request.form() manually
-    - accepts file objects from ANY form key
-    - classifies labor files by key name containing 'labor'
-    - all other uploaded Excel files are treated as production quantity work orders
-    """
-    try:
-        form = await request.form()
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse(
-            {"ok": False, "message": f"無法讀取上傳表單：{exc}"},
-            status_code=400,
-        )
-
-    available_keys = list(form.keys())
-
-    def is_upload_file_like(item) -> bool:
-        return bool(getattr(item, "filename", None)) and hasattr(item, "read")
-
-    upload_files = []
-    labor_uploads = []
-
-    for item in form.getlist("files") + form.getlist("file"):
-        if is_upload_file_like(item):
-            upload_files.append(item)
-
-    for item in form.getlist("labor_files") + form.getlist("labor_file"):
-        if is_upload_file_like(item):
-            labor_uploads.append(item)
-
-    # Fallback: collect file-like objects from any unexpected key.
-    seen_ids = {id(x) for x in upload_files + labor_uploads}
-    for key in available_keys:
-        for item in form.getlist(key):
-            if not is_upload_file_like(item):
-                continue
-            if id(item) in seen_ids:
-                continue
-
-            key_lower = str(key).lower()
-            if "labor" in key_lower or "hour" in key_lower or "worktime" in key_lower:
-                labor_uploads.append(item)
-            else:
-                upload_files.append(item)
-            seen_ids.add(id(item))
-
-    if not upload_files:
-        detail = []
-        for key in available_keys:
-            for item in form.getlist(key):
-                detail.append({
-                    "key": str(key),
-                    "type": type(item).__name__,
-                    "filename": str(getattr(item, "filename", "")),
-                })
-
-        return JSONResponse(
-            {
-                "ok": False,
-                "message": (
-                    "請至少上傳一個 Excel 生產數量工單檔案。"
-                    f" 後端收到的表單欄位：{available_keys}；"
-                    f" 欄位內容摘要：{detail}"
-                ),
-            },
-            status_code=400,
-        )
-
-    labor_mode = str(form.get("labor_mode") or "both").strip()
-    year = form.get("year")
+async def process(
+    files: list[UploadFile] = File(...),
+    labor_files: Optional[list[UploadFile]] = File(None),
+    labor_mode: str = Form("both"),
+    year: Optional[str] = Form(None),
+):
+    if not files:
+        return JSONResponse({"ok": False, "message": "請至少上傳一個 Excel 生產數量工單檔案"}, status_code=400)
 
     saved_paths: list[Path] = []
-    for upload in upload_files:
-        filename = str(getattr(upload, "filename", "") or "")
-        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse(
-                {"ok": False, "message": f"{filename} 不是 Excel 檔案"},
-                status_code=400,
-            )
-
-        saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{Path(filename).name}"
-        saved.write_bytes(await upload.read())
+    for file in files:
+        if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{file.filename} 不是 Excel 檔案"}, status_code=400)
+        saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
+        saved.write_bytes(await file.read())
         saved_paths.append(saved)
 
     saved_labor_paths: list[Path] = []
-    for upload in labor_uploads:
-        filename = str(getattr(upload, "filename", "") or "")
-        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse(
-                {"ok": False, "message": f"{filename} 不是 Excel 工時檔案"},
-                status_code=400,
-            )
-
-        saved = UPLOAD_DIR / f"labor_{uuid.uuid4().hex}_{Path(filename).name}"
-        saved.write_bytes(await upload.read())
+    for labor_file in (labor_files or []):
+        if not labor_file.filename:
+            continue
+        if not labor_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{labor_file.filename} 不是 Excel 工時檔案"}, status_code=400)
+        saved = UPLOAD_DIR / f"labor_{uuid.uuid4().hex}_{labor_file.filename}"
+        saved.write_bytes(await labor_file.read())
         saved_labor_paths.append(saved)
 
     try:
@@ -974,21 +899,11 @@ async def process(request: Request):
         if year is not None and str(year).strip() != "":
             year_value = int(str(year).strip())
 
-        output_path, summary = process_files(
-            saved_paths,
-            year_value,
-            saved_labor_paths,
-            labor_mode,
-        )
+        output_path, summary = process_files(saved_paths, year_value, saved_labor_paths, labor_mode)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-
-    return {
-        "ok": True,
-        "summary": summary,
-        "download_url": f"/download/{output_path.name}",
-    }
+    return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
 
 
 @app.post("/upload-rule-master")
