@@ -21,6 +21,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
+print("===== CMP MAIN VERSION: PROCESS_MANUAL_FORM_V6 =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -74,6 +75,7 @@ REQUIRED_ALIASES = {
     "delivered_quantity": ["Delivered quantity (GMEIN)", "Delivered quantity", "Delivered Quantity"],
     "finish_date": ["Actual finish date", "Actual Finish Date", "Finish date", "Actual finish"],
 }
+
 
 LABOR_ALIASES = {
     "order": ["Order Number", "Order", "Production Order", "Process order"],
@@ -190,19 +192,6 @@ def find_col(df: pd.DataFrame, aliases: list[str]) -> Optional[str]:
         if key in normalized:
             return normalized[key]
     return None
-
-
-def normalize_order_key(value: object) -> str:
-    if pd.isna(value):
-        return ""
-    text = str(value).strip()
-    if text.lower() in ["", "nan", "none", "nat"]:
-        return ""
-    text = re.sub(r"\.0$", "", text)
-    text = re.sub(r"\s+", "", text)
-    if text.isdigit():
-        text = text.lstrip("0") or "0"
-    return text
 
 
 def get_series_prefixes(masters: Optional[dict] = None) -> list[str]:
@@ -435,7 +424,6 @@ def classify(material_number: object, description: object, series: str, plant: o
 
 
 def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
-    """Load one or multiple production quantity work order files."""
     frames: list[pd.DataFrame] = []
     errors: list[str] = []
 
@@ -450,7 +438,6 @@ def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
         part = pd.DataFrame(index=df.index)
         part["Source file"] = path.name
         part["Order"] = df[cols["order"]]
-        part["Order Merge Key"] = part["Order"].apply(normalize_order_key)
         part["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
         part["Material Number"] = df[cols["material_number"]].astype(str).str.strip()
         part["Material description"] = df[cols["material_description"]]
@@ -462,20 +449,23 @@ def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
     if errors:
         raise ValueError("；".join(errors))
     if not frames:
-        raise ValueError("沒有可處理的生產數量工單資料")
+        raise ValueError("沒有可處理的工單資料")
 
     return pd.concat(frames, ignore_index=True)
 
 
-def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.DataFrame:
-    """Load one or multiple production labor work order files."""
-    columns = [
-        "Order Merge Key", "Order", "Plant", "Material Number",
-        "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
-    ]
 
+def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.DataFrame:
+    """Load production labor work order files and aggregate labor hours by Order first,
+    with Plant + Material Number retained as fallback merge keys.
+    """
     if not paths:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(
+            columns=[
+                "Order", "Plant", "Material Number",
+                "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
+            ]
+        )
 
     mode = str(labor_mode or "both").strip().lower()
     if mode not in VALID_LABOR_MODES:
@@ -496,7 +486,6 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
         part = pd.DataFrame(index=df.index)
         part["Labor Source file"] = path.name
         part["Order"] = df[cols["order"]].astype(str).str.strip()
-        part["Order Merge Key"] = part["Order"].apply(normalize_order_key)
 
         if cols.get("plant") is not None:
             part["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
@@ -522,16 +511,21 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
 
     if errors:
         raise ValueError("；".join(errors))
+
     if not frames:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(
+            columns=[
+                "Order", "Plant", "Material Number",
+                "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
+            ]
+        )
 
     labor = pd.concat(frames, ignore_index=True)
-    labor = labor[(labor["Order Merge Key"] != "") | (labor["Material Number"] != "")].copy()
+    labor = labor[(labor["Order"] != "") | (labor["Material Number"] != "")].copy()
 
     return (
-        labor.groupby(["Order Merge Key", "Plant", "Material Number"], dropna=False, as_index=False)
+        labor.groupby(["Order", "Plant", "Material Number"], dropna=False, as_index=False)
         .agg({
-            "Order": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip()))),
             "Labor HR.Act": "sum",
             "FOH-Others.Act": "sum",
             "Selected Hours": "sum",
@@ -543,30 +537,20 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
 
 def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
     """Attach labor hours to production output.
-
-    Matching priority:
-    1. Order / Order Number after normalization
-    2. Plant + Material Number fallback
+    Primary key: Order
+    Fallback key: Plant + Material Number
     """
     out = out.copy()
-
-    if "Order Merge Key" not in out.columns:
-        out["Order Merge Key"] = out["Order"].apply(normalize_order_key)
-
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"]:
-        out[col] = 0 if col != "Labor Source files" else ""
+        if col not in out.columns:
+            out[col] = 0 if col != "Labor Source files" else ""
 
     if labor is None or labor.empty:
         return out
 
-    labor = labor.copy()
-    if "Order Merge Key" not in labor.columns:
-        labor["Order Merge Key"] = labor["Order"].apply(normalize_order_key)
-
-    # 1) Order-level match
     order_labor = (
-        labor[labor["Order Merge Key"].astype(str).str.strip() != ""]
-        .groupby(["Order Merge Key"], dropna=False, as_index=False)
+        labor[labor["Order"].astype(str).str.strip() != ""]
+        .groupby(["Order"], dropna=False, as_index=False)
         .agg({
             "Labor HR.Act": "sum",
             "FOH-Others.Act": "sum",
@@ -576,29 +560,22 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
     )
 
     if not order_labor.empty:
-        out = out.merge(order_labor, on="Order Merge Key", how="left", suffixes=("", "_labor"))
-
-        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
+        out = out.merge(order_labor, on="Order", how="left", suffixes=("", "_labor"))
+        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"]:
             labor_col = f"{col}_labor"
             if labor_col in out.columns:
-                out[col] = pd.to_numeric(out[labor_col], errors="coerce").fillna(0)
+                if col == "Labor Source files":
+                    out[col] = out[labor_col].fillna("").astype(str)
+                else:
+                    out[col] = pd.to_numeric(out[labor_col], errors="coerce")
                 out = out.drop(columns=[labor_col])
 
-        if "Labor Source files_labor" in out.columns:
-            out["Labor Source files"] = out["Labor Source files_labor"].fillna("").astype(str)
-            out = out.drop(columns=["Labor Source files_labor"])
-
-    # 2) Plant + Material Number fallback for rows still without hours
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
 
     fallback_mask = out["Selected Hours"].eq(0)
-
     pm_labor = (
-        labor[
-            (labor["Plant"].astype(str).str.strip() != "")
-            & (labor["Material Number"].astype(str).str.strip() != "")
-        ]
+        labor[(labor["Plant"].astype(str).str.strip() != "") & (labor["Material Number"].astype(str).str.strip() != "")]
         .groupby(["Plant", "Material Number"], dropna=False, as_index=False)
         .agg({
             "Labor HR.Act": "sum",
@@ -614,27 +591,17 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
             on=["Plant", "Material Number"],
             how="left",
         )
-
         for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
             out.loc[fallback_mask, col] = pd.to_numeric(fallback[col], errors="coerce").fillna(0).to_numpy()
-
         out.loc[fallback_mask, "Labor Source files"] = fallback["Labor Source files"].fillna("").astype(str).to_numpy()
 
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
-
     out["Labor Source files"] = out["Labor Source files"].fillna("").astype(str)
     return out
 
-
-def process_files(
-    paths: list[Path],
-    year: Optional[int],
-    labor_paths: Optional[list[Path]] = None,
-    labor_mode: str = "both",
-) -> tuple[Path, dict]:
+def process_files(paths: list[Path], year: Optional[int], labor_paths: Optional[list[Path]] = None, labor_mode: str = "both") -> tuple[Path, dict]:
     masters = build_masters()
-
     out = load_production_dataframe(paths)
     labor = load_labor_dataframe(labor_paths or [], labor_mode)
     out = attach_labor_hours(out, labor)
@@ -647,16 +614,9 @@ def process_files(
     out["解析說明"] = parsed.apply(lambda x: x[1])
 
     classified = out.apply(
-        lambda r: classify(
-            r["Material Number"],
-            r["Material description"],
-            r["Product series"],
-            r["Plant"],
-            masters,
-        ),
+        lambda r: classify(r["Material Number"], r["Material description"], r["Product series"], r["Plant"], masters),
         axis=1,
     )
-
     out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
     out["客戶代碼"] = classified.apply(lambda x: x.get("客戶代碼", ""))
     out["客戶名稱"] = classified.apply(lambda x: x.get("客戶名稱", ""))
@@ -669,7 +629,6 @@ def process_files(
         "Year", "Plant", "Material Number", "Material description", "Product series",
         "產品類型", "客戶代碼", "客戶名稱", "判斷來源", "Is_WIP"
     ]
-
     annual = (
         out.groupby(group_cols, dropna=False, as_index=False)
         .agg({
@@ -685,19 +644,8 @@ def process_files(
 
     plant_qty_total = annual.groupby(["Year", "Plant"], dropna=False)["年度生產量"].transform("sum")
     plant_hour_total = annual.groupby(["Year", "Plant"], dropna=False)["年度工時"].transform("sum")
-
-    annual["生產數量占比(%)"] = 0.0
-    annual["生產工時占比(%)"] = 0.0
-
-    qty_mask = plant_qty_total.ne(0)
-    hour_mask = plant_hour_total.ne(0)
-
-    annual.loc[qty_mask, "生產數量占比(%)"] = (
-        annual.loc[qty_mask, "年度生產量"] / plant_qty_total.loc[qty_mask] * 100
-    )
-    annual.loc[hour_mask, "生產工時占比(%)"] = (
-        annual.loc[hour_mask, "年度工時"] / plant_hour_total.loc[hour_mask] * 100
-    )
+    annual["生產數量占比(%)"] = (annual["年度生產量"] / plant_qty_total.replace(0, pd.NA) * 100).fillna(0)
+    annual["生產工時占比(%)"] = (annual["年度工時"] / plant_hour_total.replace(0, pd.NA) * 100).fillna(0)
 
     type_summary = (
         out.groupby(["Year", "Plant", "產品類型", "Is_WIP"], dropna=False, as_index=False)["Delivered quantity"]
@@ -728,7 +676,6 @@ def process_files(
 
     file_id = uuid.uuid4().hex[:10]
     output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
-
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         out.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
@@ -737,7 +684,6 @@ def process_files(
         source_summary.to_excel(writer, index=False, sheet_name="判斷來源摘要")
         file_summary.to_excel(writer, index=False, sheet_name="來源檔案摘要")
         wip.to_excel(writer, index=False, sheet_name="WIP清單")
-
         for sheet in writer.book.worksheets:
             sheet.freeze_panes = "A2"
             for col in sheet.columns:
@@ -758,13 +704,46 @@ def process_files(
         "output_filename": output_path.name,
         "year": year or "ALL",
     }
-
     return output_path, summary
 
 
 def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     """Backward-compatible wrapper for single-file processing."""
     return process_files([path], year, None, "both")
+
+
+def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
+    rename_map = {}
+    for c in df.columns:
+        key = str(c).strip().lower()
+        if key in ["priority", "優先順序", "排序"]:
+            rename_map[c] = "Priority"
+        elif key in ["rule type", "規則類型", "判斷類型"]:
+            rename_map[c] = "Rule Type"
+        elif key in ["key", "規則值", "關鍵字", "prefix", "前綴"]:
+            rename_map[c] = "Key"
+        elif key in ["product type", "產品分類", "產品類型"]:
+            rename_map[c] = "Product Type"
+        elif key in ["customer", "客戶", "客戶名稱"]:
+            rename_map[c] = "Customer"
+        elif key in ["customer code logic", "客戶代碼邏輯"]:
+            rename_map[c] = "Customer Code Logic"
+        elif key in ["is_wip", "is wip", "wip", "半品"]:
+            rename_map[c] = "Is_WIP"
+        elif key in ["enabled", "啟用"]:
+            rename_map[c] = "Enabled"
+    df = df.rename(columns=rename_map).fillna("")
+    for col in RULE_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    df = df[RULE_COLUMNS].copy()
+    for c in RULE_COLUMNS:
+        df[c] = df[c].astype(str).str.strip()
+    df["Enabled"] = df["Enabled"].replace("", "Y")
+    df["Is_WIP"] = df["Is_WIP"].replace("", "N")
+    df = df[(df["Rule Type"] != "") & (df["Key"] != "") & (df["Product Type"] != "")]
+    return df
+
 
 def save_uploaded_rule(file_path: Path) -> int:
     if file_path.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
@@ -781,32 +760,74 @@ def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+
+
+@app.get("/debug-version")
+def debug_version():
+    return {
+        "ok": True,
+        "app": "Carbon Management Platform",
+        "version": "PROCESS_MANUAL_FORM_V6",
+        "process_endpoint": "manual form compatible",
+        "supports": ["files multi-upload", "file single-upload", "blank year"],
+    }
+
 @app.post("/process")
 async def process(
-    files: list[UploadFile] = File(...),
+    request: Request,
+    files: Optional[list[UploadFile]] = File(None),
+    file: Optional[UploadFile] = File(None),
     labor_files: Optional[list[UploadFile]] = File(None),
+    labor_file: Optional[UploadFile] = File(None),
     labor_mode: str = Form("both"),
     year: Optional[str] = Form(None),
 ):
-    if not files:
-        return JSONResponse({"ok": False, "message": "請至少上傳一個 Excel 生產數量工單檔案"}, status_code=400)
+    """Step 1 processing endpoint.
+
+    422-safe version:
+    - accepts files or file
+    - accepts labor_files or labor_file
+    - no required File(...) validation at FastAPI layer
+    - returns controlled 400 JSON when missing production quantity files
+    """
+    upload_files: list[UploadFile] = []
+    if files:
+        upload_files.extend([f for f in files if f and f.filename])
+    if file and file.filename:
+        upload_files.append(file)
+
+    if not upload_files:
+        return JSONResponse(
+            {"ok": False, "message": "請至少上傳一個 Excel 生產數量工單檔案"},
+            status_code=400,
+        )
 
     saved_paths: list[Path] = []
-    for file in files:
-        if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse({"ok": False, "message": f"{file.filename} 不是 Excel 檔案"}, status_code=400)
-        saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
-        saved.write_bytes(await file.read())
+    for upload in upload_files:
+        if not upload.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse(
+                {"ok": False, "message": f"{upload.filename} 不是 Excel 檔案"},
+                status_code=400,
+            )
+        saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{upload.filename}"
+        saved.write_bytes(await upload.read())
         saved_paths.append(saved)
 
     saved_labor_paths: list[Path] = []
-    for labor_file in (labor_files or []):
-        if not labor_file.filename:
-            continue
-        if not labor_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse({"ok": False, "message": f"{labor_file.filename} 不是 Excel 工時檔案"}, status_code=400)
-        saved = UPLOAD_DIR / f"labor_{uuid.uuid4().hex}_{labor_file.filename}"
-        saved.write_bytes(await labor_file.read())
+    labor_uploads: list[UploadFile] = []
+    if labor_files:
+        labor_uploads.extend([f for f in labor_files if f and f.filename])
+    if labor_file and labor_file.filename:
+        labor_uploads.append(labor_file)
+
+    for upload in labor_uploads:
+        if not upload.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse(
+                {"ok": False, "message": f"{upload.filename} 不是 Excel 工時檔案"},
+                status_code=400,
+            )
+        saved = UPLOAD_DIR / f"labor_{uuid.uuid4().hex}_{upload.filename}"
+        saved.write_bytes(await upload.read())
         saved_labor_paths.append(saved)
 
     try:
@@ -814,12 +835,21 @@ async def process(
         if year is not None and str(year).strip() != "":
             year_value = int(str(year).strip())
 
-        output_path, summary = process_files(saved_paths, year_value, saved_labor_paths, labor_mode)
+        output_path, summary = process_files(
+            saved_paths,
+            year_value,
+            saved_labor_paths,
+            labor_mode,
+        )
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
-    return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
+    return {
+        "ok": True,
+        "summary": summary,
+        "download_url": f"/download/{output_path.name}",
+    }
 
 
 @app.post("/upload-rule-master")
