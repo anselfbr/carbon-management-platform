@@ -21,7 +21,7 @@
     "Labor HR.Act Only": "人員工時",
     "Labor Allocation Source": "工時來源",
     "Working Hour Source": "工時來源",
-    "Production Labor Work Orders": "生產工時工單",
+    "Upload Working Hour Orders": "生產工時工單",
     "Production Quantity Work Orders": "生產數量工單",
 
     "Carbon Management Platform": "碳管理平台",
