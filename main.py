@@ -435,129 +435,7 @@ def classify(material_number: object, description: object, series: str, plant: o
 
 
 def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
-    frames: list[pd.DataFrame] = []
-    errors: list[str] = []
-
-    for path in paths:
-        df = pd.read_excel(path, dtype=str)
-        cols = {key: find_col(df, aliases) for key, aliases in REQUIRED_ALIASES.items()}
-        missing = [key for key, col in cols.items() if col is None]
-        if missing:
-            errors.append(f"{path.name} 缺少必要欄位：{', '.join(missing)}")
-            continue
-
-        part = pd.DataFrame(index=df.index)
-        part["Source file"] = path.name
-        part["Order"] = df[cols["order"]]
-        part["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
-        part["Material Number"] = df[cols["material_number"]].astype(str).str.strip()
-        part["Material description"] = df[cols["material_description"]]
-        part["Delivered quantity"] = pd.to_numeric(df[cols["delivered_quantity"]], errors="coerce").fillna(0)
-        part["Actual finish date"] = pd.to_datetime(df[cols["finish_date"]], errors="coerce")
-        part["Year"] = part["Actual finish date"].dt.year
-        frames.append(part)
-
-    if errors:
-        raise ValueError("；".join(errors))
-    if not frames:
-        raise ValueError("沒有可處理的工單資料")
-
-    return pd.concat(frames, ignore_index=True)
-
-
-def process_files(paths: list[Path], year: Optional[int]) -> tuple[Path, dict]:
-    masters = build_masters()
-    out = load_production_dataframe(paths)
-
-    if year:
-        out = out[out["Year"] == int(year)].copy()
-
-    parsed = out["Material description"].apply(lambda desc: parse_product_series(desc, masters))
-    out["Product series"] = parsed.apply(lambda x: x[0])
-    out["解析說明"] = parsed.apply(lambda x: x[1])
-
-    classified = out.apply(
-        lambda r: classify(r["Material Number"], r["Material description"], r["Product series"], r["Plant"], masters),
-        axis=1,
-    )
-    out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
-    out["客戶代碼"] = classified.apply(lambda x: x.get("客戶代碼", ""))
-    out["客戶名稱"] = classified.apply(lambda x: x.get("客戶名稱", ""))
-    out["判斷來源"] = classified.apply(lambda x: x.get("判斷來源", ""))
-    out["規則判定結果"] = classified.apply(lambda x: x.get("規則判定結果", ""))
-    out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
-    out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
-
-    group_cols = [
-        "Year", "Plant", "Material Number", "Material description", "Product series",
-        "產品類型", "客戶代碼", "客戶名稱", "判斷來源", "Is_WIP"
-    ]
-    annual = (
-        out.groupby(group_cols, dropna=False, as_index=False)["Delivered quantity"]
-        .sum()
-        .rename(columns={"Delivered quantity": "年度生產量"})
-        .sort_values(["Plant", "Material Number"])
-    )
-
-    type_summary = (
-        out.groupby(["Year", "Plant", "產品類型", "Is_WIP"], dropna=False, as_index=False)["Delivered quantity"]
-        .sum()
-        .rename(columns={"Delivered quantity": "年度生產量"})
-        .sort_values(["Plant", "產品類型"])
-    )
-
-    customer_summary = (
-        out.groupby(["Year", "Plant", "客戶名稱"], dropna=False, as_index=False)["Delivered quantity"]
-        .sum()
-        .rename(columns={"Delivered quantity": "年度生產量"})
-        .sort_values(["Plant", "客戶名稱"])
-    )
-
-    source_summary = (
-        out.groupby(["判斷來源", "規則判定結果", "命中規則"], dropna=False, as_index=False)["Delivered quantity"]
-        .agg(筆數="count", 生產量="sum")
-    )
-
-    file_summary = (
-        out.groupby(["Source file"], dropna=False, as_index=False)["Delivered quantity"]
-        .agg(筆數="count", 生產量="sum")
-        .sort_values(["Source file"])
-    )
-
-    wip = out[out["Is_WIP"] == "Y"].copy()
-
-    file_id = uuid.uuid4().hex[:10]
-    output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        out.to_excel(writer, index=False, sheet_name="工單明細_已分類")
-        annual.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
-        type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
-        customer_summary.to_excel(writer, index=False, sheet_name="Plant_客戶年度產量")
-        source_summary.to_excel(writer, index=False, sheet_name="判斷來源摘要")
-        file_summary.to_excel(writer, index=False, sheet_name="來源檔案摘要")
-        wip.to_excel(writer, index=False, sheet_name="WIP清單")
-        for sheet in writer.book.worksheets:
-            sheet.freeze_panes = "A2"
-            for col in sheet.columns:
-                max_len = 12
-                letter = col[0].column_letter
-                for cell in col[:1000]:
-                    max_len = max(max_len, len(str(cell.value or "")) + 2)
-                sheet.column_dimensions[letter].width = min(max_len, 45)
-
-    summary = {
-        "files": int(len(paths)),
-        "rows": int(len(out)),
-        "annual_rows": int(len(annual)),
-        "total_qty": float(out["Delivered quantity"].sum()),
-        "wip_rows": int(len(wip)),
-        "output_filename": output_path.name,
-        "year": year or "ALL",
-    }
-    return output_path, summary
-
-
-def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
+    """Load one or multiple production quantity work order files."""
     frames: list[pd.DataFrame] = []
     errors: list[str] = []
 
@@ -590,10 +468,12 @@ def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
 
 
 def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.DataFrame:
+    """Load one or multiple production labor work order files."""
     columns = [
         "Order Merge Key", "Order", "Plant", "Material Number",
         "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
     ]
+
     if not paths:
         return pd.DataFrame(columns=columns)
 
@@ -607,6 +487,7 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
     for path in paths:
         df = pd.read_excel(path, dtype=str)
         cols = {key: find_col(df, aliases) for key, aliases in LABOR_ALIASES.items()}
+
         missing = [key for key in ["order", "labor_hr", "foh_others"] if cols.get(key) is None]
         if missing:
             errors.append(f"{path.name} 缺少必要工時欄位：{', '.join(missing)}")
@@ -661,7 +542,14 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
 
 
 def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
+    """Attach labor hours to production output.
+
+    Matching priority:
+    1. Order / Order Number after normalization
+    2. Plant + Material Number fallback
+    """
     out = out.copy()
+
     if "Order Merge Key" not in out.columns:
         out["Order Merge Key"] = out["Order"].apply(normalize_order_key)
 
@@ -689,20 +577,23 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
 
     if not order_labor.empty:
         out = out.merge(order_labor, on="Order Merge Key", how="left", suffixes=("", "_labor"))
+
         for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
             labor_col = f"{col}_labor"
             if labor_col in out.columns:
                 out[col] = pd.to_numeric(out[labor_col], errors="coerce").fillna(0)
                 out = out.drop(columns=[labor_col])
+
         if "Labor Source files_labor" in out.columns:
             out["Labor Source files"] = out["Labor Source files_labor"].fillna("").astype(str)
             out = out.drop(columns=["Labor Source files_labor"])
 
+    # 2) Plant + Material Number fallback for rows still without hours
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
 
-    # 2) Plant + Material Number fallback for rows with no order match
     fallback_mask = out["Selected Hours"].eq(0)
+
     pm_labor = (
         labor[
             (labor["Plant"].astype(str).str.strip() != "")
@@ -723,8 +614,10 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
             on=["Plant", "Material Number"],
             how="left",
         )
+
         for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
             out.loc[fallback_mask, col] = pd.to_numeric(fallback[col], errors="coerce").fillna(0).to_numpy()
+
         out.loc[fallback_mask, "Labor Source files"] = fallback["Labor Source files"].fillna("").astype(str).to_numpy()
 
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
@@ -741,6 +634,7 @@ def process_files(
     labor_mode: str = "both",
 ) -> tuple[Path, dict]:
     masters = build_masters()
+
     out = load_production_dataframe(paths)
     labor = load_labor_dataframe(labor_paths or [], labor_mode)
     out = attach_labor_hours(out, labor)
@@ -748,11 +642,21 @@ def process_files(
     if year:
         out = out[out["Year"] == int(year)].copy()
 
-    parsed = out["Material description"].apply(parse_product_series)
+    parsed = out["Material description"].apply(lambda desc: parse_product_series(desc, masters))
     out["Product series"] = parsed.apply(lambda x: x[0])
     out["解析說明"] = parsed.apply(lambda x: x[1])
 
-    classified = out.apply(lambda r: classify(r["Material Number"], r["Product series"], r["Plant"], masters), axis=1)
+    classified = out.apply(
+        lambda r: classify(
+            r["Material Number"],
+            r["Material description"],
+            r["Product series"],
+            r["Plant"],
+            masters,
+        ),
+        axis=1,
+    )
+
     out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
     out["客戶代碼"] = classified.apply(lambda x: x.get("客戶代碼", ""))
     out["客戶名稱"] = classified.apply(lambda x: x.get("客戶名稱", ""))
@@ -781,12 +685,19 @@ def process_files(
 
     plant_qty_total = annual.groupby(["Year", "Plant"], dropna=False)["年度生產量"].transform("sum")
     plant_hour_total = annual.groupby(["Year", "Plant"], dropna=False)["年度工時"].transform("sum")
+
     annual["生產數量占比(%)"] = 0.0
     annual["生產工時占比(%)"] = 0.0
+
     qty_mask = plant_qty_total.ne(0)
     hour_mask = plant_hour_total.ne(0)
-    annual.loc[qty_mask, "生產數量占比(%)"] = annual.loc[qty_mask, "年度生產量"] / plant_qty_total.loc[qty_mask] * 100
-    annual.loc[hour_mask, "生產工時占比(%)"] = annual.loc[hour_mask, "年度工時"] / plant_hour_total.loc[hour_mask] * 100
+
+    annual.loc[qty_mask, "生產數量占比(%)"] = (
+        annual.loc[qty_mask, "年度生產量"] / plant_qty_total.loc[qty_mask] * 100
+    )
+    annual.loc[hour_mask, "生產工時占比(%)"] = (
+        annual.loc[hour_mask, "年度工時"] / plant_hour_total.loc[hour_mask] * 100
+    )
 
     type_summary = (
         out.groupby(["Year", "Plant", "產品類型", "Is_WIP"], dropna=False, as_index=False)["Delivered quantity"]
@@ -803,7 +714,7 @@ def process_files(
     )
 
     source_summary = (
-        out.groupby(["判斷來源", "規則判定結果"], dropna=False, as_index=False)["Delivered quantity"]
+        out.groupby(["判斷來源", "規則判定結果", "命中規則"], dropna=False, as_index=False)["Delivered quantity"]
         .agg(筆數="count", 生產量="sum")
     )
 
@@ -817,6 +728,7 @@ def process_files(
 
     file_id = uuid.uuid4().hex[:10]
     output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
+
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         out.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
@@ -825,6 +737,7 @@ def process_files(
         source_summary.to_excel(writer, index=False, sheet_name="判斷來源摘要")
         file_summary.to_excel(writer, index=False, sheet_name="來源檔案摘要")
         wip.to_excel(writer, index=False, sheet_name="WIP清單")
+
         for sheet in writer.book.worksheets:
             sheet.freeze_panes = "A2"
             for col in sheet.columns:
@@ -845,10 +758,12 @@ def process_files(
         "output_filename": output_path.name,
         "year": year or "ALL",
     }
+
     return output_path, summary
 
 
 def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
+    """Backward-compatible wrapper for single-file processing."""
     return process_files([path], year, None, "both")
 
 def save_uploaded_rule(file_path: Path) -> int:
@@ -903,6 +818,7 @@ async def process(
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
     return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
 
 
