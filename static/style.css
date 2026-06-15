@@ -1362,7 +1362,7 @@ pre.panel,
 /* Homepage-only visual refinement to match approved dashboard without changing global font scale */
 .sidebar-top-actions {
   display: flex;
-  gap: 10px;
+  gap: 14px;
   align-items: center;
 }
 
@@ -1655,28 +1655,20 @@ pre.panel,
 }
 
 
-/* Language toggle button - i18n safe version */
-.lang-toggle {
-  width: 44px;
-  height: 44px;
-  min-width: 44px;
-  min-height: 44px;
-  border: 0;
+/* Step 1 labor mode selector */
+select {
+  border: 1px solid var(--line);
+  background: #f9fbfd;
   border-radius: 14px;
-  background: rgba(255,255,255,.10);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 800;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform .18s ease, background .18s ease, box-shadow .18s ease;
+  padding: 13px 14px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+  font-family: inherit;
 }
 
-.lang-toggle:hover {
-  transform: translateY(-2px);
-  background: linear-gradient(135deg, rgba(0,167,200,.40), rgba(10,110,209,.55));
-  box-shadow: 0 10px 24px rgba(0,167,200,.20);
+select:focus {
+  outline: none;
+  border-color: rgba(10,110,209,.45);
+  box-shadow: 0 0 0 4px rgba(10,110,209,.08);
 }

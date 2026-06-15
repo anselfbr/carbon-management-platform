@@ -11,8 +11,6 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from bulk_formatter import generate_product_activity_bulk_file
-from bom_formatter import generate_raw_material_bulk_file
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -77,6 +75,17 @@ REQUIRED_ALIASES = {
     "delivered_quantity": ["Delivered quantity (GMEIN)", "Delivered quantity", "Delivered Quantity"],
     "finish_date": ["Actual finish date", "Actual Finish Date", "Finish date", "Actual finish"],
 }
+
+
+LABOR_ALIASES = {
+    "order": ["Order Number", "Order", "Production Order", "Process order"],
+    "plant": ["Plant", "Plant code"],
+    "material_number": ["Material Number", "Material", "Product Material Number"],
+    "labor_hr": ["Labor HR.Act", "Labor HR Act", "Labor HR.Act.", "Labor HR", "Labor Hour"],
+    "foh_others": ["FOH-Others.Act", "FOH Others.Act", "FOH-Others Act", "FOH Others Act", "FOH-Others.Act.", "FOH Others"],
+}
+
+VALID_LABOR_MODES = {"labor_hr", "foh", "both"}
 
 RULE_COLUMNS = [
     "Priority", "Rule Type", "Key", "Product Type", "Customer",
@@ -445,9 +454,157 @@ def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def process_files(paths: list[Path], year: Optional[int]) -> tuple[Path, dict]:
+
+def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.DataFrame:
+    """Load production labor work order files and aggregate labor hours by Order first,
+    with Plant + Material Number retained as fallback merge keys.
+    """
+    if not paths:
+        return pd.DataFrame(
+            columns=[
+                "Order", "Plant", "Material Number",
+                "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
+            ]
+        )
+
+    mode = str(labor_mode or "both").strip().lower()
+    if mode not in VALID_LABOR_MODES:
+        mode = "both"
+
+    frames: list[pd.DataFrame] = []
+    errors: list[str] = []
+
+    for path in paths:
+        df = pd.read_excel(path, dtype=str)
+        cols = {key: find_col(df, aliases) for key, aliases in LABOR_ALIASES.items()}
+
+        missing = [key for key in ["order", "labor_hr", "foh_others"] if cols.get(key) is None]
+        if missing:
+            errors.append(f"{path.name} 缺少必要工時欄位：{', '.join(missing)}")
+            continue
+
+        part = pd.DataFrame(index=df.index)
+        part["Labor Source file"] = path.name
+        part["Order"] = df[cols["order"]].astype(str).str.strip()
+
+        if cols.get("plant") is not None:
+            part["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+        else:
+            part["Plant"] = ""
+
+        if cols.get("material_number") is not None:
+            part["Material Number"] = df[cols["material_number"]].astype(str).str.strip()
+        else:
+            part["Material Number"] = ""
+
+        part["Labor HR.Act"] = pd.to_numeric(df[cols["labor_hr"]], errors="coerce").fillna(0)
+        part["FOH-Others.Act"] = pd.to_numeric(df[cols["foh_others"]], errors="coerce").fillna(0)
+
+        if mode == "labor_hr":
+            part["Selected Hours"] = part["Labor HR.Act"]
+        elif mode == "foh":
+            part["Selected Hours"] = part["FOH-Others.Act"]
+        else:
+            part["Selected Hours"] = part["Labor HR.Act"] + part["FOH-Others.Act"]
+
+        frames.append(part)
+
+    if errors:
+        raise ValueError("；".join(errors))
+
+    if not frames:
+        return pd.DataFrame(
+            columns=[
+                "Order", "Plant", "Material Number",
+                "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
+            ]
+        )
+
+    labor = pd.concat(frames, ignore_index=True)
+    labor = labor[(labor["Order"] != "") | (labor["Material Number"] != "")].copy()
+
+    return (
+        labor.groupby(["Order", "Plant", "Material Number"], dropna=False, as_index=False)
+        .agg({
+            "Labor HR.Act": "sum",
+            "FOH-Others.Act": "sum",
+            "Selected Hours": "sum",
+            "Labor Source file": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
+        })
+        .rename(columns={"Labor Source file": "Labor Source files"})
+    )
+
+
+def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
+    """Attach labor hours to production output.
+    Primary key: Order
+    Fallback key: Plant + Material Number
+    """
+    out = out.copy()
+    for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"]:
+        if col not in out.columns:
+            out[col] = 0 if col != "Labor Source files" else ""
+
+    if labor is None or labor.empty:
+        return out
+
+    order_labor = (
+        labor[labor["Order"].astype(str).str.strip() != ""]
+        .groupby(["Order"], dropna=False, as_index=False)
+        .agg({
+            "Labor HR.Act": "sum",
+            "FOH-Others.Act": "sum",
+            "Selected Hours": "sum",
+            "Labor Source files": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
+        })
+    )
+
+    if not order_labor.empty:
+        out = out.merge(order_labor, on="Order", how="left", suffixes=("", "_labor"))
+        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"]:
+            labor_col = f"{col}_labor"
+            if labor_col in out.columns:
+                if col == "Labor Source files":
+                    out[col] = out[labor_col].fillna("").astype(str)
+                else:
+                    out[col] = pd.to_numeric(out[labor_col], errors="coerce")
+                out = out.drop(columns=[labor_col])
+
+    for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+
+    fallback_mask = out["Selected Hours"].eq(0)
+    pm_labor = (
+        labor[(labor["Plant"].astype(str).str.strip() != "") & (labor["Material Number"].astype(str).str.strip() != "")]
+        .groupby(["Plant", "Material Number"], dropna=False, as_index=False)
+        .agg({
+            "Labor HR.Act": "sum",
+            "FOH-Others.Act": "sum",
+            "Selected Hours": "sum",
+            "Labor Source files": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
+        })
+    )
+
+    if fallback_mask.any() and not pm_labor.empty:
+        fallback = out.loc[fallback_mask, ["Plant", "Material Number"]].merge(
+            pm_labor,
+            on=["Plant", "Material Number"],
+            how="left",
+        )
+        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
+            out.loc[fallback_mask, col] = pd.to_numeric(fallback[col], errors="coerce").fillna(0).to_numpy()
+        out.loc[fallback_mask, "Labor Source files"] = fallback["Labor Source files"].fillna("").astype(str).to_numpy()
+
+    for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+    out["Labor Source files"] = out["Labor Source files"].fillna("").astype(str)
+    return out
+
+def process_files(paths: list[Path], year: Optional[int], labor_paths: Optional[list[Path]] = None, labor_mode: str = "both") -> tuple[Path, dict]:
     masters = build_masters()
     out = load_production_dataframe(paths)
+    labor = load_labor_dataframe(labor_paths or [], labor_mode)
+    out = attach_labor_hours(out, labor)
 
     if year:
         out = out[out["Year"] == int(year)].copy()
@@ -473,11 +630,22 @@ def process_files(paths: list[Path], year: Optional[int]) -> tuple[Path, dict]:
         "產品類型", "客戶代碼", "客戶名稱", "判斷來源", "Is_WIP"
     ]
     annual = (
-        out.groupby(group_cols, dropna=False, as_index=False)["Delivered quantity"]
-        .sum()
-        .rename(columns={"Delivered quantity": "年度生產量"})
+        out.groupby(group_cols, dropna=False, as_index=False)
+        .agg({
+            "Delivered quantity": "sum",
+            "Selected Hours": "sum",
+        })
+        .rename(columns={
+            "Delivered quantity": "年度生產量",
+            "Selected Hours": "年度工時",
+        })
         .sort_values(["Plant", "Material Number"])
     )
+
+    plant_qty_total = annual.groupby(["Year", "Plant"], dropna=False)["年度生產量"].transform("sum")
+    plant_hour_total = annual.groupby(["Year", "Plant"], dropna=False)["年度工時"].transform("sum")
+    annual["生產數量占比(%)"] = (annual["年度生產量"] / plant_qty_total.replace(0, pd.NA) * 100).fillna(0)
+    annual["生產工時占比(%)"] = (annual["年度工時"] / plant_hour_total.replace(0, pd.NA) * 100).fillna(0)
 
     type_summary = (
         out.groupby(["Year", "Plant", "產品類型", "Is_WIP"], dropna=False, as_index=False)["Delivered quantity"]
@@ -527,9 +695,11 @@ def process_files(paths: list[Path], year: Optional[int]) -> tuple[Path, dict]:
 
     summary = {
         "files": int(len(paths)),
+        "labor_files": int(len(labor_paths or [])),
         "rows": int(len(out)),
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
+        "total_hours": float(out["Selected Hours"].sum()) if "Selected Hours" in out.columns else 0.0,
         "wip_rows": int(len(wip)),
         "output_filename": output_path.name,
         "year": year or "ALL",
@@ -539,7 +709,7 @@ def process_files(paths: list[Path], year: Optional[int]) -> tuple[Path, dict]:
 
 def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     """Backward-compatible wrapper for single-file processing."""
-    return process_files([path], year)
+    return process_files([path], year, None, "both")
 
 
 def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
@@ -599,13 +769,18 @@ def debug_version():
         "app": "Carbon Management Platform",
         "version": "PROCESS_MANUAL_FORM_V6",
         "process_endpoint": "manual form compatible",
-        "supports": ["files multi-upload", "blank year", "step2 generate-bulk-file", "bom process-bom-expansion"],
+        "supports": ["files multi-upload", "file single-upload", "blank year"],
     }
 
 @app.post("/process")
-async def process(files: list[UploadFile] = File(...), year: Optional[str] = Form(None)):
+async def process(
+    files: list[UploadFile] = File(...),
+    labor_files: Optional[list[UploadFile]] = File(None),
+    labor_mode: str = Form("both"),
+    year: Optional[str] = Form(None),
+):
     if not files:
-        return JSONResponse({"ok": False, "message": "請至少上傳一個 Excel 工單檔案"}, status_code=400)
+        return JSONResponse({"ok": False, "message": "請至少上傳一個 Excel 生產數量工單檔案"}, status_code=400)
 
     saved_paths: list[Path] = []
     for file in files:
@@ -615,12 +790,22 @@ async def process(files: list[UploadFile] = File(...), year: Optional[str] = For
         saved.write_bytes(await file.read())
         saved_paths.append(saved)
 
+    saved_labor_paths: list[Path] = []
+    for labor_file in (labor_files or []):
+        if not labor_file.filename:
+            continue
+        if not labor_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{labor_file.filename} 不是 Excel 工時檔案"}, status_code=400)
+        saved = UPLOAD_DIR / f"labor_{uuid.uuid4().hex}_{labor_file.filename}"
+        saved.write_bytes(await labor_file.read())
+        saved_labor_paths.append(saved)
+
     try:
         year_value: Optional[int] = None
         if year is not None and str(year).strip() != "":
             year_value = int(str(year).strip())
 
-        output_path, summary = process_files(saved_paths, year_value)
+        output_path, summary = process_files(saved_paths, year_value, saved_labor_paths, labor_mode)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -663,123 +848,3 @@ def download_product_series_master():
     if not path.exists():
         ensure_master_files()
     return FileResponse(path, filename="product_series_master.csv", media_type="text/csv")
-
-
-# =========================================================
-# Step 2 · Batch Data Formatting
-# Step1 Output + Bulk Template -> Formatted Product Activity Bulk
-# =========================================================
-@app.post("/generate-bulk-file")
-async def generate_bulk_file(
-    step1_file: UploadFile = File(...),
-    template_file: UploadFile = File(...),
-):
-    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"},
-            status_code=400,
-        )
-
-    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"},
-            status_code=400,
-        )
-
-    token = uuid.uuid4().hex[:10]
-
-    step1_path = UPLOAD_DIR / f"step1_output_{token}_{step1_file.filename}"
-    template_path = UPLOAD_DIR / f"bulk_template_{token}_{template_file.filename}"
-    output_path = OUTPUT_DIR / f"formatted_product_activity_data_bulk_create_{token}.xlsx"
-
-    step1_path.write_bytes(await step1_file.read())
-    template_path.write_bytes(await template_file.read())
-
-    try:
-        summary = generate_product_activity_bulk_file(
-            step1_output_path=step1_path,
-            bulk_template_path=template_path,
-            output_path=output_path,
-        )
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse(
-            {"ok": False, "message": str(exc)},
-            status_code=400,
-        )
-
-    return {
-        "ok": True,
-        "message": "Bulk file generated successfully.",
-        "summary": summary,
-        "download_url": f"/download/{output_path.name}",
-    }
-
-
-# =========================================================
-# Module 2 · BOM Expansion
-# Standard BOM + Raw Material Bulk Template -> Raw Material Bulk
-# =========================================================
-@app.post("/process-bom-expansion")
-async def process_bom_expansion(
-    bom_file: UploadFile = File(...),
-    template_file: UploadFile = File(...),
-    parent_col: str = Form(""),
-    component_col: str = Form(""),
-    qty_col: str = Form(""),
-    unit_col: str = Form(""),
-    description_col: str = Form(""),
-    material_group_col: str = Form(""),
-    valid_from_col: str = Form(""),
-):
-    if not bom_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Standard BOM 請上傳 Excel 檔案"},
-            status_code=400,
-        )
-
-    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Raw Material Bulk Template 請上傳 Excel 檔案"},
-            status_code=400,
-        )
-
-    token = uuid.uuid4().hex[:10]
-
-    bom_path = UPLOAD_DIR / f"standard_bom_{token}_{bom_file.filename}"
-    template_path = UPLOAD_DIR / f"raw_material_template_{token}_{template_file.filename}"
-    output_path = OUTPUT_DIR / f"raw_material_activity_data_bulk_{token}.xlsx"
-
-    bom_path.write_bytes(await bom_file.read())
-    template_path.write_bytes(await template_file.read())
-
-    mapping = {
-        "parent_col": parent_col,
-        "component_col": component_col,
-        "qty_col": qty_col,
-        "unit_col": unit_col,
-        "description_col": description_col,
-        "material_group_col": material_group_col,
-        "valid_from_col": valid_from_col,
-    }
-
-    try:
-        summary = generate_raw_material_bulk_file(
-            bom_path=bom_path,
-            raw_material_template_path=template_path,
-            output_path=output_path,
-            mapping=mapping,
-        )
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse(
-            {"ok": False, "message": str(exc)},
-            status_code=400,
-        )
-
-    return {
-        "ok": True,
-        "message": "BOM Expansion completed successfully.",
-        "summary": summary,
-        "download_url": f"/download/{output_path.name}",
-    }

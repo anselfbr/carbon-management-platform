@@ -15,7 +15,7 @@
 
   const zh = {
     "Carbon Management Platform | Product Data Preparation": "碳管理平台 | 產品資料準備",
-    "Production Quantity Work Orders": "生產數量工單",
+
     "Carbon Management Platform": "碳管理平台",
     "Manufacturing Data Layer": "製造資料層",
     "Modules": "模組",
@@ -45,11 +45,12 @@
     "Step 1 · Work Order Processing": "步驟 1 · 工單處理",
     "Upload one or multiple SAP production work order files.": "上傳一份或多份 SAP 生產工單檔案。",
     "Step 1": "步驟 1",
-    "Upload SAP Production Work Orders": "上傳 SAP 生產數量工單",
+    "Upload SAP Production Work Orders": "上傳 SAP 生產工單",
     "Reporting Year": "報告年度",
     "Run Consolidation & Classification": "執行合併與分類",
     "Ready for processing": "準備處理",
     "Upload SAP work orders and start the classification workflow.": "上傳 SAP 工單並開始分類流程。",
+    "Upload production quantity work orders and optional labor work orders to start the classification workflow.": "上傳生產數量工單與選填生產工時工單後開始分類流程。",
     "Idle": "待命",
     "Download Step 1 Output Excel": "下載 Step 1 輸出 Excel",
 
@@ -75,6 +76,7 @@
     "Summary": "摘要",
     "Rules": "規則",
     "Ready. Upload SAP production work orders and start processing.": "準備完成。請上傳 SAP 生產工單並開始處理。",
+    "Ready. Upload production quantity work orders and optional labor work orders to start processing.": "準備完成。請上傳生產數量工單與選填生產工時工單後開始處理。",
     "Version 1.0 Decision Flow": "版本 1.0 判斷流程",
     "Product Series Engine": "產品系列引擎",
     "punctuation-based segmentation, then full-text Regex Prefix Search.": "以標點符號分段，再進行全文 Regex 前綴搜尋。",
@@ -151,13 +153,17 @@
     "Completed.": "已完成。",
     "Year": "年度",
     "Uploaded files": "上傳檔案數",
+    "Labor files": "工時檔案數",
+    "Total hours": "總工時",
     "Uploaded Files": "上傳檔案數",
+    "Labor Files": "工時檔案數",
     "Work order rows": "工單筆數",
     "Work Order Rows": "工單筆數",
     "Summary rows": "彙總筆數",
     "Summary Rows": "彙總筆數",
     "Total output": "總產量",
     "Total Output": "總產量",
+    "Total Hours": "總工時",
     "WIP rows": "WIP 筆數",
     "WIP Rows": "WIP 筆數",
     "Processing completed": "處理完成",
@@ -281,24 +287,6 @@
     }
   }
 
-  function translateDashboardCardTitles(targetLang) {
-    document.querySelectorAll(".dashboard-module-card strong").forEach(function (el) {
-      const text = el.textContent.replace(/\s+/g, " ").trim();
-
-      if (targetLang === "zh") {
-        if (text === "Product Data Preparation") el.textContent = "產品資料準備";
-        if (text === "BOM Expansion") el.textContent = "BOM 展開";
-        if (text === "Carbon Emission Factor Selection") el.textContent = "碳排放係數選擇";
-        if (text === "PCF Calculation") el.textContent = "產品碳足跡計算";
-      } else {
-        if (text === "產品資料準備") el.textContent = "Product Data Preparation";
-        if (text === "BOM 展開") el.textContent = "BOM Expansion";
-        if (text === "碳排放係數選擇") el.textContent = "Carbon Emission Factor Selection";
-        if (text === "產品碳足跡計算") el.textContent = "PCF Calculation";
-      }
-    });
-  }
-
   function applyLanguage(targetLang) {
     if (isApplying) return;
     isApplying = true;
@@ -310,7 +298,6 @@
 
     translateTextNodes(document.body, currentLang);
     translateAttributes(currentLang);
-    translateDashboardCardTitles(currentLang);
 
     isApplying = false;
   }
