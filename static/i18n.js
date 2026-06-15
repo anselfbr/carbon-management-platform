@@ -15,6 +15,13 @@
 
   const zh = {
     "Carbon Management Platform | Product Data Preparation": "碳管理平台 | 產品資料準備",
+    "Reading labor work orders": "讀取生產工時工單",
+    "Labor HR.Act + FOH-Others.Act": "Labor HR.Act + FOH-Others.Act（兩者）",
+    "FOH-Others.Act Only": "僅 FOH-Others.Act（設備工時）",
+    "Labor HR.Act Only": "僅 Labor HR.Act（人員工時）",
+    "Labor Allocation Source": "工時擷取選項",
+    "Production Labor Work Orders": "生產工時工單",
+    "Production Quantity Work Orders": "生產數量工單",
 
     "Carbon Management Platform": "碳管理平台",
     "Manufacturing Data Layer": "製造資料層",
@@ -45,7 +52,7 @@
     "Step 1 · Work Order Processing": "步驟 1 · 工單處理",
     "Upload one or multiple SAP production work order files.": "上傳一份或多份 SAP 生產工單檔案。",
     "Step 1": "步驟 1",
-    "Upload SAP Production Work Orders": "上傳 SAP 生產工單",
+    "Upload SAP Production Work Orders": "生產數量工單",
     "Reporting Year": "報告年度",
     "Run Consolidation & Classification": "執行合併與分類",
     "Ready for processing": "準備處理",
