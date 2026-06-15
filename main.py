@@ -24,6 +24,8 @@ app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+from bulk_formatter import generate_product_activity_bulk_file
+
 # =========================================================
 # v6 分類邏輯：
 # 1. rule_master.csv 依 Priority 由小到大判斷
@@ -871,6 +873,50 @@ async def process(request: Request):
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
     return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
+
+
+
+# =========================================================
+# Module 1 · Step 2 Batch Data Formatting
+# Step 1 Output + Product Activity Bulk Template -> Formatted Bulk File
+# =========================================================
+@app.post("/generate-bulk-file")
+async def generate_bulk_file(
+    step1_file: UploadFile = File(...),
+    template_file: UploadFile = File(...),
+):
+    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
+
+    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
+
+    token = uuid.uuid4().hex[:10]
+
+    step1_path = UPLOAD_DIR / f"step1_output_{token}_{step1_file.filename}"
+    template_path = UPLOAD_DIR / f"bulk_template_{token}_{template_file.filename}"
+    output_path = OUTPUT_DIR / f"formatted_product_activity_data_bulk_{token}.xlsx"
+
+    step1_path.write_bytes(await step1_file.read())
+    template_path.write_bytes(await template_file.read())
+
+    try:
+        summary = generate_product_activity_bulk_file(
+            step1_output_path=step1_path,
+            bulk_template_path=template_path,
+            output_path=output_path,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+    return {
+        "ok": True,
+        "message": "Bulk file generated successfully.",
+        "summary": summary,
+        "download_url": f"/download/{output_path.name}",
+    }
+
 
 
 @app.post("/upload-rule-master")
