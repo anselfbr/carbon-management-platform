@@ -16,10 +16,11 @@
   const zh = {
     "Carbon Management Platform | Product Data Preparation": "碳管理平台 | 產品資料準備",
     "Reading labor work orders": "讀取生產工時工單",
-    "Labor HR.Act + FOH-Others.Act": "Labor HR.Act + FOH-Others.Act（人員+設備工時）",
-    "FOH-Others.Act Only": "僅 FOH-Others.Act（設備工時）",
-    "Labor HR.Act Only": "僅 Labor HR.Act（人員工時）",
-    "Labor Allocation Source": "工時擷取選項",
+    "Labor HR.Act + FOH-Others.Act": "人員+設備工時",
+    "FOH-Others.Act Only": "設備工時",
+    "Labor HR.Act Only": "人員工時",
+    "Labor Allocation Source": "工時來源",
+    "Working Hour Source": "工時來源",
     "Production Labor Work Orders": "生產工時工單",
     "Production Quantity Work Orders": "生產數量工單",
 
@@ -261,12 +262,51 @@
     return output;
   }
 
+
+  function normalizeWorkingHourTexts() {
+    const isZh = currentLang === "zh";
+
+    document.querySelectorAll("label").forEach(function (label) {
+      const t = label.textContent.replace(/\s+/g, " ").trim();
+      if (
+        t === "Labor Allocation Source" ||
+        t === "Working Hour Source" ||
+        t === "工時擷取選項" ||
+        t === "工時來源"
+      ) {
+        label.textContent = isZh ? "工時來源" : "Working Hour Source";
+      }
+    });
+
+    const select = document.getElementById("laborMode");
+    if (!select) return;
+
+    const optionText = isZh
+      ? {
+          both: "人員+設備工時",
+          labor_hr: "人員工時",
+          foh: "設備工時"
+        }
+      : {
+          both: "Labor HR.Act + FOH-Others.Act",
+          labor_hr: "Labor HR.Act Only",
+          foh: "FOH-Others.Act Only"
+        };
+
+    Array.from(select.options).forEach(function (option) {
+      if (optionText[option.value]) {
+        option.textContent = optionText[option.value];
+      }
+    });
+  }
+
   function translateTextNodes(root, targetLang) {
     const walker = document.createTreeWalker(root || document.body, NodeFilter.SHOW_TEXT, {
       acceptNode: function (node) {
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
         if (parent.closest("script, style")) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("#laborMode")) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
@@ -305,6 +345,7 @@
 
     translateTextNodes(document.body, currentLang);
     translateAttributes(currentLang);
+    normalizeWorkingHourTexts();
 
     isApplying = false;
   }
@@ -334,6 +375,7 @@
         }
       });
       translateAttributes(currentLang);
+      normalizeWorkingHourTexts();
     }, 0);
   });
 
