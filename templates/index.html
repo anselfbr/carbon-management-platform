@@ -828,30 +828,7 @@ form.onsubmit = async (e) => {
 
   log.textContent = 'Processing...\\nReading Excel files → Merging work orders → Filtering year → Annual output summary → Product Series Engine → Rule Master → Product Series Master → WIP decision → Excel export';
 
-  const fd = new FormData();
-
-  const quantityInput = document.getElementById('files');
-  for (const file of quantityInput.files) {
-    if (file && file.name) {
-      fd.append('files', file);
-    }
-  }
-
-  const laborInput = document.getElementById('laborFiles');
-  if (laborInput) {
-    for (const file of laborInput.files) {
-      if (file && file.name) {
-        fd.append('labor_files', file);
-      }
-    }
-  }
-
-  const laborModeInput = document.getElementById('laborMode');
-  fd.append('labor_mode', laborModeInput ? laborModeInput.value : 'both');
-
-  const yearInput = document.getElementById('year');
-  fd.append('year', yearInput ? yearInput.value : '');
-
+  const fd = new FormData(form);
   try {
     const res = await fetch('/process', {method: 'POST', body: fd});
     const data = await res.json();
