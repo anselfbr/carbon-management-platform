@@ -22,7 +22,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: PRODUCTION_SITE_SPLIT_BULK_V1_STEP2_ENDPOINT_FIX_V2 =====")
+print("===== CMP MAIN VERSION: STEP2_PRODUCTION_SITE_COL_STRICT_FIX =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 

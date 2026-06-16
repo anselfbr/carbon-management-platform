@@ -115,6 +115,13 @@ def generate_product_activity_bulk_file(
 
     df = pd.read_excel(step1_output_path, sheet_name=SOURCE_SHEET_NAME, dtype=object)
 
+    # Production Site is optional in old Step1 outputs.
+    # If present, Step2 writes it into Activity Data and can split files by site.
+    production_site_col = _find_optional_column(
+        df,
+        ["Production Site", "production site", "生產廠區", "廠區", "廠別"],
+    )
+
     year_col = _find_column(df, ["Year"])
     material_col = _find_column(df, ["Material Number"])
     material_desc_col = _find_optional_column(df, ["Material description", "Material Description", "產品描述", "品名"])
