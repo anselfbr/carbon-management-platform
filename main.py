@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site
+from bom_formatter import generate_raw_material_bulk_file
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -22,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: STEP2_PRODUCTION_SITE_COL_STRICT_FIX =====")
+print("===== CMP MAIN VERSION: STEP2_PRODUCTION_SITE_COL_STRICT_FIX_BOM_RESTORE =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -1047,3 +1048,74 @@ def download_product_series_master():
     if not path.exists():
         ensure_master_files()
     return FileResponse(path, filename="product_series_master.csv", media_type="text/csv")
+
+
+
+# =========================================================
+# Module 2 · BOM Expansion
+# Standard BOM + Raw Material Bulk Template -> Raw Material Bulk
+# =========================================================
+@app.post("/process-bom-expansion")
+async def process_bom_expansion(
+    bom_file: UploadFile = File(...),
+    template_file: UploadFile = File(...),
+    parent_col: str = Form(""),
+    component_col: str = Form(""),
+    qty_col: str = Form(""),
+    unit_col: str = Form(""),
+    description_col: str = Form(""),
+    material_group_col: str = Form(""),
+    valid_from_col: str = Form(""),
+):
+    if not bom_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse(
+            {"ok": False, "message": "Standard BOM 請上傳 Excel 檔案"},
+            status_code=400,
+        )
+
+    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse(
+            {"ok": False, "message": "Raw Material Bulk Template 請上傳 Excel 檔案"},
+            status_code=400,
+        )
+
+    token = uuid.uuid4().hex[:10]
+
+    bom_path = UPLOAD_DIR / f"standard_bom_{token}_{Path(bom_file.filename).name}"
+    template_path = UPLOAD_DIR / f"raw_material_template_{token}_{Path(template_file.filename).name}"
+    output_path = OUTPUT_DIR / f"raw_material_activity_data_bulk_{token}.xlsx"
+
+    bom_path.write_bytes(await bom_file.read())
+    template_path.write_bytes(await template_file.read())
+
+    mapping = {
+        "parent_col": parent_col,
+        "component_col": component_col,
+        "qty_col": qty_col,
+        "unit_col": unit_col,
+        "description_col": description_col,
+        "material_group_col": material_group_col,
+        "valid_from_col": valid_from_col,
+    }
+
+    try:
+        summary = generate_raw_material_bulk_file(
+            bom_path=bom_path,
+            raw_material_template_path=template_path,
+            output_path=output_path,
+            mapping=mapping,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse(
+            {"ok": False, "message": str(exc)},
+            status_code=400,
+        )
+
+    return {
+        "ok": True,
+        "message": "BOM Expansion completed successfully.",
+        "summary": summary,
+        "download_url": f"/download/{output_path.name}",
+    }
+
