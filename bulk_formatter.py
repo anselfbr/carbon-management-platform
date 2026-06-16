@@ -172,6 +172,10 @@ def generate_product_activity_bulk_file(
         product_name = str(product_name).strip()
         product_description = _safe_text(row.get(material_desc_col)) if material_desc_col else ""
 
+        production_site = _safe_text(row.get(production_site_col)) if production_site_col else ""
+        if not production_site:
+            production_site = _production_site(product_type)
+
         # 分頁 1：Input Sheet Activity Data
         activity_ws.cell(activity_row, 1).value = product_name
         activity_ws.cell(activity_row, 2).value = date(year, 1, 1)
