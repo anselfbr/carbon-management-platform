@@ -87,6 +87,49 @@ LABOR_ALIASES = {
 
 VALID_LABOR_MODES = {"labor_hr", "foh", "both"}
 
+def normalize_labor_mode(value: object) -> str:
+    """Normalize working-hour source selection from form value or translated text.
+
+    Canonical modes:
+    - both: Labor HR.Act + FOH-Others.Act
+    - labor_hr: Labor HR.Act only
+    - foh: FOH-Others.Act only
+    """
+    text = str(value or "both").strip().lower()
+    text = text.replace("（", "(").replace("）", ")")
+    text = re.sub(r"\s+", "", text)
+
+    if text in {"labor_hr", "laborhr", "labor-hr", "labor", "hr"}:
+        return "labor_hr"
+    if text in {"foh", "foh_others", "fohothers", "foh-others"}:
+        return "foh"
+    if text in {"both", "all", "labor+foh", "laborhr.act+foh-others.act"}:
+        return "both"
+
+    # visible text fallback, for safety
+    if "人員+設備" in text or "人員設備" in text:
+        return "both"
+    if "人員工時" in text and "設備工時" in text:
+        return "both"
+    if "人員工時" in text:
+        return "labor_hr"
+    if "設備工時" in text:
+        return "foh"
+
+    if "only" in text:
+        if "foh" in text:
+            return "foh"
+        if "labor" in text:
+            return "labor_hr"
+
+    if "foh" in text and "labor" not in text:
+        return "foh"
+    if "labor" in text and "foh" not in text:
+        return "labor_hr"
+
+    return "both"
+
+
 RULE_COLUMNS = [
     "Priority", "Rule Type", "Key", "Product Type", "Customer",
     "Customer Code Logic", "Is_WIP", "Enabled",
@@ -478,9 +521,7 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
     if not paths:
         return pd.DataFrame(columns=columns)
 
-    mode = str(labor_mode or "both").strip().lower()
-    if mode not in VALID_LABOR_MODES:
-        mode = "both"
+    mode = normalize_labor_mode(labor_mode)
 
     frames: list[pd.DataFrame] = []
     errors: list[str] = []
@@ -509,15 +550,25 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
         else:
             part["Material Number"] = ""
 
-        part["Labor HR.Act"] = pd.to_numeric(df[cols["labor_hr"]], errors="coerce").fillna(0)
-        part["FOH-Others.Act"] = pd.to_numeric(df[cols["foh_others"]], errors="coerce").fillna(0)
+        raw_labor_hr = pd.to_numeric(df[cols["labor_hr"]], errors="coerce").fillna(0)
+        raw_foh = pd.to_numeric(df[cols["foh_others"]], errors="coerce").fillna(0)
 
+        # IMPORTANT:
+        # The selected working-hour source must control BOTH calculation and export.
+        # If user selects only Labor HR.Act, FOH-Others.Act is forced to 0.
+        # If user selects only FOH-Others.Act, Labor HR.Act is forced to 0.
         if mode == "labor_hr":
-            part["Selected Hours"] = part["Labor HR.Act"]
+            part["Labor HR.Act"] = raw_labor_hr
+            part["FOH-Others.Act"] = 0
+            part["Selected Hours"] = raw_labor_hr
         elif mode == "foh":
-            part["Selected Hours"] = part["FOH-Others.Act"]
+            part["Labor HR.Act"] = 0
+            part["FOH-Others.Act"] = raw_foh
+            part["Selected Hours"] = raw_foh
         else:
-            part["Selected Hours"] = part["Labor HR.Act"] + part["FOH-Others.Act"]
+            part["Labor HR.Act"] = raw_labor_hr
+            part["FOH-Others.Act"] = raw_foh
+            part["Selected Hours"] = raw_labor_hr + raw_foh
 
         frames.append(part)
 
@@ -628,9 +679,26 @@ def process_files(
     labor_mode: str = "both",
 ) -> tuple[Path, dict]:
     masters = build_masters()
+    labor_mode = normalize_labor_mode(labor_mode)
     out = load_production_dataframe(paths)
     labor = load_labor_dataframe(labor_paths or [], labor_mode)
     out = attach_labor_hours(out, labor)
+
+    # Final safety guard: Selected Hours must always follow the selected working-hour source.
+    # This prevents any downstream aggregation from accidentally using Labor + FOH when user selected only one source.
+    for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+    if labor_mode == "labor_hr":
+        out["FOH-Others.Act"] = 0
+        out["Selected Hours"] = out["Labor HR.Act"]
+    elif labor_mode == "foh":
+        out["Labor HR.Act"] = 0
+        out["Selected Hours"] = out["FOH-Others.Act"]
+    else:
+        out["Selected Hours"] = out["Labor HR.Act"] + out["FOH-Others.Act"]
+
+    out["Working Hour Source"] = labor_mode
 
     if year:
         out = out[out["Year"] == int(year)].copy()
@@ -742,6 +810,7 @@ def process_files(
     summary = {
         "files": int(len(paths)),
         "labor_files": int(len(labor_paths or [])),
+        "labor_mode": labor_mode,
         "rows": int(len(out)),
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
@@ -839,7 +908,7 @@ async def process(request: Request):
             status_code=400,
         )
 
-    labor_mode = str(form.get("labor_mode") or "both").strip()
+    labor_mode = normalize_labor_mode(form.get("labor_mode") or "both")
     year = form.get("year")
 
     saved_paths: list[Path] = []
