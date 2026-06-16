@@ -19,7 +19,6 @@
               stroke-linejoin="round"/>
     </svg>
 </button>
-        <button id="langToggle" class="lang-toggle" type="button" aria-label="Switch language">中</button>
       </div>
 
       <div class="logo-block" id="homeLogo" role="button" tabindex="0">
@@ -101,7 +100,7 @@
           <button class="dashboard-module-card" type="button" data-dashboard-target="prep">
             <span class="module-number-box module-blue"><em>Module</em><b>01</b></span>
             <span class="module-card-copy">
-              <strong>Product Data Preparation</strong>
+              <strong>Product Data<br>Preparation</strong>
               <i></i>
               <small><span class="mini-icon">▣</span>Work order & batch preparation</small>
             </span>
@@ -109,7 +108,7 @@
           <button class="dashboard-module-card" type="button" data-dashboard-target="bom">
             <span class="module-number-box module-purple"><em>Module</em><b>02</b></span>
             <span class="module-card-copy">
-              <strong>BOM Expansion</strong>
+              <strong>BOM<br>Expansion</strong>
               <i></i>
               <small><span class="mini-icon">▱</span>Multi-level BOM explosion</small>
             </span>
@@ -117,7 +116,7 @@
           <button class="dashboard-module-card" type="button" data-dashboard-target="factor">
             <span class="module-number-box module-cyan"><em>Module</em><b>03</b></span>
             <span class="module-card-copy">
-              <strong>Carbon Emission Factor Selection</strong>
+              <strong>Carbon Emission<br>Factor Selection</strong>
               <i></i>
               <small><span class="mini-icon">◇</span>Factor mapping and selection</small>
             </span>
@@ -125,7 +124,7 @@
           <button class="dashboard-module-card" type="button" data-dashboard-target="pcf">
             <span class="module-number-box module-green"><em>Module</em><b>04</b></span>
             <span class="module-card-copy">
-              <strong>PCF Calculation</strong>
+              <strong>PCF<br>Calculation</strong>
               <i></i>
               <small><span class="mini-icon">▥</span>Product carbon footprint</small>
             </span>
@@ -145,18 +144,8 @@
             </div>
 
             <form id="form" class="form-panel">
-              <label>Production Quantity Work Orders</label>
+              <label>Upload SAP Production Work Orders</label>
               <input id="files" name="files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
-
-              <label>Upload SAP Working Hour Orders</label>
-              <input id="laborFiles" name="labor_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
-
-              <label>Labor Allocation Source</label>
-              <select id="laborMode" name="labor_mode">
-                <option value="both" selected>Labor HR.Act + FOH-Others.Act</option>
-                <option value="labor_hr">Labor HR.Act Only</option>
-                <option value="foh">FOH-Others.Act Only</option>
-              </select>
 
               <label>Reporting Year</label>
               <input id="year" name="year" type="number" placeholder="e.g. 2024；blank = all years" />
@@ -172,7 +161,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="statusTitle">Ready for processing</b>
-                  <p id="statusText">Upload production quantity work orders and optional labor work orders to start the classification workflow.</p>
+                  <p id="statusText">Upload SAP work orders and start the classification workflow.</p>
                 </div>
                 <span id="statusTime" class="status-time">Idle</span>
               </div>
@@ -252,7 +241,7 @@
               <button class="tab" data-tab="rule">Rules</button>
             </nav>
 
-            <pre id="log" class="panel active">Ready. Upload production quantity work orders and optional labor work orders to start processing.</pre>
+            <pre id="log" class="panel active">Ready. Upload SAP production work orders and start processing.</pre>
             <div id="summary" class="panel"></div>
 
             <div id="rule" class="panel">
@@ -833,50 +822,25 @@ form.onsubmit = async (e) => {
   download.classList.add('disabled');
   download.href = '#';
 
-  const quantityInput = document.getElementById('files');
-  const laborInput = document.getElementById('laborFiles');
-  const laborModeInput = document.getElementById('laborMode');
-  const yearInput = document.getElementById('year');
-
-  const quantityFileCount = quantityInput ? quantityInput.files.length : 0;
-  const laborFileCount = laborInput ? laborInput.files.length : 0;
-  const fileCount = Math.max(1, quantityFileCount + laborFileCount);
+  const fileCount = document.getElementById('files').files.length || 1;
   startEstimatedProgress(fileCount);
 
-  log.textContent = 'Processing...\nReading Excel files → Merging work orders → Reading labor work orders → Filtering year → Annual output summary → Product Series Engine → Rule Master → Product Series Master → WIP decision → Excel export';
+  log.textContent = 'Processing...\\nReading Excel files → Merging work orders → Filtering year → Annual output summary → Product Series Engine → Rule Master → Product Series Master → WIP decision → Excel export';
 
-  const fd = new FormData();
-
-  if (quantityInput) {
-    for (const file of quantityInput.files) {
-      if (file && file.name) fd.append('files', file);
-    }
-  }
-
-  if (laborInput) {
-    for (const file of laborInput.files) {
-      if (file && file.name) fd.append('labor_files', file);
-    }
-  }
-
-  fd.append('labor_mode', laborModeInput ? laborModeInput.value : 'both');
-  fd.append('year', yearInput ? yearInput.value : '');
-
+  const fd = new FormData(form);
   try {
     const res = await fetch('/process', {method: 'POST', body: fd});
     const data = await res.json();
     if (!data.ok) throw new Error(data.message || 'Processing failed');
 
     const s = data.summary;
-    log.textContent = `Completed.\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}`;
+    log.textContent = `Completed.\\nYear: ${s.year}\\nUploaded files: ${s.files}\\nWork order rows: ${s.rows}\\nSummary rows: ${s.annual_rows}\\nTotal output: ${s.total_qty}\\nWIP rows: ${s.wip_rows}`;
     summary.innerHTML = `
       <div class="metric"><b>Year</b><span>${s.year}</span></div>
       <div class="metric"><b>Uploaded Files</b><span>${s.files}</span></div>
-      <div class="metric"><b>Labor Files</b><span>${s.labor_files || 0}</span></div>
       <div class="metric"><b>Work Order Rows</b><span>${s.rows}</span></div>
       <div class="metric"><b>Summary Rows</b><span>${s.annual_rows}</span></div>
       <div class="metric"><b>Total Output</b><span>${s.total_qty.toLocaleString()}</span></div>
-      <div class="metric"><b>Total Hours</b><span>${(s.total_hours || 0).toLocaleString()}</span></div>
       <div class="metric"><b>WIP Rows</b><span>${s.wip_rows}</span></div>`;
 
     download.href = data.download_url;
@@ -941,10 +905,13 @@ function startBulkEstimatedProgress() {
 
 function stopBulkProgressSuccess(summary) {
   clearInterval(progressTimer);
+  const fileCountText = summary && summary.production_site_count
+    ? ` Files: ${summary.production_site_count};`
+    : '';
   setBulkProcessingState(
     'success',
     'Batch formatting completed',
-    `Activity Data: ${summary.activity_rows} rows; Products: ${summary.product_rows} rows; Excluded WIP: ${summary.excluded_wip_rows} rows.`,
+    `Activity Data: ${summary.activity_rows} rows; Products: ${summary.product_rows} rows; Excluded WIP: ${summary.excluded_wip_rows} rows;${fileCountText}`,
     'Completed',
     100
   );
@@ -966,6 +933,7 @@ bulkForm.addEventListener('submit', async (e) => {
 
   bulkDownload.classList.add('disabled');
   bulkDownload.href = '#';
+  bulkDownload.textContent = 'Download Formatted Bulk File';
 
   startBulkEstimatedProgress();
 
@@ -977,8 +945,19 @@ bulkForm.addEventListener('submit', async (e) => {
 
     if (!data.ok) throw new Error(data.message || 'Bulk file generation failed');
 
-    bulkDownload.href = data.download_url;
-    bulkDownload.classList.remove('disabled');
+    const links = data.download_urls || [];
+    if (links.length > 1) {
+      bulkDownload.removeAttribute('href');
+      bulkDownload.classList.remove('disabled');
+      bulkDownload.innerHTML = links.map(item =>
+        `<a class="download" href="${item.download_url}" style="display:block;margin:6px 0;">Download ${item.production_site} Bulk File</a>`
+      ).join('');
+    } else {
+      const url = data.download_url || (links[0] && links[0].download_url) || '#';
+      bulkDownload.href = url;
+      bulkDownload.textContent = 'Download Formatted Bulk File';
+      bulkDownload.classList.remove('disabled');
+    }
     stopBulkProgressSuccess(data.summary);
   } catch (err) {
     stopBulkProgressError(err.message);
@@ -1004,6 +983,5 @@ ruleForm.onsubmit = async (e) => {
   }
 };
 </script>
-<script src="/static/i18n.js"></script>
 </body>
 </html>
