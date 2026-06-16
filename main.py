@@ -11,6 +11,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from bulk_formatter import generate_product_activity_bulk_file
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -21,7 +22,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: PROCESS_MANUAL_FORM_V6_WORKING_HOUR_FIX_V3 =====")
+print("===== CMP MAIN VERSION: PROCESS_MANUAL_FORM_V6_WORKING_HOUR_FIX_V3_STEP2 =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -957,6 +958,57 @@ async def process(request: Request):
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
     return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
+
+
+# =========================================================
+# Step 2 · Batch Data Formatting
+# Step1 Output + Bulk Template -> Formatted Product Activity Bulk
+# =========================================================
+@app.post("/generate-bulk-file")
+async def generate_bulk_file(
+    step1_file: UploadFile = File(...),
+    template_file: UploadFile = File(...),
+):
+    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse(
+            {"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"},
+            status_code=400,
+        )
+
+    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse(
+            {"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"},
+            status_code=400,
+        )
+
+    token = uuid.uuid4().hex[:10]
+
+    step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(step1_file.filename).name}"
+    template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
+    output_path = OUTPUT_DIR / f"formatted_product_activity_data_bulk_create_{token}.xlsx"
+
+    step1_path.write_bytes(await step1_file.read())
+    template_path.write_bytes(await template_file.read())
+
+    try:
+        summary = generate_product_activity_bulk_file(
+            step1_output_path=step1_path,
+            bulk_template_path=template_path,
+            output_path=output_path,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse(
+            {"ok": False, "message": str(exc)},
+            status_code=400,
+        )
+
+    return {
+        "ok": True,
+        "message": "Bulk file generated successfully.",
+        "summary": summary,
+        "download_url": f"/download/{output_path.name}",
+    }
 
 
 @app.post("/upload-rule-master")
