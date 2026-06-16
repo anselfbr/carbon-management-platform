@@ -21,7 +21,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: PROCESS_MANUAL_FORM_V6 =====")
+print("===== CMP MAIN VERSION: PROCESS_MANUAL_FORM_V6_WORKING_HOUR_FIX_V3 =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -86,6 +86,59 @@ LABOR_ALIASES = {
 }
 
 VALID_LABOR_MODES = {"labor_hr", "foh", "both"}
+
+def normalize_order_key(value: object) -> str:
+    """Normalize SAP order number for matching quantity orders with working-hour orders."""
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    text = re.sub(r"\.0$", "", text)
+    text = re.sub(r"\s+", "", text)
+    return text
+
+
+def normalize_labor_mode(value: object) -> str:
+    """Normalize working-hour source selection.
+
+    Canonical values:
+    - both: Labor HR.Act + FOH-Others.Act
+    - labor_hr: Labor HR.Act only
+    - foh: FOH-Others.Act only
+    """
+    text = str(value or "both").strip().lower()
+    text = text.replace("（", "(").replace("）", ")")
+    text = re.sub(r"\s+", "", text)
+
+    if text in {"labor_hr", "laborhr", "labor-hr", "labor", "hr"}:
+        return "labor_hr"
+    if text in {"foh", "foh_others", "fohothers", "foh-others"}:
+        return "foh"
+    if text in {"both", "all", "labor+foh", "laborhr.act+foh-others.act"}:
+        return "both"
+
+    if "人員+設備" in text or "人員設備" in text:
+        return "both"
+    if "人員工時" in text and "設備工時" in text:
+        return "both"
+    if "人員工時" in text:
+        return "labor_hr"
+    if "設備工時" in text:
+        return "foh"
+
+    if "only" in text:
+        if "foh" in text:
+            return "foh"
+        if "labor" in text:
+            return "labor_hr"
+
+    if "foh" in text and "labor" not in text:
+        return "foh"
+    if "labor" in text and "foh" not in text:
+        return "labor_hr"
+
+    return "both"
+
+
 
 RULE_COLUMNS = [
     "Priority", "Rule Type", "Key", "Product Type", "Customer",
