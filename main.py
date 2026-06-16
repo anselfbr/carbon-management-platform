@@ -87,49 +87,6 @@ LABOR_ALIASES = {
 
 VALID_LABOR_MODES = {"labor_hr", "foh", "both"}
 
-def normalize_labor_mode(value: object) -> str:
-    """Normalize working-hour source selection.
-
-    Canonical values:
-    - both: Labor HR.Act + FOH-Others.Act
-    - labor_hr: Labor HR.Act only
-    - foh: FOH-Others.Act only
-    """
-    text = str(value or "both").strip().lower()
-    text = text.replace("（", "(").replace("）", ")")
-    text = re.sub(r"\s+", "", text)
-
-    if text in {"labor_hr", "laborhr", "labor-hr", "labor", "hr"}:
-        return "labor_hr"
-    if text in {"foh", "foh_others", "fohothers", "foh-others"}:
-        return "foh"
-    if text in {"both", "all", "labor+foh", "laborhr.act+foh-others.act"}:
-        return "both"
-
-    # fallback for visible translated texts
-    if "人員+設備" in text or "人員設備" in text:
-        return "both"
-    if "人員工時" in text and "設備工時" in text:
-        return "both"
-    if "人員工時" in text:
-        return "labor_hr"
-    if "設備工時" in text:
-        return "foh"
-
-    if "only" in text:
-        if "foh" in text:
-            return "foh"
-        if "labor" in text:
-            return "labor_hr"
-
-    if "foh" in text and "labor" not in text:
-        return "foh"
-    if "labor" in text and "foh" not in text:
-        return "labor_hr"
-
-    return "both"
-
-
 RULE_COLUMNS = [
     "Priority", "Rule Type", "Key", "Product Type", "Customer",
     "Customer Code Logic", "Is_WIP", "Enabled",
@@ -516,12 +473,14 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
     """Load one or multiple production labor work order files."""
     columns = [
         "Order Merge Key", "Order", "Plant", "Material Number",
-        "Labor HR.Act", "FOH-Others.Act", "Total working hours", "Labor Source files"
+        "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
     ]
     if not paths:
         return pd.DataFrame(columns=columns)
 
-    mode = normalize_labor_mode(labor_mode)
+    mode = str(labor_mode or "both").strip().lower()
+    if mode not in VALID_LABOR_MODES:
+        mode = "both"
 
     frames: list[pd.DataFrame] = []
     errors: list[str] = []
@@ -550,22 +509,15 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
         else:
             part["Material Number"] = ""
 
-        raw_labor_hr = pd.to_numeric(df[cols["labor_hr"]], errors="coerce").fillna(0)
-        raw_foh = pd.to_numeric(df[cols["foh_others"]], errors="coerce").fillna(0)
+        part["Labor HR.Act"] = pd.to_numeric(df[cols["labor_hr"]], errors="coerce").fillna(0)
+        part["FOH-Others.Act"] = pd.to_numeric(df[cols["foh_others"]], errors="coerce").fillna(0)
 
-        # The selected working-hour source controls both calculation and Excel output.
         if mode == "labor_hr":
-            part["Labor HR.Act"] = raw_labor_hr
-            part["FOH-Others.Act"] = 0
-            part["Total working hours"] = raw_labor_hr
+            part["Selected Hours"] = part["Labor HR.Act"]
         elif mode == "foh":
-            part["Labor HR.Act"] = 0
-            part["FOH-Others.Act"] = raw_foh
-            part["Total working hours"] = raw_foh
+            part["Selected Hours"] = part["FOH-Others.Act"]
         else:
-            part["Labor HR.Act"] = raw_labor_hr
-            part["FOH-Others.Act"] = raw_foh
-            part["Total working hours"] = raw_labor_hr + raw_foh
+            part["Selected Hours"] = part["Labor HR.Act"] + part["FOH-Others.Act"]
 
         frames.append(part)
 
@@ -583,7 +535,7 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
             "Order": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip()))),
             "Labor HR.Act": "sum",
             "FOH-Others.Act": "sum",
-            "Total working hours": "sum",
+            "Selected Hours": "sum",
             "Labor Source file": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
         })
         .rename(columns={"Labor Source file": "Labor Source files"})
@@ -602,7 +554,7 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
     if "Order Merge Key" not in out.columns:
         out["Order Merge Key"] = out["Order"].apply(normalize_order_key)
 
-    for col in ["Labor HR.Act", "FOH-Others.Act", "Total working hours", "Labor Source files"]:
+    for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"]:
         out[col] = 0 if col != "Labor Source files" else ""
 
     if labor is None or labor.empty:
@@ -618,14 +570,14 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
         .agg({
             "Labor HR.Act": "sum",
             "FOH-Others.Act": "sum",
-            "Total working hours": "sum",
+            "Selected Hours": "sum",
             "Labor Source files": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
         })
     )
 
     if not order_labor.empty:
         out = out.merge(order_labor, on="Order Merge Key", how="left", suffixes=("", "_labor"))
-        for col in ["Labor HR.Act", "FOH-Others.Act", "Total working hours"]:
+        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
             labor_col = f"{col}_labor"
             if labor_col in out.columns:
                 out[col] = pd.to_numeric(out[labor_col], errors="coerce").fillna(0)
@@ -634,10 +586,10 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
             out["Labor Source files"] = out["Labor Source files_labor"].fillna("").astype(str)
             out = out.drop(columns=["Labor Source files_labor"])
 
-    for col in ["Labor HR.Act", "FOH-Others.Act", "Total working hours"]:
+    for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
 
-    fallback_mask = out["Total working hours"].eq(0)
+    fallback_mask = out["Selected Hours"].eq(0)
     pm_labor = (
         labor[
             (labor["Plant"].astype(str).str.strip() != "")
@@ -647,7 +599,7 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
         .agg({
             "Labor HR.Act": "sum",
             "FOH-Others.Act": "sum",
-            "Total working hours": "sum",
+            "Selected Hours": "sum",
             "Labor Source files": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
         })
     )
@@ -658,11 +610,11 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
             on=["Plant", "Material Number"],
             how="left",
         )
-        for col in ["Labor HR.Act", "FOH-Others.Act", "Total working hours"]:
+        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
             out.loc[fallback_mask, col] = pd.to_numeric(fallback[col], errors="coerce").fillna(0).to_numpy()
         out.loc[fallback_mask, "Labor Source files"] = fallback["Labor Source files"].fillna("").astype(str).to_numpy()
 
-    for col in ["Labor HR.Act", "FOH-Others.Act", "Total working hours"]:
+    for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
 
     out["Labor Source files"] = out["Labor Source files"].fillna("").astype(str)
@@ -676,26 +628,9 @@ def process_files(
     labor_mode: str = "both",
 ) -> tuple[Path, dict]:
     masters = build_masters()
-    labor_mode = normalize_labor_mode(labor_mode)
     out = load_production_dataframe(paths)
     labor = load_labor_dataframe(labor_paths or [], labor_mode)
     out = attach_labor_hours(out, labor)
-
-    # Final safety guard: Total working hours must always follow the selected working-hour source.
-    for col in ["Labor HR.Act", "FOH-Others.Act", "Total working hours"]:
-        if col in out.columns:
-            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
-
-    if labor_mode == "labor_hr":
-        out["FOH-Others.Act"] = 0
-        out["Total working hours"] = out["Labor HR.Act"]
-    elif labor_mode == "foh":
-        out["Labor HR.Act"] = 0
-        out["Total working hours"] = out["FOH-Others.Act"]
-    else:
-        out["Total working hours"] = out["Labor HR.Act"] + out["FOH-Others.Act"]
-
-    out["Working Hour Source"] = labor_mode
 
     if year:
         out = out[out["Year"] == int(year)].copy()
@@ -732,15 +667,11 @@ def process_files(
         out.groupby(group_cols, dropna=False, as_index=False)
         .agg({
             "Delivered quantity": "sum",
-            "Labor HR.Act": "sum",
-            "FOH-Others.Act": "sum",
-            "Total working hours": "sum",
+            "Selected Hours": "sum",
         })
         .rename(columns={
             "Delivered quantity": "年度生產量",
-            "Labor HR.Act": "年度人員工時",
-            "FOH-Others.Act": "年度設備工時",
-            "Total working hours": "年度總工時",
+            "Selected Hours": "年度總工時",
         })
         .sort_values(["Plant", "Material Number"])
     )
@@ -790,23 +721,9 @@ def process_files(
     file_id = uuid.uuid4().hex[:10]
     output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
 
-    # Export view: only show the selected working-hour source in Excel.
-    # - labor_hr: hide FOH-Others.Act and 年度設備工時
-    # - foh: hide Labor HR.Act and 年度人員工時
-    # - both: show both source columns
-    out_export = out.copy()
-    annual_export = annual.copy()
-
-    if labor_mode == "labor_hr":
-        out_export = out_export.drop(columns=["FOH-Others.Act"], errors="ignore")
-        annual_export = annual_export.drop(columns=["年度設備工時"], errors="ignore")
-    elif labor_mode == "foh":
-        out_export = out_export.drop(columns=["Labor HR.Act"], errors="ignore")
-        annual_export = annual_export.drop(columns=["年度人員工時"], errors="ignore")
-
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
-        annual_export.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
+        out.to_excel(writer, index=False, sheet_name="工單明細_已分類")
+        annual.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
         type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
         customer_summary.to_excel(writer, index=False, sheet_name="Plant_客戶年度產量")
         source_summary.to_excel(writer, index=False, sheet_name="判斷來源摘要")
@@ -825,11 +742,10 @@ def process_files(
     summary = {
         "files": int(len(paths)),
         "labor_files": int(len(labor_paths or [])),
-        "labor_mode": labor_mode,
         "rows": int(len(out)),
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
-        "total_hours": float(out["Total working hours"].sum()) if "Total working hours" in out.columns else 0.0,
+        "total_hours": float(out["Selected Hours"].sum()) if "Selected Hours" in out.columns else 0.0,
         "wip_rows": int(len(wip)),
         "output_filename": output_path.name,
         "year": year or "ALL",
@@ -923,7 +839,7 @@ async def process(request: Request):
             status_code=400,
         )
 
-    labor_mode = normalize_labor_mode(form.get("labor_mode") or "both")
+    labor_mode = str(form.get("labor_mode") or "both").strip()
     year = form.get("year")
 
     saved_paths: list[Path] = []
