@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_WIP_STRONG_RULES_SG_PRODUCT_FIX =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_FINAL_FINISHED_PRODUCT_WHITELIST =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -97,6 +97,8 @@ LABOR_ALIASES = {
 }
 
 VALID_LABOR_MODES = {"labor_hr", "foh", "both"}
+
+FINISHED_PRODUCT_PREFIXES = ["SG-"]
 
 def normalize_order_key(value: object) -> str:
     """Normalize SAP order number for matching quantity orders with working-hour orders."""
@@ -585,16 +587,29 @@ def classify(material_number: object, description: object, series: str, plant: o
 
 
 
-def is_wip_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> bool:
-    """Detect strong WIP rules independently from Product Line / Production Site attribution.
 
-    Important:
-    - Strong WIP rules are Material Number Prefix WIP rules, e.g. 850-/851-/852-/H50-/402xx-/403xx.
-    - SCMC is also treated as WIP when the rule itself explicitly defines Product Line / Production Site.
-    - Description Contains ASSY/SFG are auxiliary fallback rules only; they should NOT override
-      an already-classified product such as SG-96000-00A / SP3881.
+def is_finished_product_whitelist(material_number: object) -> bool:
+    """Finished product whitelist.
+
+    Prefixes such as SG- mean:
+    - This is a finished product number.
+    - Do not let ASSY / SFG / MODULE / PCBA override it to WIP.
+    - Product Type / Product Line / Production Site must still be decided by Product Series rules.
     """
     material_number_u = str(material_number or "").upper().strip()
+    return any(material_number_u.startswith(prefix) for prefix in FINISHED_PRODUCT_PREFIXES)
+
+
+def is_wip_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> bool:
+    """Detect WIP independently from Product Line / Production Site attribution.
+
+    Product Line may be inferred from SN/FU/SP/SCMC rules, but Product Type must remain WIP
+    when any WIP rule matches, e.g. 850-/851-/852-/H50-, SFG, ASSY, SCMC.
+    Default WIP is excluded here because it is only a fallback when no rule matches.
+    """
+    material_number_u = str(material_number or "").upper().strip()
+    if is_finished_product_whitelist(material_number_u):
+        return False
     description_u = str(description or "").upper().strip()
     series_u = str(series or "").upper().strip()
 
@@ -602,9 +617,8 @@ def is_wip_by_rule_master(material_number: object, description: object, series: 
     for _, row in rules.iterrows():
         rule_type = str(row.get("Rule Type", "") or "").strip()
         key = str(row.get("Key", "") or "").strip()
-        rt = normalize_rule_type(rule_type)
 
-        if rt in ["default", "預設"]:
+        if normalize_rule_type(rule_type) in ["default", "預設"]:
             continue
 
         product_type = str(row.get("Product Type", "") or "").strip().upper()
@@ -613,20 +627,54 @@ def is_wip_by_rule_master(material_number: object, description: object, series: 
         if product_type != "WIP" and is_wip not in ["Y", "YES", "TRUE", "1"]:
             continue
 
-        # Only material-number based WIP rules can force Product Type back to WIP.
-        if rt in ["material number prefix", "material prefix", "成品料號前綴", "料號前綴",
-                  "material number exact", "material exact", "成品料號", "成品料號完全符合"]:
-            if rule_matches(rule_type, key, material_number_u, description_u, series_u):
-                return True
-
-        # Keep explicit SCMC WIP rule as a special product-line-aware WIP rule.
-        if rt in ["series prefix", "product series prefix", "產品系列前綴", "系列前綴"] and str(key).upper().strip() == "SCMC":
-            if rule_matches(rule_type, key, material_number_u, description_u, series_u):
-                return True
-
-        # Description Contains ASSY / SFG are no longer strong WIP override rules.
+        if rule_matches(rule_type, key, material_number_u, description_u, series_u):
+            return True
 
     return False
+
+
+
+def infer_product_type_line_site_from_series_rules(description: object, series: str, masters: dict) -> tuple[str, str, str]:
+    """Infer Product Type / Product Line / Production Site from series or description rules.
+
+    Used for finished-product whitelist material numbers such as SG-:
+    SG- itself only means non-WIP; SN/SP/FU/etc. from Product Series decides NB/TP and site.
+    """
+    description_u = str(description or "").upper().strip()
+    series_u = str(series or "").upper().strip()
+    rules: pd.DataFrame = masters["rules"]
+
+    for _, row in rules.iterrows():
+        rule_type = str(row.get("Rule Type", "") or "").strip()
+        key = str(row.get("Key", "") or "").strip()
+        rt = normalize_rule_type(rule_type)
+
+        if rt not in ["series prefix", "product series prefix", "產品系列前綴", "系列前綴",
+                      "series exact", "product series exact", "產品系列", "產品系列完全符合",
+                      "description contains", "material description contains", "描述包含", "品名包含"]:
+            continue
+
+        if not rule_matches(rule_type, key, "", description_u, series_u):
+            continue
+
+        product_type = str(row.get("Product Type", "") or "").strip()
+        if product_type.upper() == "WIP":
+            # A finished-product whitelist item should not become WIP because of SCMC/ASSY/SFG style rules.
+            continue
+
+        product_line = str(row.get("Product Line", "") or "").strip()
+        if not product_line:
+            product_line = product_type
+
+        production_site = str(row.get("Production Site", "") or "").strip()
+        if not production_site:
+            production_site = production_site_from_line(product_line)
+
+        if product_type or product_line or production_site:
+            return product_type, product_line, production_site
+
+    return "", "", ""
+
 
 def infer_product_line_site_from_rules(description: object, series: str, masters: dict) -> tuple[str, str]:
     """Infer Product Line / Production Site for WIP without changing Product Type.
@@ -921,6 +969,35 @@ def process_files(
         out.loc[wip_rule_mask, "產品類型"] = "WIP"
         out.loc[wip_rule_mask, "Is_WIP"] = "Y"
         out.loc[wip_rule_mask, "規則判定結果"] = "WIP"
+
+    # Finished-product whitelist:
+    # SG- means non-WIP only. Product Type / Product Line / Production Site still comes from Product Series.
+    finished_product_mask = out["Material Number"].apply(is_finished_product_whitelist)
+    if finished_product_mask.any():
+        inferred_finished = out.loc[finished_product_mask].apply(
+            lambda r: infer_product_type_line_site_from_series_rules(
+                r["Material description"], r["Product series"], masters
+            ),
+            axis=1,
+        )
+        inferred_product_type = inferred_finished.apply(lambda x: x[0]).to_numpy()
+        inferred_product_line = inferred_finished.apply(lambda x: x[1]).to_numpy()
+        inferred_production_site = inferred_finished.apply(lambda x: x[2]).to_numpy()
+
+        idx = out.index[finished_product_mask]
+        for pos, row_idx in enumerate(idx):
+            if inferred_product_type[pos]:
+                out.at[row_idx, "產品類型"] = inferred_product_type[pos]
+            if inferred_product_line[pos]:
+                out.at[row_idx, "Product Line"] = inferred_product_line[pos]
+            if inferred_production_site[pos]:
+                out.at[row_idx, "Production Site"] = inferred_production_site[pos]
+            out.at[row_idx, "Is_WIP"] = "N"
+
+        out.loc[finished_product_mask, "Production Site"] = out.loc[finished_product_mask].apply(
+            lambda r: resolve_production_site(r["Product Line"], r["Production Site"]),
+            axis=1,
+        )
 
     group_cols = [
         "Year", "Plant", "Production Site", "Product Line", "Material Number", "Material description", "Product series",
