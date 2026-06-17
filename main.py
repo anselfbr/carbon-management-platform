@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_ORDER_NUMBER_DROPDOWN_HOURS_FIX =====")
+print("===== CMP MAIN VERSION: GOLDEN_V2_UNIQUE_ORDER_NUMBER_HOURS_FIX =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -772,11 +772,10 @@ def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
 def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.DataFrame:
     """Load production working-hour order files.
 
-    Matching key:
-    - Production quantity file: Order
-    - Working-hour file: Order Number / Order
-    - Match by normalized Order Merge Key only.
-    - No Plant + Material Number fallback.
+    Correct rule:
+    - Working-hour file Order Number is unique.
+    - Match production Order to working-hour Order Number only.
+    - Do not use Plant or Material Number as fallback.
     """
     columns = [
         "Order", "Order Merge Key", "Plant", "Material Number",
@@ -786,7 +785,6 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
         return pd.DataFrame(columns=columns)
 
     mode = normalize_labor_mode(labor_mode)
-
     frames: list[pd.DataFrame] = []
     errors: list[str] = []
 
@@ -838,6 +836,8 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
     if labor.empty:
         return pd.DataFrame(columns=columns)
 
+    # Order Number is unique, so keep one row per normalized Order Number.
+    # If duplicated accidentally, sum within the same Order Number only.
     return (
         labor.groupby(["Order Merge Key"], dropna=False, as_index=False)
         .agg({
@@ -849,14 +849,18 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
             "Selected Hours": "sum",
             "Labor Source file": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
         })
-        .rename(columns={"Labor Source file": "Labor Source files"})
+        .rename(columns={
+            "Order": "Matched Labor Order Number",
+            "Labor Source file": "Labor Source files",
+        })
     )
 
 
 def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
-    """Attach labor hours to production output by Order Number only.
+    """Attach labor hours by production Order <-> working-hour Order Number only.
 
-    No Plant + Material Number fallback is used.
+    No Plant + Material Number fallback.
+    Same Material Number with different Order keeps different Order-level hours.
     """
     out = out.copy()
     if "Order Merge Key" not in out.columns:
@@ -878,18 +882,12 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
     if "Order Merge Key" not in labor.columns:
         labor["Order Merge Key"] = labor["Order"].apply(normalize_order_key)
 
-    order_labor = (
-        labor[labor["Order Merge Key"].astype(str).str.strip() != ""]
-        .groupby(["Order Merge Key"], dropna=False, as_index=False)
-        .agg({
-            "Order": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip()))),
-            "Labor HR.Act": "sum",
-            "FOH-Others.Act": "sum",
-            "Selected Hours": "sum",
-            "Labor Source files": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
-        })
-        .rename(columns={"Order": "Matched Labor Order Number"})
-    )
+    merge_cols = [
+        "Order Merge Key", "Matched Labor Order Number", "Labor HR.Act", "FOH-Others.Act",
+        "Selected Hours", "Labor Source files"
+    ]
+    order_labor = labor[[c for c in merge_cols if c in labor.columns]].copy()
+    order_labor = order_labor.drop_duplicates(subset=["Order Merge Key"], keep="first")
 
     out = out.merge(order_labor, on="Order Merge Key", how="left", suffixes=("", "_labor"))
 
@@ -907,7 +905,6 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
 
     if "Matched Labor Order Number" not in out.columns:
         out["Matched Labor Order Number"] = ""
-
     out["Matched Labor Order Number"] = out["Matched Labor Order Number"].fillna("").astype(str)
     out["Labor Match Status"] = out["Matched Labor Order Number"].apply(
         lambda x: "Matched" if str(x).strip() else "Not matched"
@@ -1098,7 +1095,13 @@ def process_files(
     # Rename Excel output header only; keep internal calculation column as Selected Hours.
     out_export = out_export.rename(columns={"Selected Hours": "Total working hours"})
 
-    # Keep Labor HR.Act, FOH-Others.Act, and Total working hours for traceability.
+    # Export view follows selected working-hour source.
+    if labor_mode == "labor_hr":
+        out_export = out_export.drop(columns=["FOH-Others.Act"], errors="ignore")
+        annual_export = annual_export.drop(columns=["年度設備工時"], errors="ignore")
+    elif labor_mode == "foh":
+        out_export = out_export.drop(columns=["Labor HR.Act"], errors="ignore")
+        annual_export = annual_export.drop(columns=["年度人員工時"], errors="ignore")
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
