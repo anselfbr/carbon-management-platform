@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_SERIES_PARSER_NOISE_FIX =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_WIP_TYPE_AND_BLANK_SITE_FIX =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -216,7 +216,9 @@ def resolve_production_site(product_line: object, production_site: object = "") 
     if fallback_site:
         return fallback_site
 
-    return "石碣廠-IPS"
+    # Do not assign a default site when Product Line cannot be determined.
+    # This avoids unresolved Product Series being incorrectly assigned to 石碣廠-IPS.
+    return ""
 
 
 def read_csv_flexible(path: Path, columns: Optional[list[str]] = None) -> pd.DataFrame:
@@ -582,6 +584,38 @@ def classify(material_number: object, description: object, series: str, plant: o
 
 
 
+
+def is_wip_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> bool:
+    """Detect WIP independently from Product Line / Production Site attribution.
+
+    Product Line may be inferred from SN/FU/SP/SCMC rules, but Product Type must remain WIP
+    when any WIP rule matches, e.g. 850-/851-/852-/H50-, SFG, ASSY, SCMC.
+    Default WIP is excluded here because it is only a fallback when no rule matches.
+    """
+    material_number_u = str(material_number or "").upper().strip()
+    description_u = str(description or "").upper().strip()
+    series_u = str(series or "").upper().strip()
+
+    rules: pd.DataFrame = masters["rules"]
+    for _, row in rules.iterrows():
+        rule_type = str(row.get("Rule Type", "") or "").strip()
+        key = str(row.get("Key", "") or "").strip()
+
+        if normalize_rule_type(rule_type) in ["default", "預設"]:
+            continue
+
+        product_type = str(row.get("Product Type", "") or "").strip().upper()
+        is_wip = str(row.get("Is_WIP", "") or "").strip().upper()
+
+        if product_type != "WIP" and is_wip not in ["Y", "YES", "TRUE", "1"]:
+            continue
+
+        if rule_matches(rule_type, key, material_number_u, description_u, series_u):
+            return True
+
+    return False
+
+
 def infer_product_line_site_from_rules(description: object, series: str, masters: dict) -> tuple[str, str]:
     """Infer Product Line / Production Site for WIP without changing Product Type.
 
@@ -863,6 +897,18 @@ def process_files(
         lambda r: resolve_production_site(r["Product Line"], r["Production Site"]),
         axis=1,
     )
+
+    # Final safety guard:
+    # Product Line / Production Site can be inferred from series rules, but Product Type must remain WIP
+    # if WIP rules such as 850-/851-/852-/H50-/SFG/ASSY/SCMC match.
+    wip_rule_mask = out.apply(
+        lambda r: is_wip_by_rule_master(r["Material Number"], r["Material description"], r["Product series"], masters),
+        axis=1,
+    )
+    if wip_rule_mask.any():
+        out.loc[wip_rule_mask, "產品類型"] = "WIP"
+        out.loc[wip_rule_mask, "Is_WIP"] = "Y"
+        out.loc[wip_rule_mask, "規則判定結果"] = "WIP"
 
     group_cols = [
         "Year", "Plant", "Production Site", "Product Line", "Material Number", "Material description", "Product series",
