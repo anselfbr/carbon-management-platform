@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_PRODUCTION_SITE_STEP2_ZIP =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_RULE_MASTER_PRODUCT_LINE_SITE =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -144,27 +144,27 @@ def normalize_labor_mode(value: object) -> str:
 
 RULE_COLUMNS = [
     "Priority", "Rule Type", "Key", "Product Type", "Customer",
-    "Customer Code Logic", "Is_WIP", "Enabled",
+    "Customer Code Logic", "Is_WIP", "Enabled", "Product Line", "Production Site",
 ]
 
 DEFAULT_RULE_MASTER = (
-    "Priority,Rule Type,Key,Product Type,Customer,Customer Code Logic,Is_WIP,Enabled\n"
-    "1,Material Number Prefix,851-,WIP,,,Y,Y\n"
-    "2,Material Number Prefix,852-,WIP,,,Y,Y\n"
-    "10,Series Prefix,SN,NB,,NB_3RD_CHAR,N,Y\n"
-    "11,Series Prefix,FU,NB,,NB_3RD_CHAR,N,Y\n"
-    "12,Series Prefix,SP,TP,,NB_3RD_CHAR,N,Y\n"
-    "13,Series Prefix,SM,DT Mouse,,DT_3_4_CHAR,N,Y\n"
-    "14,Series Prefix,SA,DT Accessory,,DT_3_4_CHAR,N,Y\n"
-    "15,Description Contains,RECEIVER,DT Dongle,,,N,Y\n"
-    "16,Series Prefix,SK,DT Keyboard,,DT_3_4_CHAR,N,Y\n"
-    "17,Series Prefix,SB,DT Keyboard+Mouse,,DT_3_4_CHAR,N,Y\n"
-    "18,Series Prefix,ST,DT Tablet Keyboard,,DT_3_4_CHAR,N,Y\n"
-    "19,Description Contains,TOUCH PAD MODULE,TP,,,N,Y\n"
-    "20,Description Contains,TOUCHPAD MODULE,TP,,,N,Y\n"
-    "21,Series Prefix,SCMC,WIP,,,Y,Y\n"
-    "90,Description Contains,ASSY,WIP,,,Y,Y\n"
-    "999,Default,*,WIP,,,Y,Y\n"
+    "Priority,Rule Type,Key,Product Type,Customer,Customer Code Logic,Is_WIP,Enabled,Product Line,Production Site\n"
+    "1,Material Number Prefix,851-,WIP,,,Y,Y,,\n"
+    "2,Material Number Prefix,852-,WIP,,,Y,Y,,\n"
+    "10,Series Prefix,SN,NB,,NB_3RD_CHAR,N,Y,,\n"
+    "11,Series Prefix,FU,NB,,NB_3RD_CHAR,N,Y,,\n"
+    "12,Series Prefix,SP,TP,,NB_3RD_CHAR,N,Y,,\n"
+    "13,Series Prefix,SM,DT Mouse,,DT_3_4_CHAR,N,Y,,\n"
+    "14,Series Prefix,SA,DT Accessory,,DT_3_4_CHAR,N,Y,,\n"
+    "15,Description Contains,RECEIVER,DT Dongle,,,N,Y,,\n"
+    "16,Series Prefix,SK,DT Keyboard,,DT_3_4_CHAR,N,Y,,\n"
+    "17,Series Prefix,SB,DT Keyboard+Mouse,,DT_3_4_CHAR,N,Y,,\n"
+    "18,Series Prefix,ST,DT Tablet Keyboard,,DT_3_4_CHAR,N,Y,,\n"
+    "19,Description Contains,TOUCH PAD MODULE,TP,,,N,Y,,\n"
+    "20,Description Contains,TOUCHPAD MODULE,TP,,,N,Y,,\n"
+    "21,Series Prefix,SCMC,WIP,,,Y,Y,,\n"
+    "90,Description Contains,ASSY,WIP,,,Y,Y,,\n"
+    "999,Default,*,WIP,,,Y,Y,,\n"
 )
 
 
@@ -180,21 +180,24 @@ def ensure_master_files() -> None:
 ensure_master_files()
 
 
-def resolve_production_site(plant: object, product_type: object) -> str:
-    """Resolve Production Site for Step 1 output."""
-    plant_text = str(plant or "").strip().replace(".0", "")
-    product_type_text = str(product_type or "").strip().upper()
-
-    if plant_text == "2670":
-        if product_type_text == "NB":
-            return "常州廠(A2)-IPS"
-        if product_type_text == "TP":
-            return "常州廠(A9)-IPS"
-
-    if product_type_text == "NB":
+def production_site_from_line(product_line: object) -> str:
+    """Map Product Line to Production Site. Fallback only when Rule Master has no site."""
+    line = str(product_line or "").strip().upper()
+    if line == "NB":
         return "常州廠(A2)-IPS"
-    if product_type_text == "TP":
+    if line == "TP":
         return "常州廠(A9)-IPS"
+    return ""
+
+
+def resolve_production_site(product_line: object, production_site: object = "") -> str:
+    """Resolve Production Site from Rule Master output."""
+    site = str(production_site or "").strip()
+    if site:
+        return site
+    fallback_site = production_site_from_line(product_line)
+    if fallback_site:
+        return fallback_site
     return "石碣廠-IPS"
 
 
@@ -437,8 +440,15 @@ def classify_by_rule_master(material_number: object, description: object, series
         if not is_wip:
             is_wip = "Y" if product_type.upper() == "WIP" else "N"
 
+        product_line = str(row.get("Product Line", "") or "").strip()
+        if not product_line and product_type.upper() != "WIP":
+            product_line = product_type
+        production_site = str(row.get("Production Site", "") or "").strip()
+
         return {
             "產品類型": product_type,
+            "Product Line": product_line,
+            "Production Site": production_site,
             "客戶代碼": code,
             "客戶名稱": customer,
             "判斷來源": "Rule Master",
@@ -465,8 +475,11 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
     product_type = str(row.get("產品類型", "") or "").strip()
     code = str(row.get("客戶代碼", "") or "").strip()
     customer = str(row.get("客戶名稱", "") or "").strip()
+    product_line = product_type if product_type.upper() != "WIP" else ""
     return {
         "產品類型": product_type,
+        "Product Line": product_line,
+        "Production Site": production_site_from_line(product_line),
         "客戶代碼": code,
         "客戶名稱": customer,
         "判斷來源": "Product Series Master",
@@ -487,6 +500,8 @@ def classify(material_number: object, description: object, series: str, plant: o
 
     return {
         "產品類型": "WIP",
+        "Product Line": "",
+        "Production Site": "",
         "客戶代碼": "",
         "客戶名稱": "",
         "判斷來源": "Default WIP",
@@ -494,6 +509,37 @@ def classify(material_number: object, description: object, series: str, plant: o
         "命中規則": "No rule matched → WIP",
         "Is_WIP": "Y",
     }
+
+
+
+def infer_product_line_site_from_rules(description: object, series: str, masters: dict) -> tuple[str, str]:
+    """Infer Product Line / Production Site for WIP using series/description rules."""
+    description_u = str(description or "").upper().strip()
+    series_u = str(series or "").upper().strip()
+    rules: pd.DataFrame = masters["rules"]
+
+    for _, row in rules.iterrows():
+        rule_type = str(row.get("Rule Type", "") or "").strip()
+        key = str(row.get("Key", "") or "").strip()
+        rt = normalize_rule_type(rule_type)
+        if rt not in ["series prefix", "product series prefix", "產品系列前綴", "系列前綴",
+                      "series exact", "product series exact", "產品系列", "產品系列完全符合",
+                      "description contains", "material description contains", "描述包含", "品名包含"]:
+            continue
+        if not rule_matches(rule_type, key, "", description_u, series_u):
+            continue
+
+        product_line = str(row.get("Product Line", "") or "").strip()
+        product_type = str(row.get("Product Type", "") or "").strip()
+        if not product_line and product_type.upper() != "WIP":
+            product_line = product_type
+        production_site = str(row.get("Production Site", "") or "").strip()
+        if not production_site:
+            production_site = production_site_from_line(product_line)
+        if product_line or production_site:
+            return product_line, production_site
+
+    return "", ""
 
 
 def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
@@ -715,16 +761,31 @@ def process_files(
         axis=1,
     )
     out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
+    out["Product Line"] = classified.apply(lambda x: x.get("Product Line", ""))
+    out["Production Site"] = classified.apply(lambda x: x.get("Production Site", ""))
     out["客戶代碼"] = classified.apply(lambda x: x.get("客戶代碼", ""))
     out["客戶名稱"] = classified.apply(lambda x: x.get("客戶名稱", ""))
     out["判斷來源"] = classified.apply(lambda x: x.get("判斷來源", ""))
     out["規則判定結果"] = classified.apply(lambda x: x.get("規則判定結果", ""))
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
     out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
-    out["Production Site"] = out.apply(lambda r: resolve_production_site(r["Plant"], r["產品類型"]), axis=1)
+
+    missing_line_mask = out["Product Line"].astype(str).str.strip().eq("")
+    if missing_line_mask.any():
+        inferred = out.loc[missing_line_mask].apply(
+            lambda r: infer_product_line_site_from_rules(r["Material description"], r["Product series"], masters),
+            axis=1,
+        )
+        out.loc[missing_line_mask, "Product Line"] = inferred.apply(lambda x: x[0]).to_numpy()
+        out.loc[missing_line_mask, "Production Site"] = inferred.apply(lambda x: x[1]).to_numpy()
+
+    out["Production Site"] = out.apply(
+        lambda r: resolve_production_site(r["Product Line"], r["Production Site"]),
+        axis=1,
+    )
 
     group_cols = [
-        "Year", "Plant", "Production Site", "Material Number", "Material description", "Product series",
+        "Year", "Plant", "Production Site", "Product Line", "Material Number", "Material description", "Product series",
         "產品類型", "客戶代碼", "客戶名稱", "判斷來源", "Is_WIP"
     ]
     annual = (
@@ -857,6 +918,10 @@ def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
             rename_map[c] = "Customer Code Logic"
         elif key in ["is_wip", "is wip", "wip", "半品"]:
             rename_map[c] = "Is_WIP"
+        elif key in ["product line", "產品線", "歸屬類型", "production site type"]:
+            rename_map[c] = "Product Line"
+        elif key in ["production site", "生產廠區", "廠區", "廠別"]:
+            rename_map[c] = "Production Site"
         elif key in ["enabled", "啟用"]:
             rename_map[c] = "Enabled"
     df = df.rename(columns=rename_map).fillna("")
