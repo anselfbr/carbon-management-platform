@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_FINAL_FINISHED_PRODUCT_WHITELIST =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_ORDER_LEVEL_TOTAL_HOURS_FIX =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -793,12 +793,9 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
         part["Labor HR.Act"] = pd.to_numeric(df[cols["labor_hr"]], errors="coerce").fillna(0)
         part["FOH-Others.Act"] = pd.to_numeric(df[cols["foh_others"]], errors="coerce").fillna(0)
 
-        if mode == "labor_hr":
-            part["Selected Hours"] = part["Labor HR.Act"]
-        elif mode == "foh":
-            part["Selected Hours"] = part["FOH-Others.Act"]
-        else:
-            part["Selected Hours"] = part["Labor HR.Act"] + part["FOH-Others.Act"]
+        # Total working hours is always Labor HR.Act + FOH-Others.Act.
+        # If only one field has hours, the total naturally equals that field.
+        part["Selected Hours"] = part["Labor HR.Act"] + part["FOH-Others.Act"]
 
         frames.append(part)
 
@@ -866,27 +863,9 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
 
-    fallback_mask = out["Selected Hours"].eq(0)
-    pm_labor = (
-        labor[(labor["Plant"].astype(str).str.strip() != "") & (labor["Material Number"].astype(str).str.strip() != "")]
-        .groupby(["Plant", "Material Number"], dropna=False, as_index=False)
-        .agg({
-            "Labor HR.Act": "sum",
-            "FOH-Others.Act": "sum",
-            "Selected Hours": "sum",
-            "Labor Source files": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
-        })
-    )
-
-    if fallback_mask.any() and not pm_labor.empty:
-        fallback = out.loc[fallback_mask, ["Plant", "Material Number"]].merge(
-            pm_labor,
-            on=["Plant", "Material Number"],
-            how="left",
-        )
-        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
-            out.loc[fallback_mask, col] = pd.to_numeric(fallback[col], errors="coerce").fillna(0).to_numpy()
-        out.loc[fallback_mask, "Labor Source files"] = fallback["Labor Source files"].fillna("").astype(str).to_numpy()
+    # Do not fallback by Plant + Material Number here.
+    # 工單明細_已分類 must reflect labor hours matched by each Order only.
+    # If an Order has no matching labor record, its hours remain 0.
 
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
@@ -906,21 +885,15 @@ def process_files(
     labor = load_labor_dataframe(labor_paths or [], labor_mode)
     out = attach_labor_hours(out, labor)
 
-    # Final safety guard: total working hours must always follow selected working-hour source.
+    # Final safety guard:
+    # Total working hours is always Labor HR.Act + FOH-Others.Act at Order level.
+    # The labor_mode value is kept only for UI/backward compatibility, not for recalculating totals.
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
 
-    if labor_mode == "labor_hr":
-        out["FOH-Others.Act"] = 0
-        out["Selected Hours"] = out["Labor HR.Act"]
-    elif labor_mode == "foh":
-        out["Labor HR.Act"] = 0
-        out["Selected Hours"] = out["FOH-Others.Act"]
-    else:
-        out["Selected Hours"] = out["Labor HR.Act"] + out["FOH-Others.Act"]
-
-    out["Working Hour Source"] = labor_mode
+    out["Selected Hours"] = out["Labor HR.Act"] + out["FOH-Others.Act"]
+    out["Working Hour Source"] = "total"
 
     if year:
         out = out[out["Year"] == int(year)].copy()
@@ -1072,12 +1045,7 @@ def process_files(
     # Rename Excel output header only; keep internal calculation column as Selected Hours.
     out_export = out_export.rename(columns={"Selected Hours": "Total working hours"})
 
-    if labor_mode == "labor_hr":
-        out_export = out_export.drop(columns=["FOH-Others.Act"], errors="ignore")
-        annual_export = annual_export.drop(columns=["年度設備工時"], errors="ignore")
-    elif labor_mode == "foh":
-        out_export = out_export.drop(columns=["Labor HR.Act"], errors="ignore")
-        annual_export = annual_export.drop(columns=["年度人員工時"], errors="ignore")
+    # Always keep Labor HR.Act, FOH-Others.Act, and Total working hours in Excel output.
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
