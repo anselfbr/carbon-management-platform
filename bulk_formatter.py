@@ -308,3 +308,95 @@ def generate_product_activity_bulk_files_by_site(
         "excluded_wip_rows": total_excluded_wip,
         "files": files,
     }
+
+
+
+def generate_product_activity_bulk_files_by_site_zip(
+    step1_output_path: str | Path,
+    bulk_template_path: str | Path,
+    output_dir: str | Path,
+    token: str | None = None,
+) -> Dict[str, Any]:
+    """Generate Bulk files by Production Site and package them into one ZIP."""
+    import zipfile
+
+    step1_output_path = Path(step1_output_path)
+    bulk_template_path = Path(bulk_template_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    token = token or "bulk"
+
+    df = pd.read_excel(step1_output_path, sheet_name=SOURCE_SHEET_NAME, dtype=object)
+    production_site_col = _find_optional_column(
+        df,
+        ["Production Site", "production site", "生產廠區", "廠區", "廠別"],
+    )
+
+    generated_files: list[Dict[str, Any]] = []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        if production_site_col is None:
+            output_path = tmpdir_path / f"formatted_product_activity_data_bulk_create_ALL_{token}.xlsx"
+            summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path)
+            generated_files.append({
+                "production_site": "ALL",
+                "filename": output_path.name,
+                "path": output_path,
+                "summary": summary,
+            })
+        else:
+            df[production_site_col] = df[production_site_col].fillna("").astype(str).str.strip()
+            sites = [s for s in sorted(df[production_site_col].unique()) if s]
+
+            if not sites:
+                sites = ["ALL"]
+                df[production_site_col] = "ALL"
+
+            for site in sites:
+                site_df = df[df[production_site_col] == site].copy()
+                safe_site = _sanitize_filename(site)
+                temp_step1 = tmpdir_path / f"step1_{safe_site}_{token}.xlsx"
+                output_path = tmpdir_path / f"formatted_product_activity_data_bulk_create_{safe_site}_{token}.xlsx"
+
+                with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
+                    site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
+
+                summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path)
+                generated_files.append({
+                    "production_site": site,
+                    "filename": output_path.name,
+                    "path": output_path,
+                    "summary": summary,
+                })
+
+        zip_name = f"formatted_product_activity_data_bulk_by_production_site_{token}.zip"
+        zip_path = output_dir / zip_name
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+            for item in generated_files:
+                z.write(item["path"], item["filename"])
+
+    files_summary = [
+        {
+            "production_site": item["production_site"],
+            "filename": item["filename"],
+            "activity_rows": int(item["summary"].get("activity_rows", 0)),
+            "product_rows": int(item["summary"].get("product_rows", 0)),
+            "excluded_wip_rows": int(item["summary"].get("excluded_wip_rows", 0)),
+        }
+        for item in generated_files
+    ]
+
+    return {
+        "split_by_production_site": len(generated_files) > 1,
+        "production_site_count": len(generated_files),
+        "activity_rows": sum(item["activity_rows"] for item in files_summary),
+        "product_rows": sum(item["product_rows"] for item in files_summary),
+        "excluded_wip_rows": sum(item["excluded_wip_rows"] for item in files_summary),
+        "files": files_summary,
+        "output_filename": zip_name,
+        "download_url": f"/download/{zip_name}",
+        "zip_output": True,
+    }

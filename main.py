@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site
+from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
 from bom_formatter import generate_raw_material_bulk_file
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: STEP2_PRODUCTION_SITE_COL_STRICT_FIX_BOM_RESTORE =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_PRODUCTION_SITE_STEP2_ZIP =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -178,6 +178,24 @@ def ensure_master_files() -> None:
 
 
 ensure_master_files()
+
+
+def resolve_production_site(plant: object, product_type: object) -> str:
+    """Resolve Production Site for Step 1 output."""
+    plant_text = str(plant or "").strip().replace(".0", "")
+    product_type_text = str(product_type or "").strip().upper()
+
+    if plant_text == "2670":
+        if product_type_text == "NB":
+            return "常州廠(A2)-IPS"
+        if product_type_text == "TP":
+            return "常州廠(A9)-IPS"
+
+    if product_type_text == "NB":
+        return "常州廠(A2)-IPS"
+    if product_type_text == "TP":
+        return "常州廠(A9)-IPS"
+    return "石碣廠-IPS"
 
 
 def read_csv_flexible(path: Path, columns: Optional[list[str]] = None) -> pd.DataFrame:
@@ -703,9 +721,10 @@ def process_files(
     out["規則判定結果"] = classified.apply(lambda x: x.get("規則判定結果", ""))
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
     out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
+    out["Production Site"] = out.apply(lambda r: resolve_production_site(r["Plant"], r["產品類型"]), axis=1)
 
     group_cols = [
-        "Year", "Plant", "Material Number", "Material description", "Product series",
+        "Year", "Plant", "Production Site", "Material Number", "Material description", "Product series",
         "產品類型", "客戶代碼", "客戶名稱", "判斷來源", "Is_WIP"
     ]
     annual = (
@@ -971,44 +990,35 @@ async def generate_bulk_file(
     template_file: UploadFile = File(...),
 ):
     if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"},
-            status_code=400,
-        )
+        return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
 
     if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"},
-            status_code=400,
-        )
+        return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
 
     token = uuid.uuid4().hex[:10]
 
     step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(step1_file.filename).name}"
     template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
-    output_path = OUTPUT_DIR / f"formatted_product_activity_data_bulk_create_{token}.xlsx"
 
     step1_path.write_bytes(await step1_file.read())
     template_path.write_bytes(await template_file.read())
 
     try:
-        summary = generate_product_activity_bulk_file(
+        summary = generate_product_activity_bulk_files_by_site_zip(
             step1_output_path=step1_path,
             bulk_template_path=template_path,
-            output_path=output_path,
+            output_dir=OUTPUT_DIR,
+            token=token,
         )
     except Exception as exc:
         traceback.print_exc()
-        return JSONResponse(
-            {"ok": False, "message": str(exc)},
-            status_code=400,
-        )
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
     return {
         "ok": True,
         "message": "Bulk file generated successfully.",
         "summary": summary,
-        "download_url": f"/download/{output_path.name}",
+        "download_url": summary.get("download_url", ""),
     }
 
 

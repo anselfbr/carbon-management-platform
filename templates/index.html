@@ -941,10 +941,13 @@ function startBulkEstimatedProgress() {
 
 function stopBulkProgressSuccess(summary) {
   clearInterval(progressTimer);
+  const fileCountText = summary && summary.production_site_count
+    ? ` Files in ZIP: ${summary.production_site_count};`
+    : '';
   setBulkProcessingState(
     'success',
     'Batch formatting completed',
-    `Activity Data: ${summary.activity_rows} rows; Products: ${summary.product_rows} rows; Excluded WIP: ${summary.excluded_wip_rows} rows.`,
+    `Activity Data: ${summary.activity_rows} rows; Products: ${summary.product_rows} rows; Excluded WIP: ${summary.excluded_wip_rows} rows;${fileCountText}`,
     'Completed',
     100
   );
@@ -966,6 +969,7 @@ bulkForm.addEventListener('submit', async (e) => {
 
   bulkDownload.classList.add('disabled');
   bulkDownload.href = '#';
+  bulkDownload.textContent = 'Download Formatted Bulk File';
 
   startBulkEstimatedProgress();
 
@@ -978,6 +982,9 @@ bulkForm.addEventListener('submit', async (e) => {
     if (!data.ok) throw new Error(data.message || 'Bulk file generation failed');
 
     bulkDownload.href = data.download_url;
+    bulkDownload.textContent = data.summary && data.summary.zip_output
+      ? 'Download Bulk ZIP File'
+      : 'Download Formatted Bulk File';
     bulkDownload.classList.remove('disabled');
     stopBulkProgressSuccess(data.summary);
   } catch (err) {
