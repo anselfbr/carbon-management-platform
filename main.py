@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_RULE_MASTER_PRODUCT_LINE_SITE =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_MINIMAL_PRODUCT_LINE_SITE_INFER =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -180,8 +180,9 @@ def ensure_master_files() -> None:
 ensure_master_files()
 
 
+
 def production_site_from_line(product_line: object) -> str:
-    """Map Product Line to Production Site. Fallback only when Rule Master has no site."""
+    """Map Product Line to Production Site. Used only as fallback when Rule Master does not provide a site."""
     line = str(product_line or "").strip().upper()
     if line == "NB":
         return "常州廠(A2)-IPS"
@@ -191,13 +192,21 @@ def production_site_from_line(product_line: object) -> str:
 
 
 def resolve_production_site(product_line: object, production_site: object = "") -> str:
-    """Resolve Production Site from Rule Master output."""
+    """Resolve Production Site from Rule Master output.
+
+    Priority:
+    1. Production Site from rule_master.csv
+    2. Product Line fallback mapping
+    3. Legacy fallback for unclassified / non-NB / non-TP records
+    """
     site = str(production_site or "").strip()
     if site:
         return site
+
     fallback_site = production_site_from_line(product_line)
     if fallback_site:
         return fallback_site
+
     return "石碣廠-IPS"
 
 
@@ -443,6 +452,7 @@ def classify_by_rule_master(material_number: object, description: object, series
         product_line = str(row.get("Product Line", "") or "").strip()
         if not product_line and product_type.upper() != "WIP":
             product_line = product_type
+
         production_site = str(row.get("Production Site", "") or "").strip()
 
         return {
@@ -513,7 +523,11 @@ def classify(material_number: object, description: object, series: str, plant: o
 
 
 def infer_product_line_site_from_rules(description: object, series: str, masters: dict) -> tuple[str, str]:
-    """Infer Product Line / Production Site for WIP using series/description rules."""
+    """Infer Product Line / Production Site for WIP without changing Product Type.
+
+    WIP prefix rules identify semi-finished goods only. For Production Site,
+    infer the original product line from Series Prefix or Description Contains rules.
+    """
     description_u = str(description or "").upper().strip()
     series_u = str(series or "").upper().strip()
     rules: pd.DataFrame = masters["rules"]
@@ -522,10 +536,14 @@ def infer_product_line_site_from_rules(description: object, series: str, masters
         rule_type = str(row.get("Rule Type", "") or "").strip()
         key = str(row.get("Key", "") or "").strip()
         rt = normalize_rule_type(rule_type)
-        if rt not in ["series prefix", "product series prefix", "產品系列前綴", "系列前綴",
-                      "series exact", "product series exact", "產品系列", "產品系列完全符合",
-                      "description contains", "material description contains", "描述包含", "品名包含"]:
+
+        if rt not in [
+            "series prefix", "product series prefix", "產品系列前綴", "系列前綴",
+            "series exact", "product series exact", "產品系列", "產品系列完全符合",
+            "description contains", "material description contains", "描述包含", "品名包含",
+        ]:
             continue
+
         if not rule_matches(rule_type, key, "", description_u, series_u):
             continue
 
@@ -533,14 +551,15 @@ def infer_product_line_site_from_rules(description: object, series: str, masters
         product_type = str(row.get("Product Type", "") or "").strip()
         if not product_line and product_type.upper() != "WIP":
             product_line = product_type
+
         production_site = str(row.get("Production Site", "") or "").strip()
         if not production_site:
             production_site = production_site_from_line(product_line)
+
         if product_line or production_site:
             return product_line, production_site
 
     return "", ""
-
 
 def load_production_dataframe(paths: list[Path]) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
@@ -770,6 +789,7 @@ def process_files(
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
     out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
 
+    # Minimal change: do not alter Product Type. Only infer missing Product Line / Production Site.
     missing_line_mask = out["Product Line"].astype(str).str.strip().eq("")
     if missing_line_mask.any():
         inferred = out.loc[missing_line_mask].apply(
