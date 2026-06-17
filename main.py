@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_MINIMAL_PRODUCT_LINE_SITE_INFER =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_SERIES_PARSER_NOISE_FIX =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -67,6 +67,15 @@ SERIES_STOP_WORDS = [
     "ASSY", "ASSEMBLY", "MODULE", "TOUCHPAD", "TOUCH", "HAPTIC", "FORCE",
     "KEYBOARD", "MOUSE", "TRIBUTO", "LIGHTGRAY", "NOKEYCAP", "NOKEYCA",
     "NOKEY", "BLANK", "NEW", "EURO", "NOEURO",
+    "MITS", "US", "UK", "JP", "JIS", "105K", "106K", "110K",
+]
+
+# Product series extraction noise words:
+# these words describe process/material/assembly context and must not become Product series.
+SERIES_NOISE_WORDS = [
+    "SMTFOR", "SMT FOR", "SMT", "FOR", "ASSY", "ASSEMBLY", "MODULE",
+    "PCB", "ELECTRON", "ELECTRONIC", "PCBA", "BL", "PC", "PET", "PCPET",
+    "CH",
 ]
 
 REQUIRED_ALIASES = {
@@ -300,12 +309,60 @@ def get_series_prefixes(masters: Optional[dict] = None) -> list[str]:
     return sorted(set(prefixes), key=len, reverse=True)
 
 
-def trim_series_candidate(candidate: str) -> str:
-    """把候選字串在描述詞前截斷，例如 SP2B20XF0ASSYHAPTIC... -> SP2B20XF0。"""
-    candidate = re.sub(r"[^A-Z0-9].*$", "", str(candidate or "").upper())
-    cut_positions = [pos for word in SERIES_STOP_WORDS if (pos := candidate.find(word)) > 0]
+def _strip_leading_noise(text: str) -> str:
+    """Remove process/material words before Product series extraction."""
+    value = str(text or "").upper()
+    value = value.replace("&", " ").replace("+", " ")
+    value = re.sub(r"SMT\s*FOR", " ", value)
+    for word in SERIES_NOISE_WORDS:
+        value = re.sub(rf"\b{re.escape(word)}\b", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def _extract_series_core(candidate: str) -> str:
+    """Extract the core product series and remove trailing region/layout descriptors.
+
+    Examples:
+    - SN3103B02US105KBLANKNOKEYCANEW -> SN3103B02
+    - SP7D01B02MITS -> SP7D01B02
+    - SL6D00B00US -> SL6D00B00
+    - SCMC50B11XXX -> SCMC50B11
+    """
+    value = str(candidate or "").upper()
+    if not value:
+        return ""
+
+    # First cut at known description words.
+    cut_positions = [pos for word in SERIES_STOP_WORDS if (pos := value.find(word)) > 0]
+
+    # Country/layout descriptors often follow the real series immediately,
+    # e.g. SN3103B02US105K -> SN3103B02, SL6D00B00US -> SL6D00B00.
+    for token in ["US", "UK", "JP", "JIS"]:
+        pos = value.find(token)
+        if pos > 0:
+            cut_positions.append(pos)
+
     if cut_positions:
-        candidate = candidate[:min(cut_positions)]
+        value = value[:min(cut_positions)]
+
+    # Prefer the longest core ending with Letter + 2 digits.
+    # This covers common Lite-On series such as SN3103B02, SP7D01B02, SL6D00B00, SCMC50B11.
+    core_match = re.match(r"^([A-Z]{2,5}[A-Z0-9]*\d[A-Z]\d{2})", value)
+    if core_match:
+        return core_match.group(1)
+
+    return value
+
+
+def trim_series_candidate(candidate: str) -> str:
+    """Clean a candidate product series.
+
+    Avoid treating process/material words such as SMTFOR, ASSY, MODULE, PC+PET as part of Product series.
+    """
+    candidate = str(candidate or "").upper()
+    candidate = re.sub(r"[^A-Z0-9].*$", "", candidate)
+    candidate = _extract_series_core(candidate)
     return candidate
 
 
@@ -314,9 +371,11 @@ def _series_candidate_from_text(text: str, pattern: re.Pattern) -> Optional[str]
     if not text:
         return None
 
+    # Remove process/material words first, so "SMTfor SP7D01B02" becomes "SP7D01B02".
+    cleaned_text = _strip_leading_noise(str(text).upper())
+
     # 移除空白與非英數符號，讓 CHSN4396BL1 / AssyCH SN5372BL 都能被抓到。
-    # 標點符號的優先判斷在 parse_product_series() 的第一階段完成，這裡只處理單一區段。
-    compact_text = re.sub(r"[^A-Z0-9]+", "", str(text).upper())
+    compact_text = re.sub(r"[^A-Z0-9]+", "", cleaned_text)
 
     for match in pattern.finditer(compact_text):
         candidate = trim_series_candidate(match.group(0))
@@ -340,10 +399,11 @@ def parse_product_series(description: object, masters: Optional[dict] = None) ->
     4. 遇到 ASSY / TOUCHPAD / HAPTIC / MODULE / BLANK / NEW 等描述詞自動截斷。
 
     可處理：
-    - AssyCH SN5372BL,110K,JPBlank,nokeycapNEW -> SN5372BL
+    - Assy,PCB&Electron, SMTfor SP7D01B02,Mits -> SP7D01B02
+    - Assy,Module,BL,PC+PET,SL6D00B00,US -> SL6D00B00
+    - Assy,CH,SN3103B02US105KBlanknokeycaNEW -> SN3103B02
     - Assy,CHSN4396BL1,UK,106KBlank,nokeycaNEW -> SN4396BL1
     - SP2B20XF0AssyHapticForce Touchpad module -> SP2B20XF0
-    - SP2B20XF0Assy Touchpad TributoLightGray -> SP2B20XF0
     """
     if pd.isna(description):
         return "", "Material description 空白"
