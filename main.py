@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_ORDER_LEVEL_TOTAL_HOURS_FIX =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_ORDER_LEVEL_TOTAL_HOURS_ORDERKEY_FIX =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -755,7 +755,7 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
     if not paths:
         return pd.DataFrame(
             columns=[
-                "Order", "Plant", "Material Number",
+                "Order", "Order Merge Key", "Plant", "Material Number",
                 "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
             ]
         )
@@ -779,6 +779,7 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
         part = pd.DataFrame(index=df.index)
         part["Labor Source file"] = path.name
         part["Order"] = df[cols["order"]].astype(str).str.strip()
+        part["Order Merge Key"] = part["Order"].apply(normalize_order_key)
 
         if cols.get("plant") is not None:
             part["Plant"] = df[cols["plant"]].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
@@ -805,17 +806,18 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
     if not frames:
         return pd.DataFrame(
             columns=[
-                "Order", "Plant", "Material Number",
+                "Order", "Order Merge Key", "Plant", "Material Number",
                 "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
             ]
         )
 
     labor = pd.concat(frames, ignore_index=True)
-    labor = labor[(labor["Order"] != "") | (labor["Material Number"] != "")].copy()
+    labor = labor[(labor["Order Merge Key"].astype(str).str.strip() != "") | (labor["Material Number"] != "")].copy()
 
     return (
-        labor.groupby(["Order", "Plant", "Material Number"], dropna=False, as_index=False)
+        labor.groupby(["Order Merge Key", "Plant", "Material Number"], dropna=False, as_index=False)
         .agg({
+            "Order": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip()))),
             "Labor HR.Act": "sum",
             "FOH-Others.Act": "sum",
             "Selected Hours": "sum",
@@ -835,12 +837,15 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
         if col not in out.columns:
             out[col] = 0 if col != "Labor Source files" else ""
 
+    if "Order Merge Key" not in out.columns:
+        out["Order Merge Key"] = out["Order"].apply(normalize_order_key)
+
     if labor is None or labor.empty:
         return out
 
     order_labor = (
-        labor[labor["Order"].astype(str).str.strip() != ""]
-        .groupby(["Order"], dropna=False, as_index=False)
+        labor[labor["Order Merge Key"].astype(str).str.strip() != ""]
+        .groupby(["Order Merge Key"], dropna=False, as_index=False)
         .agg({
             "Labor HR.Act": "sum",
             "FOH-Others.Act": "sum",
@@ -850,7 +855,7 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
     )
 
     if not order_labor.empty:
-        out = out.merge(order_labor, on="Order", how="left", suffixes=("", "_labor"))
+        out = out.merge(order_labor, on="Order Merge Key", how="left", suffixes=("", "_labor"))
         for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"]:
             labor_col = f"{col}_labor"
             if labor_col in out.columns:
