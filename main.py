@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_WIP_TYPE_AND_BLANK_SITE_FIX =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_WIP_STRONG_RULES_SG_PRODUCT_FIX =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -586,11 +586,13 @@ def classify(material_number: object, description: object, series: str, plant: o
 
 
 def is_wip_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> bool:
-    """Detect WIP independently from Product Line / Production Site attribution.
+    """Detect strong WIP rules independently from Product Line / Production Site attribution.
 
-    Product Line may be inferred from SN/FU/SP/SCMC rules, but Product Type must remain WIP
-    when any WIP rule matches, e.g. 850-/851-/852-/H50-, SFG, ASSY, SCMC.
-    Default WIP is excluded here because it is only a fallback when no rule matches.
+    Important:
+    - Strong WIP rules are Material Number Prefix WIP rules, e.g. 850-/851-/852-/H50-/402xx-/403xx.
+    - SCMC is also treated as WIP when the rule itself explicitly defines Product Line / Production Site.
+    - Description Contains ASSY/SFG are auxiliary fallback rules only; they should NOT override
+      an already-classified product such as SG-96000-00A / SP3881.
     """
     material_number_u = str(material_number or "").upper().strip()
     description_u = str(description or "").upper().strip()
@@ -600,8 +602,9 @@ def is_wip_by_rule_master(material_number: object, description: object, series: 
     for _, row in rules.iterrows():
         rule_type = str(row.get("Rule Type", "") or "").strip()
         key = str(row.get("Key", "") or "").strip()
+        rt = normalize_rule_type(rule_type)
 
-        if normalize_rule_type(rule_type) in ["default", "預設"]:
+        if rt in ["default", "預設"]:
             continue
 
         product_type = str(row.get("Product Type", "") or "").strip().upper()
@@ -610,11 +613,20 @@ def is_wip_by_rule_master(material_number: object, description: object, series: 
         if product_type != "WIP" and is_wip not in ["Y", "YES", "TRUE", "1"]:
             continue
 
-        if rule_matches(rule_type, key, material_number_u, description_u, series_u):
-            return True
+        # Only material-number based WIP rules can force Product Type back to WIP.
+        if rt in ["material number prefix", "material prefix", "成品料號前綴", "料號前綴",
+                  "material number exact", "material exact", "成品料號", "成品料號完全符合"]:
+            if rule_matches(rule_type, key, material_number_u, description_u, series_u):
+                return True
+
+        # Keep explicit SCMC WIP rule as a special product-line-aware WIP rule.
+        if rt in ["series prefix", "product series prefix", "產品系列前綴", "系列前綴"] and str(key).upper().strip() == "SCMC":
+            if rule_matches(rule_type, key, material_number_u, description_u, series_u):
+                return True
+
+        # Description Contains ASSY / SFG are no longer strong WIP override rules.
 
     return False
-
 
 def infer_product_line_site_from_rules(description: object, series: str, masters: dict) -> tuple[str, str]:
     """Infer Product Line / Production Site for WIP without changing Product Type.
