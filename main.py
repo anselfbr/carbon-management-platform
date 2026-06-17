@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V1_ORDER_LEVEL_TOTAL_HOURS_ORDERKEY_FIX =====")
+print("===== CMP MAIN VERSION: GOLDEN_V1_UPLOADED_MAIN_ORDER_HOURS_FIX =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -101,13 +101,35 @@ VALID_LABOR_MODES = {"labor_hr", "foh", "both"}
 FINISHED_PRODUCT_PREFIXES = ["SG-"]
 
 def normalize_order_key(value: object) -> str:
-    """Normalize SAP order number for matching quantity orders with working-hour orders."""
+    """Normalize SAP order number for matching production orders with working-hour orders.
+
+    Handles SAP/Excel differences:
+    - 000307544123 vs 307544123
+    - 307544123.0 vs 307544123
+    - spaces, hyphens, slashes, and other separators
+    """
     if pd.isna(value):
         return ""
-    text = str(value).strip()
-    text = re.sub(r"\.0$", "", text)
+
+    text = str(value).strip().upper()
+    text = re.sub(r"\.0+$", "", text)
     text = re.sub(r"\s+", "", text)
+    text = re.sub(r"[^A-Z0-9]", "", text)
+
+    if text.isdigit():
+        text = text.lstrip("0") or "0"
+
     return text
+
+
+def parse_labor_number(series: pd.Series) -> pd.Series:
+    """Parse labor-hour values safely from Excel text."""
+    text = series.astype(str).str.strip()
+    text = text.str.replace(",", "", regex=False)
+    text = text.str.replace("，", "", regex=False)
+    text = text.str.replace("－", "-", regex=False)
+    text = text.replace({"": "0", "nan": "0", "None": "0", "-": "0"})
+    return pd.to_numeric(text, errors="coerce").fillna(0)
 
 
 def normalize_labor_mode(value: object) -> str:
@@ -791,8 +813,8 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
         else:
             part["Material Number"] = ""
 
-        part["Labor HR.Act"] = pd.to_numeric(df[cols["labor_hr"]], errors="coerce").fillna(0)
-        part["FOH-Others.Act"] = pd.to_numeric(df[cols["foh_others"]], errors="coerce").fillna(0)
+        part["Labor HR.Act"] = parse_labor_number(df[cols["labor_hr"]])
+        part["FOH-Others.Act"] = parse_labor_number(df[cols["foh_others"]])
 
         # Total working hours is always Labor HR.Act + FOH-Others.Act.
         # If only one field has hours, the total naturally equals that field.
@@ -828,9 +850,10 @@ def load_labor_dataframe(paths: list[Path], labor_mode: str = "both") -> pd.Data
 
 
 def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
-    """Attach labor hours to production output.
-    Primary key: Order
-    Fallback key: Plant + Material Number
+    """Attach labor hours to production output by Order only.
+
+    工單明細_已分類 must reflect labor hours matched by each Order.
+    No Plant + Material Number fallback is used here.
     """
     out = out.copy()
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"]:
@@ -841,7 +864,14 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
         out["Order Merge Key"] = out["Order"].apply(normalize_order_key)
 
     if labor is None or labor.empty:
+        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+        out["Labor Source files"] = out["Labor Source files"].fillna("").astype(str)
         return out
+
+    if "Order Merge Key" not in labor.columns:
+        labor = labor.copy()
+        labor["Order Merge Key"] = labor["Order"].apply(normalize_order_key)
 
     order_labor = (
         labor[labor["Order Merge Key"].astype(str).str.strip() != ""]
@@ -862,18 +892,14 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
                 if col == "Labor Source files":
                     out[col] = out[labor_col].fillna("").astype(str)
                 else:
-                    out[col] = pd.to_numeric(out[labor_col], errors="coerce")
+                    out[col] = pd.to_numeric(out[labor_col], errors="coerce").fillna(0)
                 out = out.drop(columns=[labor_col])
 
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
 
-    # Do not fallback by Plant + Material Number here.
-    # 工單明細_已分類 must reflect labor hours matched by each Order only.
-    # If an Order has no matching labor record, its hours remain 0.
-
-    for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
-        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
+    # Ensure total is always the row-level sum from the matched Order.
+    out["Selected Hours"] = out["Labor HR.Act"] + out["FOH-Others.Act"]
     out["Labor Source files"] = out["Labor Source files"].fillna("").astype(str)
     return out
 
@@ -892,7 +918,6 @@ def process_files(
 
     # Final safety guard:
     # Total working hours is always Labor HR.Act + FOH-Others.Act at Order level.
-    # The labor_mode value is kept only for UI/backward compatibility, not for recalculating totals.
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
