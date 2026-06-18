@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V5_LABOR_MATCH_DIAGNOSTICS =====")
+print("===== CMP MAIN VERSION: GOLDEN_V6_REMOVE_ZERO_HOUR_MATERIAL_FALLBACK =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -898,31 +898,17 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
 
-    fallback_mask = out["Selected Hours"].eq(0)
-    pm_labor = (
-        labor[(labor["Plant"].astype(str).str.strip() != "") & (labor["Material Number"].astype(str).str.strip() != "")]
-        .groupby(["Plant", "Material Number"], dropna=False, as_index=False)
-        .agg({
-            "Labor HR.Act": "sum",
-            "FOH-Others.Act": "sum",
-            "Selected Hours": "sum",
-            "Labor Source files": lambda s: "; ".join(sorted(set(str(x) for x in s if str(x).strip())))
-        })
-    )
-
-    if fallback_mask.any() and not pm_labor.empty:
-        fallback = out.loc[fallback_mask, ["Plant", "Material Number"]].merge(
-            pm_labor,
-            on=["Plant", "Material Number"],
-            how="left",
-        )
-        for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
-            out.loc[fallback_mask, col] = pd.to_numeric(fallback[col], errors="coerce").fillna(0).to_numpy()
-        out.loc[fallback_mask, "Labor Source files"] = fallback["Labor Source files"].fillna("").astype(str).to_numpy()
-
     for col in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0)
     out["Labor Source files"] = out["Labor Source files"].fillna("").astype(str)
+
+    if "Matched Labor Order Number" not in out.columns:
+        out["Matched Labor Order Number"] = ""
+    out["Matched Labor Order Number"] = out["Matched Labor Order Number"].fillna("").astype(str)
+    out["Labor Match Status"] = out["Matched Labor Order Number"].apply(
+        lambda x: "Matched" if str(x).strip() else "Not matched"
+    )
+
     return out
 
 def process_files(
