@@ -200,6 +200,7 @@ def generate_product_activity_bulk_file(
     products_row = DATA_START_ROW
     excluded_wip_rows = 0
     skipped_blank_rows = 0
+    excluded_zero_labor_hour_rows = 0
 
     for _, row in df.iterrows():
         product_name = row.get(material_col)
@@ -221,6 +222,13 @@ def generate_product_activity_bulk_file(
         if labor_hours_col:
             labor_hours = pd.to_numeric(labor_hours, errors="coerce")
             labor_hours = 0 if pd.isna(labor_hours) else float(labor_hours)
+
+            # 年度總工時等於 0 的產品不寫入 Bulk。
+            # 0.01、0.001 等任何非 0 小數仍需保留並寫入。
+            if labor_hours == 0:
+                excluded_zero_labor_hour_rows += 1
+                continue
+
         product_name = str(product_name).strip()
         product_description = _safe_text(row.get(material_desc_col)) if material_desc_col else ""
 
@@ -266,6 +274,7 @@ def generate_product_activity_bulk_file(
         "product_rows": int(products_row - DATA_START_ROW),
         "excluded_wip_rows": int(excluded_wip_rows),
         "skipped_blank_rows": int(skipped_blank_rows),
+        "excluded_zero_labor_hour_rows": int(excluded_zero_labor_hour_rows),
         "output_filename": output_path.name,
         "template_copy_mode": True,
         "product_description_from_material_description": True,
