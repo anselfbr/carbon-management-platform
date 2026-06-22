@@ -14,12 +14,12 @@
 20,Series Prefix,SN,NB,NB,常州廠(A2)-IPS,,NB_3RD_CHAR,N,Y
 21,Series Prefix,FU,NB,NB,常州廠(A2)-IPS,,NB_3RD_CHAR,N,Y
 22,Series Prefix,SP,TP,TP,常州廠(A9)-IPS,,NB_3RD_CHAR,N,Y
-23,Series Prefix,SM,DT Mouse,,,,DT_3_4_CHAR,N,Y
-24,Series Prefix,SA,DT Accessory,,,,DT_3_4_CHAR,N,Y
-25,Description Contains,RECEIVER,DT Dongle,,,,,N,Y
-26,Series Prefix,SK,DT Keyboard,,,,DT_3_4_CHAR,N,Y
-27,Series Prefix,SB,DT Keyboard+Mouse,,,,DT_3_4_CHAR,N,Y
-28,Series Prefix,ST,DT Tablet Keyboard,,,,DT_3_4_CHAR,N,Y
+23,Series Prefix,SM,DT Mouse,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
+24,Series Prefix,SA,DT Accessory,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
+25,Series Prefix,SD,DT Dongle,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
+26,Series Prefix,SK,DT Keyboard,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
+27,Series Prefix,SB,DT Keyboard+Mouse,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
+28,Series Prefix,ST,DT Tablet Keyboard,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
 29,Description Contains,TOUCH PAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
 30,Description Contains,TOUCHPAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
 31,Series Prefix,SCMC,WIP,TP,常州廠(A9)-IPS,,,Y,Y
