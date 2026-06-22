@@ -20,8 +20,9 @@
 26,Series Prefix,SK,DT Keyboard,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
 27,Series Prefix,SB,DT Keyboard+Mouse,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
 28,Series Prefix,ST,DT Tablet Keyboard,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
-29,Description Contains,TOUCH PAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
-30,Description Contains,TOUCHPAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
-31,Series Prefix,SCMC,WIP,TP,常州廠(A9)-IPS,,,Y,Y
+29,Series Prefix,SSE,Smart Pen,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
+30,Description Contains,TOUCH PAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
+31,Description Contains,TOUCHPAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
+32,Series Prefix,SCMC,WIP,TP,常州廠(A9)-IPS,,,Y,Y
 90,Description Contains,ASSY,WIP,,,,,Y,Y
 999,Default,*,WIP,,,,,Y,Y
