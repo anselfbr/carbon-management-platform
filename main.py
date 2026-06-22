@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V6_REMOVE_ZERO_HOUR_MATERIAL_FALLBACK =====")
+print("===== CMP MAIN VERSION: GOLDEN_V8_RULE_MASTER_ONLY_CLASSIFICATION =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -207,35 +207,20 @@ ensure_master_files()
 
 
 def production_site_from_line(product_line: object) -> str:
-    """Map Product Line to Production Site. Used only as fallback when Rule Master does not provide a site."""
-    line = str(product_line or "").strip().upper()
-    if line == "NB":
-        return "常州廠(A2)-IPS"
-    if line == "TP":
-        return "常州廠(A9)-IPS"
-    return ""
+    """Rule Master only mode.
 
+    Production Site must come from rule_master.csv.
+    This function is kept only for backward compatibility and never infers a site.
+    """
+    return ""
 
 def resolve_production_site(product_line: object, production_site: object = "") -> str:
-    """Resolve Production Site from Rule Master output.
+    """Rule Master only mode.
 
-    Priority:
-    1. Production Site from rule_master.csv
-    2. Product Line fallback mapping
-    3. Legacy fallback for unclassified / non-NB / non-TP records
+    Production Site is controlled by rule_master.csv only.
+    If rule_master.csv leaves Production Site blank, keep it blank.
     """
-    site = str(production_site or "").strip()
-    if site:
-        return site
-
-    fallback_site = production_site_from_line(product_line)
-    if fallback_site:
-        return fallback_site
-
-    # Do not assign a default site when Product Line cannot be determined.
-    # This avoids unresolved Product Series being incorrectly assigned to 石碣廠-IPS.
-    return ""
-
+    return str(production_site or "").strip()
 
 def read_csv_flexible(path: Path, columns: Optional[list[str]] = None) -> pd.DataFrame:
     if not path.exists():
@@ -527,10 +512,10 @@ def classify_by_rule_master(material_number: object, description: object, series
         if not is_wip:
             is_wip = "Y" if product_type.upper() == "WIP" else "N"
 
+        # Rule Master only mode:
+        # Product Line and Production Site must come from rule_master.csv.
+        # Do not auto-fill Product Line from Product Type.
         product_line = str(row.get("Product Line", "") or "").strip()
-        if not product_line and product_type.upper() != "WIP":
-            product_line = product_type
-
         production_site = str(row.get("Production Site", "") or "").strip()
 
         return {
@@ -563,11 +548,14 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
     product_type = str(row.get("產品類型", "") or "").strip()
     code = str(row.get("客戶代碼", "") or "").strip()
     customer = str(row.get("客戶名稱", "") or "").strip()
-    product_line = product_type if product_type.upper() != "WIP" else ""
+    # Rule Master only mode:
+    # Product Series Master may classify Product Type/customer only.
+    # Product Line / Production Site are not inferred here.
+    product_line = ""
     return {
         "產品類型": product_type,
         "Product Line": product_line,
-        "Production Site": production_site_from_line(product_line),
+        "Production Site": "",
         "客戶代碼": code,
         "客戶名稱": customer,
         "判斷來源": "Product Series Master",
@@ -649,10 +637,11 @@ def is_wip_by_rule_master(material_number: object, description: object, series: 
 
 
 def infer_product_type_line_site_from_series_rules(description: object, series: str, masters: dict) -> tuple[str, str, str]:
-    """Infer Product Type / Product Line / Production Site from series or description rules.
+    """Infer finished-product classification from rule_master.csv only.
 
-    Used for finished-product whitelist material numbers such as SG-:
-    SG- itself only means non-WIP; SN/SP/FU/etc. from Product Series decides NB/TP and site.
+    SG- only means non-WIP. Product Type / Product Line / Production Site
+    must still come from matched rule_master.csv fields.
+    No fallback from Product Type to Product Line, and no fallback from Product Line to Production Site.
     """
     description_u = str(description or "").upper().strip()
     series_u = str(series or "").upper().strip()
@@ -673,28 +662,21 @@ def infer_product_type_line_site_from_series_rules(description: object, series: 
 
         product_type = str(row.get("Product Type", "") or "").strip()
         if product_type.upper() == "WIP":
-            # A finished-product whitelist item should not become WIP because of SCMC/ASSY/SFG style rules.
             continue
 
         product_line = str(row.get("Product Line", "") or "").strip()
-        if not product_line:
-            product_line = product_type
-
         production_site = str(row.get("Production Site", "") or "").strip()
-        if not production_site:
-            production_site = production_site_from_line(product_line)
 
         if product_type or product_line or production_site:
             return product_type, product_line, production_site
 
     return "", "", ""
 
-
 def infer_product_line_site_from_rules(description: object, series: str, masters: dict) -> tuple[str, str]:
-    """Infer Product Line / Production Site for WIP without changing Product Type.
+    """Infer Product Line / Production Site for WIP from rule_master.csv only.
 
-    WIP prefix rules identify semi-finished goods only. For Production Site,
-    infer the original product line from Series Prefix or Description Contains rules.
+    WIP Product Type remains WIP. Product Line and Production Site may be filled
+    only when the matched rule_master.csv row explicitly provides them.
     """
     description_u = str(description or "").upper().strip()
     series_u = str(series or "").upper().strip()
@@ -716,13 +698,7 @@ def infer_product_line_site_from_rules(description: object, series: str, masters
             continue
 
         product_line = str(row.get("Product Line", "") or "").strip()
-        product_type = str(row.get("Product Type", "") or "").strip()
-        if not product_line and product_type.upper() != "WIP":
-            product_line = product_type
-
         production_site = str(row.get("Production Site", "") or "").strip()
-        if not production_site:
-            production_site = production_site_from_line(product_line)
 
         if product_line or production_site:
             return product_line, production_site
@@ -959,7 +935,8 @@ def process_files(
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
     out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
 
-    # Minimal change: do not alter Product Type. Only infer missing Product Line / Production Site.
+    # Rule Master only mode:
+    # Missing Product Line / Production Site may be filled only from explicit rule_master.csv rows.
     missing_line_mask = out["Product Line"].astype(str).str.strip().eq("")
     if missing_line_mask.any():
         inferred = out.loc[missing_line_mask].apply(
