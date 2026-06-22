@@ -48,6 +48,19 @@ def _find_optional_column(df: pd.DataFrame, candidates: list[str]) -> str | None
     except ValueError:
         return None
 
+def _normalize_header(value: Any) -> str:
+    return str(value or "").strip().replace("\n", " ").replace("\r", " ").lower()
+
+
+def _find_excel_column(ws, candidates: list[str], header_rows: tuple[int, ...] = (1, 2)) -> int | None:
+    """Find a column in an Excel template by row 1 system key or row 2 display header."""
+    candidate_keys = {_normalize_header(c) for c in candidates if str(c or "").strip()}
+    for row_idx in header_rows:
+        for col_idx in range(1, ws.max_column + 1):
+            if _normalize_header(ws.cell(row_idx, col_idx).value) in candidate_keys:
+                return col_idx
+    return None
+
 
 def _is_wip(product_type: Any, is_wip: Any = None) -> bool:
     product_type_text = str(product_type or "").strip().upper()
@@ -127,6 +140,10 @@ def generate_product_activity_bulk_file(
     material_desc_col = _find_optional_column(df, ["Material description", "Material Description", "產品描述", "品名"])
     product_type_col = _find_column(df, ["產品類型", "Product Type"])
     qty_col = _find_column(df, ["年度生產量", "Annual Quantity", "Delivered quantity"])
+    labor_hours_col = _find_optional_column(
+        df,
+        ["年度總工時", "Total working hours", "Selected Hours", "Total Hours", "Working Hours"],
+    )
 
     is_wip_col = None
     for candidate in ["Is_WIP", "Is WIP", "WIP"]:
@@ -148,9 +165,22 @@ def generate_product_activity_bulk_file(
     activity_ws = wb[ACTIVITY_SHEET_NAME]
     products_ws = wb[PRODUCTS_SHEET_NAME]
 
+    # Optional working-hours target column in bulk template.
+    # If the template has no matching header, Step2 keeps current behavior and does not write hours.
+    activity_labor_hours_col = _find_excel_column(
+        activity_ws,
+        [
+            "年度總工時", "Total working hours", "Total Hours", "Working Hours",
+            "Labor Hours", "生產工時", "工時", "Hours"
+        ],
+    )
+
     # 只清除要寫入的欄位內容，不碰格式/驗證/公式
-    # Activity Data: A:H
-    _clear_target_cells(activity_ws, DATA_START_ROW, columns=[1, 2, 3, 4, 5, 6, 7, 8])
+    # Activity Data: A:H + optional working-hours column
+    activity_clear_cols = [1, 2, 3, 4, 5, 6, 7, 8]
+    if activity_labor_hours_col and activity_labor_hours_col not in activity_clear_cols:
+        activity_clear_cols.append(activity_labor_hours_col)
+    _clear_target_cells(activity_ws, DATA_START_ROW, columns=activity_clear_cols)
     # Products: A, C, D, F
     # C 欄 Product Description 新增由 Step1 Output 的 Material Description 帶入
     _clear_target_cells(products_ws, DATA_START_ROW, columns=[1, 3, 4, 6])
@@ -176,6 +206,10 @@ def generate_product_activity_bulk_file(
 
         year = _as_year(row.get(year_col))
         qty = row.get(qty_col)
+        labor_hours = row.get(labor_hours_col) if labor_hours_col else None
+        if labor_hours_col:
+            labor_hours = pd.to_numeric(labor_hours, errors="coerce")
+            labor_hours = 0 if pd.isna(labor_hours) else float(labor_hours)
         product_name = str(product_name).strip()
         product_description = _safe_text(row.get(material_desc_col)) if material_desc_col else ""
 
@@ -192,6 +226,9 @@ def generate_product_activity_bulk_file(
         activity_ws.cell(activity_row, 6).value = qty
         activity_ws.cell(activity_row, 7).value = "SAP"
         activity_ws.cell(activity_row, 8).value = None
+
+        if activity_labor_hours_col and labor_hours_col:
+            activity_ws.cell(activity_row, activity_labor_hours_col).value = labor_hours
 
         activity_ws.cell(activity_row, 2).number_format = "yyyy/mm/dd"
         activity_ws.cell(activity_row, 3).number_format = "yyyy/mm/dd"
@@ -218,6 +255,9 @@ def generate_product_activity_bulk_file(
         "output_filename": output_path.name,
         "template_copy_mode": True,
         "product_description_from_material_description": True,
+        "labor_hours_from_step1": bool(labor_hours_col),
+        "labor_hours_written_to_bulk": bool(labor_hours_col and activity_labor_hours_col),
+        "labor_hours_template_column": int(activity_labor_hours_col) if activity_labor_hours_col else None,
     }
 
 
