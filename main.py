@@ -23,7 +23,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V8_RULE_MASTER_ONLY_CLASSIFICATION =====")
+print("===== CMP MAIN VERSION: GOLDEN_V9_PLANT_RULE_MASTER =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -34,6 +34,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 #    - Material Number Prefix
 #    - Description Contains
 #    - Series Prefix
+#    - Plant Exact / Plant Prefix
 #    - Default
 # 2. 若 rule_master 未命中，再查 product_series_master.csv
 # 3. 若都未命中，寫 WIP
@@ -465,13 +466,18 @@ def normalize_rule_type(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
 
 
-def rule_matches(rule_type: str, key: str, material_number: str, description: str, series: str) -> bool:
+def rule_matches(rule_type: str, key: str, material_number: str, description: str, series: str, plant: str = "") -> bool:
     rt = normalize_rule_type(rule_type)
     key_u = str(key or "").upper().strip()
+    plant_u = str(plant or "").upper().strip().replace(".0", "")
     if not key_u:
         return False
 
     # 支援英文與常見中文寫法
+    if rt in ["plant exact", "plant", "plant code exact", "廠別", "廠別完全符合", "廠區", "廠區完全符合"]:
+        return plant_u == key_u
+    if rt in ["plant prefix", "plant code prefix", "廠別前綴", "廠區前綴"]:
+        return plant_u.startswith(key_u)
     if rt in ["material number exact", "material exact", "成品料號", "成品料號完全符合"]:
         return material_number == key_u
     if rt in ["material number prefix", "material prefix", "成品料號前綴", "料號前綴"]:
@@ -485,6 +491,42 @@ def rule_matches(rule_type: str, key: str, material_number: str, description: st
     if rt in ["default", "預設"]:
         return key_u in ["*", "DEFAULT", ""]
     return False
+
+
+def resolve_plant_production_site_from_rule_master(plant: object, masters: dict) -> tuple[str, str]:
+    """Resolve Production Site by Plant rules in rule_master.csv.
+
+    Supported Rule Type:
+    - Plant Exact
+    - Plant
+    - Plant Prefix
+
+    This function only resolves Production Site. It does not change Product Type or Product Line.
+    """
+    plant_u = str(plant or "").upper().strip().replace(".0", "")
+    if not plant_u:
+        return "", ""
+
+    rules: pd.DataFrame = masters["rules"]
+    for _, row in rules.iterrows():
+        rule_type = str(row.get("Rule Type", "") or "").strip()
+        key = str(row.get("Key", "") or "").strip()
+        rt = normalize_rule_type(rule_type)
+
+        if rt not in [
+            "plant exact", "plant", "plant code exact", "廠別", "廠別完全符合", "廠區", "廠區完全符合",
+            "plant prefix", "plant code prefix", "廠別前綴", "廠區前綴",
+        ]:
+            continue
+
+        if not rule_matches(rule_type, key, "", "", "", plant_u):
+            continue
+
+        production_site = str(row.get("Production Site", "") or "").strip()
+        if production_site:
+            return production_site, f"{rule_type}={key}"
+
+    return "", ""
 
 
 def classify_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> dict:
@@ -990,6 +1032,22 @@ def process_files(
         out.loc[finished_product_mask, "Production Site"] = out.loc[finished_product_mask].apply(
             lambda r: resolve_production_site(r["Product Line"], r["Production Site"]),
             axis=1,
+        )
+
+    # Plant Rule Master override:
+    # Production Site may be controlled directly by Plant Exact / Plant Prefix rules in rule_master.csv.
+    # This only updates Production Site and does not change Product Type / Product Line / WIP status.
+    plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
+    plant_sites = plant_site_rules.apply(lambda x: x[0])
+    plant_rule_hits = plant_site_rules.apply(lambda x: x[1])
+
+    plant_site_mask = plant_sites.astype(str).str.strip().ne("")
+    if plant_site_mask.any():
+        out.loc[plant_site_mask, "Production Site"] = plant_sites.loc[plant_site_mask].to_numpy()
+        out.loc[plant_site_mask, "命中規則"] = out.loc[plant_site_mask, "命中規則"].astype(str) + " | " + plant_rule_hits.loc[plant_site_mask].astype(str)
+        out.loc[plant_site_mask, "判斷來源"] = out.loc[plant_site_mask, "判斷來源"].astype(str).where(
+            out.loc[plant_site_mask, "判斷來源"].astype(str).str.strip().ne(""),
+            "Rule Master"
         )
 
     group_cols = [
