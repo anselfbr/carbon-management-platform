@@ -14,15 +14,19 @@
 20,Series Prefix,SN,NB,NB,常州廠(A2)-IPS,,NB_3RD_CHAR,N,Y
 21,Series Prefix,FU,NB,NB,常州廠(A2)-IPS,,NB_3RD_CHAR,N,Y
 22,Series Prefix,SP,TP,TP,常州廠(A9)-IPS,,NB_3RD_CHAR,N,Y
-23,Series Prefix,SM,DT Mouse,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
-24,Series Prefix,SA,DT Accessory,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
-25,Series Prefix,SD,DT Dongle,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
-26,Series Prefix,SK,DT Keyboard,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
-27,Series Prefix,SB,DT Keyboard+Mouse,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
-28,Series Prefix,ST,DT Tablet Keyboard,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
-29,Series Prefix,SSE,Smart Pen,DT,石碣廠-IPS,,DT_3_4_CHAR,N,Y
+23,Series Prefix,SM,DT Mouse,DT,,,DT_3_4_CHAR,N,Y
+24,Series Prefix,SA,DT Accessory,DT,,,DT_3_4_CHAR,N,Y
+25,Series Prefix,SD,DT Dongle,DT,,,DT_3_4_CHAR,N,Y
+26,Series Prefix,SK,DT Keyboard,DT,,,DT_3_4_CHAR,N,Y
+27,Series Prefix,SB,DT Keyboard+Mouse,DT,,,DT_3_4_CHAR,N,Y
+28,Series Prefix,ST,DT Tablet Keyboard,DT,,,DT_3_4_CHAR,N,Y
+29,Series Prefix,SSE,Smart Pen,DT,,,DT_3_4_CHAR,N,Y
 30,Description Contains,TOUCH PAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
 31,Description Contains,TOUCHPAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
 32,Series Prefix,SCMC,WIP,TP,常州廠(A9)-IPS,,,Y,Y
+40,Plant Exact,3760,,,石碣廠-IPS,,,,
+41,Plant Exact,3775,,,石碣廠-IPS,,,,
+42,Plant Exact,4070,,,泰國廠-IPS,,,,
+43,Plant Exact,4270,,,越南廠-IPS,,,,
 90,Description Contains,ASSY,WIP,,,,,Y,Y
 999,Default,*,WIP,,,,,Y,Y
