@@ -1672,3 +1672,68 @@ select:focus {
   border-color: rgba(10,110,209,.45);
   box-shadow: 0 0 0 4px rgba(10,110,209,.08);
 }
+
+
+/* Rule Management header and guide refinement */
+#rule-management .card {
+  overflow-wrap: anywhere;
+}
+
+.rule-guide-card h2 {
+  margin-top: 18px;
+}
+
+.rule-guide-card h2:first-child {
+  margin-top: 0;
+}
+
+.rule-guide-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  margin: 12px 0 18px;
+}
+
+.rule-guide-item {
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+
+.rule-guide-item b {
+  display: block;
+  color: var(--navy);
+  font-size: 14px;
+  margin-bottom: 5px;
+}
+
+.rule-guide-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+#rule-management .rule-log {
+  margin-top: 18px;
+}
+
+.content:not(.is-dashboard) .topbar .lead {
+  max-width: 980px;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.content:not(.is-dashboard) .topbar > div:first-child {
+  min-width: 0;
+  max-width: calc(100% - 260px);
+  z-index: 1;
+}
+
+@media (max-width: 1380px) {
+  .content:not(.is-dashboard) .topbar > div:first-child {
+    max-width: 100%;
+  }
+}

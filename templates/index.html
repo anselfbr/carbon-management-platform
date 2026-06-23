@@ -432,17 +432,44 @@
             </div>
           </section>
 
-          <section class="card insight-card">
+          <section class="card insight-card rule-guide-card">
             <h2>Rule Master Fields</h2>
-            <p>Priority、Rule Type、Key、Product Type、Customer、Customer Code Logic、Is_WIP、Enabled</p>
+            <p>Priority、Rule Type、Key、Product Type、Product Line、Production Site、Customer、Customer Code Logic、Is_WIP、Enabled</p>
 
-            <h2>Default Rules</h2>
+            <h2>Rule Type Guide</h2>
+            <div class="rule-guide-grid">
+              <div class="rule-guide-item">
+                <b>Plant Exact</b>
+                <span>Plant 完全符合，例如：3760 → 石碣廠-IPS</span>
+              </div>
+              <div class="rule-guide-item">
+                <b>Material Number Exact</b>
+                <span>完整料號比對，例如：SG-96000-00A</span>
+              </div>
+              <div class="rule-guide-item">
+                <b>Material Number Prefix</b>
+                <span>料號前綴比對，例如：850-、851-、852-</span>
+              </div>
+              <div class="rule-guide-item">
+                <b>Series Exact</b>
+                <span>完整產品系列比對，例如：SN3103B02</span>
+              </div>
+              <div class="rule-guide-item">
+                <b>Series Prefix</b>
+                <span>產品系列前綴比對，例如：SN、SP、FU、SCMC</span>
+              </div>
+              <div class="rule-guide-item">
+                <b>Description Contains</b>
+                <span>Material description 包含關鍵字，例如：TOUCHPAD MODULE、ASSY</span>
+              </div>
+            </div>
+
+            <h2>Maintenance Principles</h2>
             <ul>
-              <li>851- / 852- prefix → WIP</li>
-              <li>Material description contains Touch pad module → TP</li>
-              <li>SCMC prefix → default WIP, can be overridden by description rules</li>
-              <li>Material description contains ASSY → WIP</li>
-              <li>SN → NB；SP → TP；SM → DT Mouse；SK → DT Keyboard</li>
+              <li>Priority 數字越小，優先度越高。</li>
+              <li>Product Line 與 Production Site 僅由 Rule Master 控制。</li>
+              <li>新增或調整分類規則時，只需修改 rule_master.csv，不需修改 main.py。</li>
+              <li>若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。</li>
             </ul>
 
             <pre id="ruleLog" class="rule-log">Rule Management is ready.</pre>
@@ -527,7 +554,7 @@ const pageMessages = {
   },
   "rule-management": {
     title: "Rule Management",
-    lead: "Maintain Product Data Preparation rules, including Rule Master and Product Series Master."
+    lead: "Maintain Product Data Preparation Rules, including Rule Master and Product Series Master."
   }
 };
 
