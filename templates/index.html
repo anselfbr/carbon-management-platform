@@ -5,136 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Carbon Management Platform | Product Data Preparation</title>
   <link rel="stylesheet" href="/static/style.css" />
-
-  <style>
-    .rule-import-status {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      border-radius: 16px;
-      padding: 14px 16px;
-      margin: 16px 0 12px;
-      background: #f8fafc;
-    }
-    .rule-import-status-icon {
-      width: 22px;
-      height: 22px;
-      border-radius: 999px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 10px;
-      margin-top: 2px;
-      color: #64748b;
-      background: #e2e8f0;
-    }
-    .rule-import-status b {
-      display: block;
-      color: var(--navy, #0f2f4d);
-      margin-bottom: 4px;
-    }
-    .rule-import-status p {
-      margin: 0;
-      color: var(--muted, #64748b);
-      line-height: 1.5;
-    }
-    .rule-import-status.running {
-      border-color: rgba(14, 116, 144, 0.35);
-      background: #ecfeff;
-    }
-    .rule-import-status.running .rule-import-status-icon {
-      color: white;
-      background: #0891b2;
-      animation: rulePulse 1s infinite;
-    }
-    .rule-import-status.success {
-      border-color: rgba(22, 163, 74, 0.35);
-      background: #f0fdf4;
-    }
-    .rule-import-status.success .rule-import-status-icon {
-      color: white;
-      background: #16a34a;
-    }
-    .rule-import-status.error {
-      border-color: rgba(220, 38, 38, 0.35);
-      background: #fef2f2;
-    }
-    .rule-import-status.error .rule-import-status-icon {
-      color: white;
-      background: #dc2626;
-    }
-    @keyframes rulePulse {
-      0% { transform: scale(1); opacity: 0.85; }
-      50% { transform: scale(1.12); opacity: 1; }
-      100% { transform: scale(1); opacity: 0.85; }
-    }
-    .rule-import-meta {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      margin: 10px 0 18px;
-    }
-    .rule-import-meta .metric {
-      padding: 12px 14px;
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      border-radius: 14px;
-      background: #ffffff;
-    }
-    .rule-import-meta .metric b {
-      display: block;
-      color: var(--muted, #64748b);
-      font-size: 12px;
-      margin-bottom: 4px;
-    }
-    .rule-import-meta .metric span {
-      display: block;
-      color: var(--navy, #0f2f4d);
-      font-weight: 700;
-    }
-    .toast-container {
-      position: fixed;
-      right: 24px;
-      top: 24px;
-      z-index: 9999;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      pointer-events: none;
-    }
-    .toast {
-      min-width: 280px;
-      max-width: 380px;
-      border-radius: 16px;
-      padding: 14px 16px;
-      box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
-      background: white;
-      border: 1px solid rgba(148, 163, 184, 0.28);
-      color: #0f172a;
-      animation: toastIn 0.22s ease-out;
-    }
-    .toast.success { border-left: 5px solid #16a34a; }
-    .toast.error { border-left: 5px solid #dc2626; }
-    .toast b {
-      display: block;
-      margin-bottom: 4px;
-    }
-    .toast p {
-      margin: 0;
-      color: #64748b;
-      line-height: 1.45;
-    }
-    @keyframes toastIn {
-      from { transform: translateY(-8px); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
-    }
-    @media (max-width: 900px) {
-      .rule-import-meta { grid-template-columns: 1fr; }
-      .toast-container { left: 16px; right: 16px; top: 16px; }
-      .toast { min-width: 0; max-width: none; }
-    }
-  </style>
-
 </head>
 <body>
   <div class="app-shell sidebar-expanded">
@@ -275,6 +145,13 @@
             </div>
 
             <form id="form" class="form-panel">
+              <label>Business Unit Rule Set</label>
+              <select id="ruleSet" name="rule_set">
+                <option value="IPS" selected>IPS</option>
+                <option value="AE">AE</option>
+                <option value="PC_CE">PC&amp;CE</option>
+              </select>
+
               <label>Production Quantity Work Orders</label>
               <input id="files" name="files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
 
@@ -547,30 +424,14 @@
               product series mapping, WIP judgment and customer mapping logic.
             </p>
 
-            <div id="ruleImportStatus" class="rule-import-status idle">
-              <div class="rule-import-status-icon">●</div>
-              <div>
-                <b id="ruleImportStatusTitle">Rule Master ready</b>
-                <p id="ruleImportStatusText">Select a Business Unit Rule Set and import a Rule Master file.</p>
-              </div>
-            </div>
-
-            <div class="rule-import-meta">
-              <div class="metric">
-                <b>Current Rule Set</b>
-                <span id="currentRuleSetText">IPS</span>
-              </div>
-              <div class="metric">
-                <b>Current Rules</b>
-                <span id="currentRuleCountText">-</span>
-              </div>
-              <div class="metric">
-                <b>Last Import</b>
-                <span id="lastRuleImportText">-</span>
-              </div>
-            </div>
-
             <form id="ruleForm" class="rule-form">
+              <label>Business Unit Rule Set</label>
+              <select id="ruleManagementSet" name="rule_set">
+                <option value="IPS" selected>IPS</option>
+                <option value="AE">AE</option>
+                <option value="PC_CE">PC&amp;CE</option>
+              </select>
+
               <label>Upload Rule Master</label>
               <input id="ruleFile" name="file" type="file" accept=".xlsx,.xls,.xlsm,.csv" />
               <button type="submit" class="btn-secondary">
@@ -580,8 +441,8 @@
             </form>
 
             <div class="download-row">
-              <a class="link-button" href="/download-rule-master">Download Rule Master</a>
-              <a class="link-button" href="/download-product-series-master">Download Product Series Master</a>
+              <a id="downloadRuleMaster" class="link-button" href="/download-rule-master?rule_set=IPS">Download Rule Master</a>
+              <a id="downloadProductSeriesMaster" class="link-button" href="/download-product-series-master?rule_set=IPS">Download Product Series Master</a>
             </div>
           </section>
 
@@ -621,7 +482,7 @@
             <ul>
               <li>Priority 數字越小，優先度越高。</li>
               <li>Product Line 與 Production Site 僅由 Rule Master 控制。</li>
-              <li>新增或調整分類規則時，只需修改 rule_master.csv，不需修改 main.py。</li>
+              <li>新增或調整分類規則時，只需修改對應 BU 的 rule_master.csv，不需修改 main.py。</li>
               <li>若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。</li>
             </ul>
 
@@ -631,8 +492,6 @@
       </section>
     </main>
   </div>
-
-<div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
 <script>
 const menuToggle = document.getElementById('menuToggle');
@@ -648,6 +507,10 @@ const download = document.getElementById('download');
 const summary = document.getElementById('summary');
 const ruleForm = document.getElementById('ruleForm');
 const ruleLog = document.getElementById('ruleLog');
+const ruleSetInput = document.getElementById('ruleSet');
+const ruleManagementSet = document.getElementById('ruleManagementSet');
+const downloadRuleMaster = document.getElementById('downloadRuleMaster');
+const downloadProductSeriesMaster = document.getElementById('downloadProductSeriesMaster');
 const bulkForm = document.getElementById('bulkForm');
 const bulkProcessingStatus = document.getElementById('bulkProcessingStatus');
 const bulkStatusTitle = document.getElementById('bulkStatusTitle');
@@ -676,6 +539,21 @@ const bomStatusText = document.getElementById('bomStatusText');
 const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
+
+function updateRuleManagementLinks() {
+  const value = ruleManagementSet ? ruleManagementSet.value : 'IPS';
+  if (downloadRuleMaster) {
+    downloadRuleMaster.href = `/download-rule-master?rule_set=${encodeURIComponent(value)}`;
+  }
+  if (downloadProductSeriesMaster) {
+    downloadProductSeriesMaster.href = `/download-product-series-master?rule_set=${encodeURIComponent(value)}`;
+  }
+}
+
+if (ruleManagementSet) {
+  ruleManagementSet.addEventListener('change', updateRuleManagementLinks);
+  updateRuleManagementLinks();
+}
 
 let progressTimer = null;
 
@@ -1042,6 +920,7 @@ form.onsubmit = async (e) => {
   }
 
   fd.append('labor_mode', laborModeInput ? laborModeInput.value : 'both');
+  fd.append('rule_set', ruleSetInput ? ruleSetInput.value : 'IPS');
   fd.append('year', yearInput ? yearInput.value : '');
 
   try {
@@ -1050,8 +929,9 @@ form.onsubmit = async (e) => {
     if (!data.ok) throw new Error(data.message || 'Processing failed');
 
     const s = data.summary;
-    log.textContent = `Completed.\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}`;
+    log.textContent = `Completed.\nRule Set: ${s.rule_set || 'IPS'}\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}`;
     summary.innerHTML = `
+      <div class="metric"><b>Rule Set</b><span>${s.rule_set || 'IPS'}</span></div>
       <div class="metric"><b>Year</b><span>${s.year}</span></div>
       <div class="metric"><b>Uploaded Files</b><span>${s.files}</span></div>
       <div class="metric"><b>Labor Files</b><span>${s.labor_files || 0}</span></div>
@@ -1177,57 +1057,19 @@ bulkForm.addEventListener('submit', async (e) => {
 ruleForm.onsubmit = async (e) => {
   e.preventDefault();
   const f = document.getElementById('ruleFile');
-  const selectedRuleSet = ruleManagementSet ? ruleManagementSet.value : 'IPS';
+  if (!f.files.length) { alert('Please select a rule file first.'); return; }
 
-  if (!f.files.length) {
-    setRuleImportStatus('error', 'No file selected', 'Please select a Rule Master file before importing.');
-    showToast('error', 'Import failed', 'Please select a Rule Master file first.');
-    alert('Please select a rule file first.');
-    return;
-  }
-
-  setRuleImportStatus(
-    'running',
-    'Importing Rule Master...',
-    `Uploading rule file to ${formatRuleSetLabel(selectedRuleSet)}.`
-  );
   ruleLog.textContent = 'Importing Rule Master...';
 
   const fd = new FormData(ruleForm);
-
   try {
     const res = await fetch('/upload-rule-master', {method: 'POST', body: fd});
     const data = await res.json();
-
     if (!data.ok) throw new Error(data.message || 'Import failed');
 
-    const importedRuleSet = data.rule_set || selectedRuleSet;
-    const count = data.count || 0;
-    const importedAt = new Date().toLocaleString('zh-TW', { hour12: false });
-
-    setRuleImportStatus(
-      'success',
-      'Rule Master imported successfully',
-      `Rule Set: ${formatRuleSetLabel(importedRuleSet)} · Total Rules: ${count}`
-    );
-
-    if (currentRuleSetText) currentRuleSetText.textContent = formatRuleSetLabel(importedRuleSet);
-    if (currentRuleCountText) currentRuleCountText.textContent = count.toLocaleString();
-    if (lastRuleImportText) lastRuleImportText.textContent = importedAt;
-
-    showToast(
-      'success',
-      'Import Success',
-      `Rule Set: ${formatRuleSetLabel(importedRuleSet)} · Total Rules: ${count}`
-    );
-
-    ruleLog.textContent =
-      `Rule Master imported successfully.\nRule Set: ${formatRuleSetLabel(importedRuleSet)}\nTotal rules: ${count}\nImported at: ${importedAt}`;
-
+    ruleLog.textContent = `Rule Master imported successfully. Rule Set: ${data.rule_set || (ruleManagementSet ? ruleManagementSet.value : 'IPS')}. Total rules: ${data.count}.`;
     updateRuleManagementLinks();
   } catch (err) {
-    setRuleImportStatus('error', 'Rule Master import failed', err.message || 'Import failed.');
-    showToast('error', 'Import failed', err.message || 'Please check the file format.');
     ruleLog.textContent = 'Error: ' + err.message;
   }
 };
