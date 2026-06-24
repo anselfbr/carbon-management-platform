@@ -18,12 +18,23 @@ BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
 DATA_DIR = BASE_DIR / "data"
+RULE_LIBRARY_DIR = BASE_DIR / "rule_library"
+
+RULE_SET_MAP = {
+    "IPS": "LiteOn_IPS",
+    "AE": "LiteOn_AE",
+    "PC_CE": "LiteOn_PC_CE",
+}
+
+DEFAULT_RULE_SET = "IPS"
+
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
+RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: GOLDEN_V9_PLANT_RULE_MASTER =====")
+print("===== CMP MAIN VERSION: CMP_V10_BU_RULE_LIBRARY =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -194,6 +205,21 @@ DEFAULT_RULE_MASTER = (
 )
 
 
+def normalize_rule_set(value: object) -> str:
+    text = str(value or DEFAULT_RULE_SET).strip().upper()
+    text = text.replace("&", "_").replace("-", "_").replace(" ", "_")
+    if text in {"PC&CE", "PC_CE", "PCCE", "PC CE"}:
+        text = "PC_CE"
+    if text not in RULE_SET_MAP:
+        text = DEFAULT_RULE_SET
+    return text
+
+
+def get_rule_set_dir(rule_set: object = DEFAULT_RULE_SET) -> Path:
+    normalized = normalize_rule_set(rule_set)
+    return RULE_LIBRARY_DIR / RULE_SET_MAP[normalized]
+
+
 def ensure_master_files() -> None:
     rule_path = DATA_DIR / "rule_master.csv"
     series_path = DATA_DIR / "product_series_master.csv"
@@ -201,6 +227,24 @@ def ensure_master_files() -> None:
         rule_path.write_text(DEFAULT_RULE_MASTER, encoding="utf-8-sig")
     if not series_path.exists():
         series_path.write_text("Plant,Product series,產品類型,客戶代碼,客戶名稱\n", encoding="utf-8-sig")
+
+    for rule_set_key in RULE_SET_MAP:
+        rule_dir = get_rule_set_dir(rule_set_key)
+        rule_dir.mkdir(parents=True, exist_ok=True)
+        bu_rule_path = rule_dir / "rule_master.csv"
+        bu_series_path = rule_dir / "product_series_master.csv"
+
+        if not bu_rule_path.exists():
+            if rule_path.exists():
+                bu_rule_path.write_bytes(rule_path.read_bytes())
+            else:
+                bu_rule_path.write_text(DEFAULT_RULE_MASTER, encoding="utf-8-sig")
+
+        if not bu_series_path.exists():
+            if series_path.exists():
+                bu_series_path.write_bytes(series_path.read_bytes())
+            else:
+                bu_series_path.write_text("Plant,Product series,產品類型,客戶代碼,客戶名稱\n", encoding="utf-8-sig")
 
 
 ensure_master_files()
@@ -238,8 +282,8 @@ def read_csv_flexible(path: Path, columns: Optional[list[str]] = None) -> pd.Dat
     return df
 
 
-def load_rule_master() -> pd.DataFrame:
-    df = read_csv_flexible(DATA_DIR / "rule_master.csv", RULE_COLUMNS)
+def load_rule_master(rule_set: object = DEFAULT_RULE_SET) -> pd.DataFrame:
+    df = read_csv_flexible(get_rule_set_dir(rule_set) / "rule_master.csv", RULE_COLUMNS)
     for c in RULE_COLUMNS:
         df[c] = df[c].astype(str).str.strip()
     df["Enabled"] = df["Enabled"].str.upper().replace("", "Y")
@@ -250,8 +294,8 @@ def load_rule_master() -> pd.DataFrame:
     return df.sort_values(["Priority_num", "Rule Type", "Key"], kind="stable").reset_index(drop=True)
 
 
-def load_product_series_master() -> pd.DataFrame:
-    path = DATA_DIR / "product_series_master.csv"
+def load_product_series_master(rule_set: object = DEFAULT_RULE_SET) -> pd.DataFrame:
+    path = get_rule_set_dir(rule_set) / "product_series_master.csv"
     df = read_csv_flexible(path)
     for col in ["Plant", "Product series", "產品類型", "客戶代碼", "客戶名稱"]:
         if col not in df.columns:
@@ -262,9 +306,10 @@ def load_product_series_master() -> pd.DataFrame:
     return df[["Plant", "Product series", "產品類型", "客戶代碼", "客戶名稱"]].copy()
 
 
-def build_masters() -> dict:
-    rule_master = load_rule_master()
-    series_master = load_product_series_master()
+def build_masters(rule_set: object = DEFAULT_RULE_SET) -> dict:
+    rule_set = normalize_rule_set(rule_set)
+    rule_master = load_rule_master(rule_set)
+    series_master = load_product_series_master(rule_set)
 
     by_plant_series: dict[tuple[str, str], pd.Series] = {}
     by_series: dict[str, pd.Series] = {}
@@ -277,6 +322,7 @@ def build_masters() -> dict:
                 by_series[series] = row
 
     return {
+        "rule_set": rule_set,
         "rules": rule_master,
         "by_plant_series": by_plant_series,
         "by_series": by_series,
@@ -934,8 +980,10 @@ def process_files(
     year: Optional[int],
     labor_paths: Optional[list[Path]] = None,
     labor_mode: str = "both",
+    rule_set: str = DEFAULT_RULE_SET,
 ) -> tuple[Path, dict]:
-    masters = build_masters()
+    rule_set = normalize_rule_set(rule_set)
+    masters = build_masters(rule_set)
     labor_mode = normalize_labor_mode(labor_mode)
 
     out = load_production_dataframe(paths)
@@ -1205,6 +1253,7 @@ def process_files(
         "files": int(len(paths)),
         "labor_files": int(len(labor_paths or [])),
         "labor_mode": labor_mode,
+        "rule_set": rule_set,
         "rows": int(len(out)),
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
@@ -1217,7 +1266,7 @@ def process_files(
 
 def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     """Backward-compatible wrapper for single-file processing."""
-    return process_files([path], year, None, "both")
+    return process_files([path], year, None, "both", DEFAULT_RULE_SET)
 
 
 def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
@@ -1253,17 +1302,21 @@ def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
         df[c] = df[c].astype(str).str.strip()
     df["Enabled"] = df["Enabled"].replace("", "Y")
     df["Is_WIP"] = df["Is_WIP"].replace("", "N")
-    df = df[(df["Rule Type"] != "") & (df["Key"] != "") & (df["Product Type"] != "")]
+    # Product Type may be blank for rules that only maintain Production Site,
+    # e.g. Plant Exact, 3760 -> Production Site.
+    df = df[(df["Rule Type"] != "") & (df["Key"] != "")]
     return df
 
 
-def save_uploaded_rule(file_path: Path) -> int:
+def save_uploaded_rule(file_path: Path, rule_set: object = DEFAULT_RULE_SET) -> int:
     if file_path.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
         df = pd.read_excel(file_path, dtype=str).fillna("")
     else:
         df = pd.read_csv(file_path, dtype=str, encoding="utf-8-sig").fillna("")
     df = normalize_rule_upload(df)
-    df.to_csv(DATA_DIR / "rule_master.csv", index=False, encoding="utf-8-sig")
+    target_dir = get_rule_set_dir(rule_set)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    df.to_csv(target_dir / "rule_master.csv", index=False, encoding="utf-8-sig")
     return len(df)
 
 
@@ -1281,7 +1334,7 @@ def debug_version():
         "app": "Carbon Management Platform",
         "version": "PROCESS_MANUAL_FORM_V6",
         "process_endpoint": "manual form compatible",
-        "supports": ["files multi-upload", "file single-upload", "blank year"],
+        "supports": ["files multi-upload", "file single-upload", "blank year", "BU rule library"],
     }
 
 @app.post("/process")
@@ -1332,6 +1385,7 @@ async def process(request: Request):
         return JSONResponse({"ok": False, "message": "請至少上傳一個 Excel 生產數量工單檔案"}, status_code=400)
 
     labor_mode = normalize_labor_mode(form.get("labor_mode") or "both")
+    rule_set = normalize_rule_set(form.get("rule_set") or DEFAULT_RULE_SET)
     year = form.get("year")
 
     saved_paths: list[Path] = []
@@ -1357,7 +1411,7 @@ async def process(request: Request):
         if year is not None and str(year).strip() != "":
             year_value = int(str(year).strip())
 
-        output_path, summary = process_files(saved_paths, year_value, saved_labor_paths, labor_mode)
+        output_path, summary = process_files(saved_paths, year_value, saved_labor_paths, labor_mode, rule_set)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -1408,17 +1462,30 @@ async def generate_bulk_file(
 
 
 @app.post("/upload-rule-master")
-async def upload_rule_master(file: UploadFile = File(...)):
+async def upload_rule_master(request: Request):
+    try:
+        form = await request.form()
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": f"無法讀取上傳表單：{exc}"}, status_code=400)
+
+    file = form.get("file")
+    rule_set = normalize_rule_set(form.get("rule_set") or DEFAULT_RULE_SET)
+
+    if not file or not getattr(file, "filename", None):
+        return JSONResponse({"ok": False, "message": "請上傳 Rule Master 檔案"}, status_code=400)
+
     if not file.filename.lower().endswith((".xlsx", ".xlsm", ".xls", ".csv")):
         return JSONResponse({"ok": False, "message": "請上傳 Excel 或 CSV 檔案"}, status_code=400)
+
     saved = UPLOAD_DIR / f"{uuid.uuid4().hex}_{file.filename}"
     saved.write_bytes(await file.read())
     try:
-        count = save_uploaded_rule(saved)
+        count = save_uploaded_rule(saved, rule_set)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-    return {"ok": True, "count": count}
+    return {"ok": True, "count": count, "rule_set": rule_set}
 
 
 @app.get("/download/{filename}")
@@ -1430,19 +1497,19 @@ def download(filename: str):
 
 
 @app.get("/download-rule-master")
-def download_rule_master():
-    path = DATA_DIR / "rule_master.csv"
-    if not path.exists():
-        ensure_master_files()
-    return FileResponse(path, filename="rule_master.csv", media_type="text/csv")
+def download_rule_master(rule_set: str = DEFAULT_RULE_SET):
+    ensure_master_files()
+    rule_set = normalize_rule_set(rule_set)
+    path = get_rule_set_dir(rule_set) / "rule_master.csv"
+    return FileResponse(path, filename=f"rule_master_{rule_set}.csv", media_type="text/csv")
 
 
 @app.get("/download-product-series-master")
-def download_product_series_master():
-    path = DATA_DIR / "product_series_master.csv"
-    if not path.exists():
-        ensure_master_files()
-    return FileResponse(path, filename="product_series_master.csv", media_type="text/csv")
+def download_product_series_master(rule_set: str = DEFAULT_RULE_SET):
+    ensure_master_files()
+    rule_set = normalize_rule_set(rule_set)
+    path = get_rule_set_dir(rule_set) / "product_series_master.csv"
+    return FileResponse(path, filename=f"product_series_master_{rule_set}.csv", media_type="text/csv")
 
 
 

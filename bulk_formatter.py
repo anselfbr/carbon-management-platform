@@ -69,12 +69,12 @@ def _is_wip(product_type: Any, is_wip: Any = None) -> bool:
 
 
 def _production_site(product_type: Any) -> str:
-    product_type_text = str(product_type or "").strip().upper()
-    if product_type_text == "NB":
-        return "常州廠(A2)-IPS"
-    if product_type_text == "TP":
-        return "常州廠(A9)-IPS"
-    return "石碣廠-IPS"
+    """Rule Master only mode.
+
+    Production Site should come from Step1 output / rule_master.csv.
+    Do not infer Production Site from Product Type in Step2.
+    """
+    return ""
 
 
 def _as_year(value: Any) -> int:
@@ -234,7 +234,8 @@ def generate_product_activity_bulk_file(
 
         production_site = _safe_text(row.get(production_site_col)) if production_site_col else ""
         if not production_site:
-            production_site = _production_site(product_type)
+            # Rule Master only mode: keep blank if Step1 did not provide Production Site.
+            production_site = ""
 
         # 分頁 1：Input Sheet Activity Data
         activity_ws.cell(activity_row, 1).value = product_name

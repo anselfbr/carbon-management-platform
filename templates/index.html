@@ -145,6 +145,13 @@
             </div>
 
             <form id="form" class="form-panel">
+              <label>Business Unit Rule Set</label>
+              <select id="ruleSet" name="rule_set">
+                <option value="IPS" selected>IPS</option>
+                <option value="AE">AE</option>
+                <option value="PC_CE">PC&amp;CE</option>
+              </select>
+
               <label>Production Quantity Work Orders</label>
               <input id="files" name="files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
 
@@ -418,6 +425,13 @@
             </p>
 
             <form id="ruleForm" class="rule-form">
+              <label>Business Unit Rule Set</label>
+              <select id="ruleManagementSet" name="rule_set">
+                <option value="IPS" selected>IPS</option>
+                <option value="AE">AE</option>
+                <option value="PC_CE">PC&amp;CE</option>
+              </select>
+
               <label>Upload Rule Master</label>
               <input id="ruleFile" name="file" type="file" accept=".xlsx,.xls,.xlsm,.csv" />
               <button type="submit" class="btn-secondary">
@@ -427,8 +441,8 @@
             </form>
 
             <div class="download-row">
-              <a class="link-button" href="/download-rule-master">Download Rule Master</a>
-              <a class="link-button" href="/download-product-series-master">Download Product Series Master</a>
+              <a id="downloadRuleMaster" class="link-button" href="/download-rule-master?rule_set=IPS">Download Rule Master</a>
+              <a id="downloadProductSeriesMaster" class="link-button" href="/download-product-series-master?rule_set=IPS">Download Product Series Master</a>
             </div>
           </section>
 
@@ -468,7 +482,7 @@
             <ul>
               <li>Priority 數字越小，優先度越高。</li>
               <li>Product Line 與 Production Site 僅由 Rule Master 控制。</li>
-              <li>新增或調整分類規則時，只需修改 rule_master.csv，不需修改 main.py。</li>
+              <li>新增或調整分類規則時，只需修改對應 BU 的 rule_master.csv，不需修改 main.py。</li>
               <li>若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。</li>
             </ul>
 
@@ -493,6 +507,10 @@ const download = document.getElementById('download');
 const summary = document.getElementById('summary');
 const ruleForm = document.getElementById('ruleForm');
 const ruleLog = document.getElementById('ruleLog');
+const ruleSetInput = document.getElementById('ruleSet');
+const ruleManagementSet = document.getElementById('ruleManagementSet');
+const downloadRuleMaster = document.getElementById('downloadRuleMaster');
+const downloadProductSeriesMaster = document.getElementById('downloadProductSeriesMaster');
 const bulkForm = document.getElementById('bulkForm');
 const bulkProcessingStatus = document.getElementById('bulkProcessingStatus');
 const bulkStatusTitle = document.getElementById('bulkStatusTitle');
@@ -521,6 +539,21 @@ const bomStatusText = document.getElementById('bomStatusText');
 const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
+
+function updateRuleManagementLinks() {
+  const value = ruleManagementSet ? ruleManagementSet.value : 'IPS';
+  if (downloadRuleMaster) {
+    downloadRuleMaster.href = `/download-rule-master?rule_set=${encodeURIComponent(value)}`;
+  }
+  if (downloadProductSeriesMaster) {
+    downloadProductSeriesMaster.href = `/download-product-series-master?rule_set=${encodeURIComponent(value)}`;
+  }
+}
+
+if (ruleManagementSet) {
+  ruleManagementSet.addEventListener('change', updateRuleManagementLinks);
+  updateRuleManagementLinks();
+}
 
 let progressTimer = null;
 
@@ -887,6 +920,7 @@ form.onsubmit = async (e) => {
   }
 
   fd.append('labor_mode', laborModeInput ? laborModeInput.value : 'both');
+  fd.append('rule_set', ruleSetInput ? ruleSetInput.value : 'IPS');
   fd.append('year', yearInput ? yearInput.value : '');
 
   try {
@@ -895,8 +929,9 @@ form.onsubmit = async (e) => {
     if (!data.ok) throw new Error(data.message || 'Processing failed');
 
     const s = data.summary;
-    log.textContent = `Completed.\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}`;
+    log.textContent = `Completed.\nRule Set: ${s.rule_set || 'IPS'}\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}`;
     summary.innerHTML = `
+      <div class="metric"><b>Rule Set</b><span>${s.rule_set || 'IPS'}</span></div>
       <div class="metric"><b>Year</b><span>${s.year}</span></div>
       <div class="metric"><b>Uploaded Files</b><span>${s.files}</span></div>
       <div class="metric"><b>Labor Files</b><span>${s.labor_files || 0}</span></div>
@@ -1032,7 +1067,8 @@ ruleForm.onsubmit = async (e) => {
     const data = await res.json();
     if (!data.ok) throw new Error(data.message || 'Import failed');
 
-    ruleLog.textContent = `Rule Master imported successfully. Total rules: ${data.count}.`;
+    ruleLog.textContent = `Rule Master imported successfully. Rule Set: ${data.rule_set || (ruleManagementSet ? ruleManagementSet.value : 'IPS')}. Total rules: ${data.count}.`;
+    updateRuleManagementLinks();
   } catch (err) {
     ruleLog.textContent = 'Error: ' + err.message;
   }
