@@ -5,6 +5,129 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Carbon Management Platform | Product Data Preparation</title>
   <link rel="stylesheet" href="/static/style.css" />
+
+  <style>
+    .rule-import-status {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.35);
+      border-radius: 16px;
+      padding: 14px 16px;
+      margin: 16px 0 12px;
+      background: #f8fafc;
+    }
+    .rule-import-status-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      margin-top: 2px;
+      color: #64748b;
+      background: #e2e8f0;
+    }
+    .rule-import-status b {
+      display: block;
+      color: var(--navy, #0f2f4d);
+      margin-bottom: 4px;
+    }
+    .rule-import-status p {
+      margin: 0;
+      color: var(--muted, #64748b);
+      line-height: 1.5;
+    }
+    .rule-import-status.running {
+      border-color: rgba(14, 116, 144, 0.35);
+      background: #ecfeff;
+    }
+    .rule-import-status.running .rule-import-status-icon {
+      color: white;
+      background: #0891b2;
+      animation: rulePulse 1s infinite;
+    }
+    .rule-import-status.success {
+      border-color: rgba(22, 163, 74, 0.35);
+      background: #f0fdf4;
+    }
+    .rule-import-status.success .rule-import-status-icon {
+      color: white;
+      background: #16a34a;
+    }
+    .rule-import-status.error {
+      border-color: rgba(220, 38, 38, 0.35);
+      background: #fef2f2;
+    }
+    .rule-import-status.error .rule-import-status-icon {
+      color: white;
+      background: #dc2626;
+    }
+    @keyframes rulePulse {
+      0% { transform: scale(1); opacity: 0.85; }
+      50% { transform: scale(1.12); opacity: 1; }
+      100% { transform: scale(1); opacity: 0.85; }
+    }
+    .rule-import-meta {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 10px 0 18px;
+    }
+    .rule-import-meta .metric {
+      padding: 12px 14px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 14px;
+      background: #ffffff;
+    }
+    .rule-import-meta .metric b {
+      display: block;
+      color: var(--muted, #64748b);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .rule-import-meta .metric span {
+      display: block;
+      color: var(--navy, #0f2f4d);
+      font-weight: 700;
+    }
+    .toast-container {
+      position: fixed;
+      right: 24px;
+      top: 24px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+    }
+    .toast {
+      min-width: 280px;
+      max-width: 380px;
+      border-radius: 16px;
+      padding: 14px 16px;
+      box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+      background: white;
+      border: 1px solid rgba(148, 163, 184, 0.28);
+      color: #0f172a;
+      animation: toastIn 0.22s ease-out;
+    }
+    .toast.success { border-left: 5px solid #16a34a; }
+    .toast.error { border-left: 5px solid #dc2626; }
+    .toast b { display: block; margin-bottom: 4px; }
+    .toast p { margin: 0; color: #64748b; line-height: 1.45; }
+    @keyframes toastIn {
+      from { transform: translateY(-8px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+    @media (max-width: 900px) {
+      .rule-import-meta { grid-template-columns: 1fr; }
+      .toast-container { left: 16px; right: 16px; top: 16px; }
+      .toast { min-width: 0; max-width: none; }
+    }
+  </style>
+
 </head>
 <body>
   <div class="app-shell sidebar-expanded">
@@ -424,6 +547,29 @@
               product series mapping, WIP judgment and customer mapping logic.
             </p>
 
+            <div id="ruleImportStatus" class="rule-import-status idle">
+              <div class="rule-import-status-icon">●</div>
+              <div>
+                <b id="ruleImportStatusTitle">Rule Master ready</b>
+                <p id="ruleImportStatusText">Select a Business Unit Rule Set and import a Rule Master file.</p>
+              </div>
+            </div>
+
+            <div class="rule-import-meta">
+              <div class="metric">
+                <b>Current Rule Set</b>
+                <span id="currentRuleSetText">IPS</span>
+              </div>
+              <div class="metric">
+                <b>Current Rules</b>
+                <span id="currentRuleCountText">-</span>
+              </div>
+              <div class="metric">
+                <b>Last Import</b>
+                <span id="lastRuleImportText">-</span>
+              </div>
+            </div>
+
             <form id="ruleForm" class="rule-form">
               <label>Business Unit Rule Set</label>
               <select id="ruleManagementSet" name="rule_set">
@@ -493,6 +639,8 @@
     </main>
   </div>
 
+<div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
 <script>
 const menuToggle = document.getElementById('menuToggle');
 const appShell = document.querySelector('.app-shell');
@@ -511,6 +659,13 @@ const ruleSetInput = document.getElementById('ruleSet');
 const ruleManagementSet = document.getElementById('ruleManagementSet');
 const downloadRuleMaster = document.getElementById('downloadRuleMaster');
 const downloadProductSeriesMaster = document.getElementById('downloadProductSeriesMaster');
+const ruleImportStatus = document.getElementById('ruleImportStatus');
+const ruleImportStatusTitle = document.getElementById('ruleImportStatusTitle');
+const ruleImportStatusText = document.getElementById('ruleImportStatusText');
+const currentRuleSetText = document.getElementById('currentRuleSetText');
+const currentRuleCountText = document.getElementById('currentRuleCountText');
+const lastRuleImportText = document.getElementById('lastRuleImportText');
+const toastContainer = document.getElementById('toastContainer');
 const bulkForm = document.getElementById('bulkForm');
 const bulkProcessingStatus = document.getElementById('bulkProcessingStatus');
 const bulkStatusTitle = document.getElementById('bulkStatusTitle');
@@ -540,6 +695,33 @@ const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
 
+function formatRuleSetLabel(value) {
+  if (value === 'PC_CE') return 'PC&CE';
+  return value || 'IPS';
+}
+
+function setRuleImportStatus(mode, title, text) {
+  if (!ruleImportStatus) return;
+  ruleImportStatus.classList.remove('idle', 'running', 'success', 'error');
+  ruleImportStatus.classList.add(mode);
+  if (ruleImportStatusTitle) ruleImportStatusTitle.textContent = title;
+  if (ruleImportStatusText) ruleImportStatusText.textContent = text;
+}
+
+function showRuleToast(type, title, text) {
+  if (!toastContainer) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${type || 'success'}`;
+  toast.innerHTML = `<b>${title}</b><p>${text}</p>`;
+  toastContainer.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(-8px)';
+    toast.style.transition = '0.2s ease';
+    setTimeout(() => toast.remove(), 250);
+  }, 3600);
+}
+
 function updateRuleManagementLinks() {
   const value = ruleManagementSet ? ruleManagementSet.value : 'IPS';
   if (downloadRuleMaster) {
@@ -548,6 +730,7 @@ function updateRuleManagementLinks() {
   if (downloadProductSeriesMaster) {
     downloadProductSeriesMaster.href = `/download-product-series-master?rule_set=${encodeURIComponent(value)}`;
   }
+  if (currentRuleSetText) currentRuleSetText.textContent = formatRuleSetLabel(value);
 }
 
 if (ruleManagementSet) {
@@ -1057,8 +1240,20 @@ bulkForm.addEventListener('submit', async (e) => {
 ruleForm.onsubmit = async (e) => {
   e.preventDefault();
   const f = document.getElementById('ruleFile');
-  if (!f.files.length) { alert('Please select a rule file first.'); return; }
+  const selectedRuleSet = ruleManagementSet ? ruleManagementSet.value : 'IPS';
 
+  if (!f.files.length) {
+    setRuleImportStatus('error', 'No file selected', 'Please select a Rule Master file before importing.');
+    showRuleToast('error', 'Import failed', 'Please select a Rule Master file first.');
+    alert('Please select a rule file first.');
+    return;
+  }
+
+  setRuleImportStatus(
+    'running',
+    'Importing Rule Master...',
+    `Uploading rule file to ${formatRuleSetLabel(selectedRuleSet)}.`
+  );
   ruleLog.textContent = 'Importing Rule Master...';
 
   const fd = new FormData(ruleForm);
@@ -1067,9 +1262,33 @@ ruleForm.onsubmit = async (e) => {
     const data = await res.json();
     if (!data.ok) throw new Error(data.message || 'Import failed');
 
-    ruleLog.textContent = `Rule Master imported successfully. Rule Set: ${data.rule_set || (ruleManagementSet ? ruleManagementSet.value : 'IPS')}. Total rules: ${data.count}.`;
+    const importedRuleSet = data.rule_set || selectedRuleSet;
+    const count = data.count || 0;
+    const importedAt = new Date().toLocaleString('zh-TW', { hour12: false });
+
+    setRuleImportStatus(
+      'success',
+      'Rule Master imported successfully',
+      `Rule Set: ${formatRuleSetLabel(importedRuleSet)} · Total Rules: ${count}`
+    );
+
+    if (currentRuleSetText) currentRuleSetText.textContent = formatRuleSetLabel(importedRuleSet);
+    if (currentRuleCountText) currentRuleCountText.textContent = count.toLocaleString();
+    if (lastRuleImportText) lastRuleImportText.textContent = importedAt;
+
+    showRuleToast(
+      'success',
+      'Import Success',
+      `Rule Set: ${formatRuleSetLabel(importedRuleSet)} · Total Rules: ${count}`
+    );
+
+    ruleLog.textContent =
+      `Rule Master imported successfully.\nRule Set: ${formatRuleSetLabel(importedRuleSet)}\nTotal rules: ${count}\nImported at: ${importedAt}`;
+
     updateRuleManagementLinks();
   } catch (err) {
+    setRuleImportStatus('error', 'Rule Master import failed', err.message || 'Import failed.');
+    showRuleToast('error', 'Import failed', err.message || 'Please check the file format.');
     ruleLog.textContent = 'Error: ' + err.message;
   }
 };
