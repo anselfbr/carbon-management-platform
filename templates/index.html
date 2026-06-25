@@ -741,6 +741,11 @@ function formatDynamic(templateKey, fallback, values) {
   return text;
 }
 
+function cmpRemainingText(seconds) {
+  const lang = cmpLang();
+  return lang === 'zh' ? `約 ${seconds} 秒` : `~${seconds}s remaining`;
+}
+
 
 function setRuleImportStatus(mode, title, text) {
   if (!ruleImportStatus) return;
@@ -908,9 +913,9 @@ function startBomEstimatedProgress() {
 
   setBomProcessingState(
     'running',
-    'BOM Expansion in progress',
-    'Reading standard BOM and validating raw material bulk template.',
-    `~${estimatedSeconds}s remaining`,
+    cmpT('bomExpansionInProgress', 'BOM Expansion in progress'),
+    cmpT('readingBomValidatingTemplate', 'Reading standard BOM and validating raw material bulk template.'),
+    cmpRemainingText(estimatedSeconds),
     6
   );
 
@@ -919,16 +924,16 @@ function startBomEstimatedProgress() {
     const remaining = Math.max(1, estimatedSeconds - elapsed);
     const progress = Math.min(92, 6 + (elapsed / estimatedSeconds) * 86);
 
-    bomStatusTime.textContent = `~${remaining}s remaining`;
+    bomStatusTime.textContent = cmpRemainingText(remaining);
     bomProgressBar.style.width = `${progress}%`;
 
     const stages = [
-      'Reading BOM structure...',
-      'Detecting semi-finished components...',
-      'Expanding multi-level BOM...',
-      'Calculating material quantity roll-up...',
-      'Copying raw material bulk template...',
-      'Writing Activity Data and Raw Material sheets...'
+      cmpT('stageReadingBomStructure', 'Reading BOM structure...'),
+      cmpT('stageDetectingSemiFinished', 'Detecting semi-finished components...'),
+      cmpT('stageExpandingMultiLevelBom', 'Expanding multi-level BOM...'),
+      cmpT('stageCalculatingRollup', 'Calculating material quantity roll-up...'),
+      cmpT('stageCopyingRawMaterialTemplate', 'Copying raw material bulk template...'),
+      cmpT('stageWritingActivityRawMaterial', 'Writing Activity Data and Raw Material sheets...')
     ];
     const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
     bomStatusText.textContent = stages[stageIndex];
@@ -939,9 +944,9 @@ function stopBomProgressSuccess(summary) {
   clearInterval(progressTimer);
   setBomProcessingState(
     'success',
-    'BOM Expansion completed',
+    cmpT('bomExpansionCompleted', 'BOM Expansion completed'),
     `Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Max BOM Level: ${summary.max_level}.`,
-    'Completed',
+    cmpT('completed', 'Completed'),
     100
   );
 
@@ -953,12 +958,12 @@ function stopBomProgressError(message) {
   clearInterval(progressTimer);
   setBomProcessingState(
     'error',
-    'BOM Expansion failed',
-    message || 'Please review the BOM and raw material bulk template.',
-    'Error',
+    cmpT('bomExpansionFailed', 'BOM Expansion failed'),
+    message || cmpT('reviewBomTemplate', 'Please review the BOM and raw material bulk template.'),
+    cmpT('error', 'Error'),
     100
   );
-  bomLog.textContent = 'Error: ' + (message || 'BOM Expansion failed');
+  bomLog.textContent = 'Error: ' + (message || cmpT('bomExpansionFailed', 'BOM Expansion failed'));
 }
 
 
@@ -1000,7 +1005,7 @@ bomForm.addEventListener('submit', async (e) => {
     const res = await fetch('/process-bom-expansion', { method: 'POST', body: fd });
     const data = await res.json();
 
-    if (!data.ok) throw new Error(data.message || 'BOM Expansion failed');
+    if (!data.ok) throw new Error(data.message || cmpT('bomExpansionFailed', 'BOM Expansion failed'));
 
     bomDownload.href = data.download_url;
     bomDownload.classList.remove('disabled');
@@ -1081,9 +1086,9 @@ function startEstimatedProgress(fileCount) {
 
   setProcessingState(
     'running',
-    'Processing in progress',
-    'Reading Excel files and applying classification rules. Please keep this page open.',
-    `~${estimatedSeconds}s remaining`,
+    cmpT('processingInProgress', 'Processing in progress'),
+    cmpT('readingExcelApplyingRules', 'Reading Excel files and applying classification rules. Please keep this page open.'),
+    cmpRemainingText(estimatedSeconds),
     6
   );
 
@@ -1092,16 +1097,16 @@ function startEstimatedProgress(fileCount) {
     const remaining = Math.max(1, estimatedSeconds - elapsed);
     const progress = Math.min(92, 6 + (elapsed / estimatedSeconds) * 86);
 
-    statusTime.textContent = `~${remaining}s remaining`;
+    statusTime.textContent = cmpRemainingText(remaining);
     progressBar.style.width = `${progress}%`;
 
     const stages = [
-      'Reading uploaded Excel files...',
-      'Merging SAP production work orders...',
-      'Filtering reporting year...',
-      'Extracting product series...',
-      'Applying Rule Master and Product Series Master...',
-      'Generating output Excel...'
+      cmpT('stageReadingUploadedExcel', 'Reading uploaded Excel files...'),
+      cmpT('stageMergingSapOrders', 'Merging SAP production work orders...'),
+      cmpT('stageFilteringYear', 'Filtering reporting year...'),
+      cmpT('stageExtractingSeries', 'Extracting product series...'),
+      cmpT('stageApplyingRules', 'Applying Rule Master and Product Series Master...'),
+      cmpT('stageGeneratingOutputExcel', 'Generating output Excel...')
     ];
     const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
     statusText.textContent = stages[stageIndex];
@@ -1112,9 +1117,9 @@ function stopEstimatedProgressSuccess() {
   clearInterval(progressTimer);
   setProcessingState(
     'success',
-    'Processing completed',
-    'Classification result is ready. You can download the Excel output.',
-    'Completed',
+    cmpT('processingCompleted', 'Processing completed'),
+    cmpT('classificationReadyDownload', 'Classification result is ready. You can download the Excel output.'),
+    cmpT('completed', 'Completed'),
     100
   );
 }
@@ -1123,9 +1128,9 @@ function stopEstimatedProgressError(message) {
   clearInterval(progressTimer);
   setProcessingState(
     'error',
-    'Processing failed',
-    message || 'Please review the error message and input file format.',
-    'Error',
+    cmpT('processingFailed', 'Processing failed'),
+    message || cmpT('reviewErrorInputFormat', 'Please review the error message and input file format.'),
+    cmpT('error', 'Error'),
     100
   );
 }
@@ -1168,7 +1173,7 @@ form.onsubmit = async (e) => {
   try {
     const res = await fetch('/process', {method: 'POST', body: fd});
     const data = await res.json();
-    if (!data.ok) throw new Error(data.message || 'Processing failed');
+    if (!data.ok) throw new Error(data.message || cmpT('processingFailed', 'Processing failed'));
 
     const s = data.summary;
     log.textContent = `Completed.\nRule Set: ${s.rule_set || 'IPS'}\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}`;
@@ -1217,9 +1222,9 @@ function startBulkEstimatedProgress() {
 
   setBulkProcessingState(
     'running',
-    'Batch formatting in progress',
-    'Reading Step 1 output and validating the bulk template.',
-    `~${estimatedSeconds}s remaining`,
+    cmpT('batchFormattingInProgress', 'Batch formatting in progress'),
+    cmpT('readingStep1ValidatingBulk', 'Reading Step 1 output and validating the bulk template.'),
+    cmpRemainingText(estimatedSeconds),
     8
   );
 
@@ -1228,16 +1233,16 @@ function startBulkEstimatedProgress() {
     const remaining = Math.max(1, estimatedSeconds - elapsed);
     const progress = Math.min(92, 8 + (elapsed / estimatedSeconds) * 84);
 
-    bulkStatusTime.textContent = `~${remaining}s remaining`;
+    bulkStatusTime.textContent = cmpRemainingText(remaining);
     bulkProgressBar.style.width = `${progress}%`;
 
     const stages = [
-      'Reading Step 1 output file...',
-      'Copying original bulk template...',
-      'Writing Input Sheet Activity Data...',
-      'Writing Input Sheet Products...',
-      'Preserving template formatting and validation...',
-      'Generating formatted bulk file...'
+      cmpT('stageReadingStep1Output', 'Reading Step 1 output file...'),
+      cmpT('stageCopyingBulkTemplate', 'Copying original bulk template...'),
+      cmpT('stageWritingActivityData', 'Writing Input Sheet Activity Data...'),
+      cmpT('stageWritingProducts', 'Writing Input Sheet Products...'),
+      cmpT('stagePreservingTemplate', 'Preserving template formatting and validation...'),
+      cmpT('stageGeneratingBulkFile', 'Generating formatted bulk file...')
     ];
     const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
     bulkStatusText.textContent = stages[stageIndex];
@@ -1251,9 +1256,9 @@ function stopBulkProgressSuccess(summary) {
     : '';
   setBulkProcessingState(
     'success',
-    'Batch formatting completed',
+    cmpT('batchFormattingCompleted', 'Batch formatting completed'),
     `Activity Data: ${summary.activity_rows} rows; Products: ${summary.product_rows} rows; Excluded WIP: ${summary.excluded_wip_rows} rows;${fileCountText} Working Hour: ${summary.working_hour_source || 'direct'};`,
-    'Completed',
+    cmpT('completed', 'Completed'),
     100
   );
 }
@@ -1262,9 +1267,9 @@ function stopBulkProgressError(message) {
   clearInterval(progressTimer);
   setBulkProcessingState(
     'error',
-    'Batch formatting failed',
-    message || 'Please review the input files and template format.',
-    'Error',
+    cmpT('batchFormattingFailed', 'Batch formatting failed'),
+    message || cmpT('reviewInputBulkTemplate', 'Please review the input files and template format.'),
+    cmpT('error', 'Error'),
     100
   );
 }
@@ -1272,9 +1277,9 @@ function stopBulkProgressError(message) {
 if (bulkWorkingHourSource) {
   bulkWorkingHourSource.addEventListener('change', () => {
     if (bulkWorkingHourSource.value === 'include_semi') {
-      bulkStatusText.textContent = 'This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.';
+      bulkStatusText.textContent = cmpT('semiHourHint', 'This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.');
     } else {
-      bulkStatusText.textContent = 'Direct Working Hour Enabled.';
+      bulkStatusText.textContent = cmpT('directWorkingHourEnabled', 'Direct Working Hour Enabled.');
     }
   });
 }
@@ -1284,14 +1289,14 @@ bulkForm.addEventListener('submit', async (e) => {
 
   bulkDownload.classList.add('disabled');
   bulkDownload.href = '#';
-  bulkDownload.textContent = 'Download Formatted Bulk File';
+  bulkDownload.innerHTML = `<span data-i18n="downloadFormattedBulkFile">${cmpT('downloadFormattedBulkFile', 'Download Formatted Bulk File')}</span>`;
 
   startBulkEstimatedProgress();
 
   const fd = new FormData(bulkForm);
   const workingHourSource = bulkWorkingHourSource ? bulkWorkingHourSource.value : 'direct';
   if (workingHourSource === 'include_semi') {
-    bulkStatusText.textContent = 'Checking latest BOM Expansion result for semi-finished working hours.';
+    bulkStatusText.textContent = cmpT('checkingSemiWorkingHour', 'Checking latest BOM Expansion result for semi-finished working hours.');
   }
 
   try {
@@ -1301,9 +1306,9 @@ bulkForm.addEventListener('submit', async (e) => {
     if (!data.ok) throw new Error(data.message || 'Bulk file generation failed');
 
     bulkDownload.href = data.download_url;
-    bulkDownload.textContent = data.summary && data.summary.zip_output
-      ? 'Download Bulk ZIP File'
-      : 'Download Formatted Bulk File';
+    bulkDownload.innerHTML = data.summary && data.summary.zip_output
+      ? `<span data-i18n="downloadBulkZipFile">${cmpT('downloadBulkZipFile', 'Download Bulk ZIP File')}</span>`
+      : `<span data-i18n="downloadFormattedBulkFile">${cmpT('downloadFormattedBulkFile', 'Download Formatted Bulk File')}</span>`;
     bulkDownload.classList.remove('disabled');
     stopBulkProgressSuccess(data.summary);
   } catch (err) {

@@ -745,6 +745,52 @@
     "include_semi": "含半品"
 };
 
+
+  Object.assign(phraseZh, {
+    "Reading Excel files and applying classification rules. Please keep this page open.": "正在讀取 Excel 並套用分類規則，請保持頁面開啟。",
+    "Reading uploaded Excel files...": "讀取上傳的 Excel 檔案...",
+    "Merging SAP production work orders...": "合併 SAP 生產工單...",
+    "Filtering reporting year...": "篩選報告年度...",
+    "Extracting product series...": "解析產品系列...",
+    "Applying Rule Master and Product Series Master...": "套用 Rule Master 與 Product Series Master...",
+    "Generating output Excel...": "產生輸出 Excel...",
+    "Processing in progress": "處理中",
+    "Processing completed": "處理完成",
+    "Processing failed": "處理失敗",
+    "Classification result is ready. You can download the Excel output.": "分類結果已完成，可下載 Excel 輸出檔。",
+    "Please review the error message and input file format.": "請確認錯誤訊息與輸入檔格式。",
+    "Ready for processing": "準備處理",
+    "Idle": "待命",
+    "Completed": "已完成",
+    "Error": "錯誤",
+
+    "BOM Expansion in progress": "BOM 展開處理中",
+    "Reading standard BOM and validating raw material bulk template.": "讀取標準 BOM 並檢查原物料 Bulk 範本。",
+    "Reading BOM structure...": "讀取 BOM 結構...",
+    "Detecting semi-finished components...": "判斷半成品元件...",
+    "Expanding multi-level BOM...": "展開多階 BOM...",
+    "Calculating material quantity roll-up...": "計算物料數量累乘...",
+    "Copying raw material bulk template...": "複製原物料 Bulk 範本...",
+    "Writing Activity Data and Raw Material sheets...": "寫入 Activity Data 與 Raw Material 分頁...",
+    "BOM Expansion completed": "BOM 展開完成",
+    "BOM Expansion failed": "BOM 展開失敗",
+    "Please review the BOM and raw material bulk template.": "請檢查 BOM 與原物料 Bulk 範本。",
+
+    "Batch formatting in progress": "批次格式化處理中",
+    "Reading Step 1 output and validating the bulk template.": "讀取 Step 1 輸出並檢查 Bulk 範本。",
+    "Reading Step 1 output file...": "讀取 Step 1 輸出檔...",
+    "Copying original bulk template...": "複製原始 Bulk 範本...",
+    "Writing Input Sheet Activity Data...": "寫入 Input Sheet Activity Data...",
+    "Writing Input Sheet Products...": "寫入 Input Sheet Products...",
+    "Preserving template formatting and validation...": "保留範本格式與資料驗證...",
+    "Generating formatted bulk file...": "產生格式化 Bulk 檔...",
+    "Batch formatting completed": "批次格式化完成",
+    "Batch formatting failed": "批次格式化失敗",
+    "Please review the input files and template format.": "請檢查輸入檔案與範本格式。",
+    "Direct Working Hour Enabled.": "已啟用僅成品工時。",
+    "Checking latest BOM Expansion result for semi-finished working hours.": "正在檢查最新 BOM Expansion 結果以納入半品工時。"
+  });
+
   const phraseEn = {};
   Object.keys(phraseZh).forEach(function (en) {
     phraseEn[phraseZh[en]] = en;
@@ -760,6 +806,8 @@
 
   function t(key, fallback) {
     if (keyed[key] && keyed[key][currentLang]) return keyed[key][currentLang];
+    if (fallback && currentLang === "zh" && phraseZh[fallback]) return phraseZh[fallback];
+    if (fallback && currentLang === "en" && phraseEn[fallback]) return phraseEn[fallback];
     return fallback || key;
   }
 
@@ -775,7 +823,7 @@
     const value = String(text || "").trim();
     if (!value) return true;
     if (preserveExact.has(value)) return true;
-    if (/^~?\d+s remaining$/.test(value)) return true;
+    if (/^~?\d+s remaining$/.test(value)) return true;\n    if (/^約\s*\d+\s*秒$/.test(value)) return true;
     if (/^~?\d+秒$/.test(value)) return true;
     if (/^\d+$/.test(value)) return true;
     return false;
@@ -854,6 +902,7 @@
         if (!parent) return NodeFilter.FILTER_REJECT;
         if (parent.closest("script, style")) return NodeFilter.FILTER_REJECT;
         if (parent.closest("select")) return NodeFilter.FILTER_REJECT;
+        if (parent.closest(".processing-status")) return NodeFilter.FILTER_REJECT;
         if (parent.closest("[data-i18n], [data-i18n-dynamic]")) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
@@ -921,13 +970,18 @@
           if (node.nodeType === Node.TEXT_NODE) {
             node.nodeValue = translateString(node.nodeValue, currentLang);
           } else if (node.nodeType === Node.ELEMENT_NODE) {
-            translateKeyedElements(currentLang);
-            translateTextNodes(node, currentLang);
+            if (!node.closest || !node.closest(".processing-status")) {
+              translateKeyedElements(currentLang);
+              translateTextNodes(node, currentLang);
+            }
           }
         });
 
         if (mutation.type === "characterData" && mutation.target && mutation.target.nodeType === Node.TEXT_NODE) {
-          mutation.target.nodeValue = translateString(mutation.target.nodeValue, currentLang);
+          const p = mutation.target.parentElement;
+          if (!p || !p.closest(".processing-status")) {
+            mutation.target.nodeValue = translateString(mutation.target.nodeValue, currentLang);
+          }
         }
       });
 
