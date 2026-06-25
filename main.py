@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import generate_raw_material_bulk_file, export_bom_structure_file
+from bom_formatter import generate_raw_material_bulk_file, export_bom_structure_file, generate_working_hour_rollup_file
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -20,6 +20,7 @@ OUTPUT_DIR = BASE_DIR / "outputs"
 DATA_DIR = BASE_DIR / "data"
 RULE_LIBRARY_DIR = BASE_DIR / "rule_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
+LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 
 RULE_SET_MAP = {
     "IPS": "LiteOn_IPS",
@@ -35,7 +36,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V11_SEMI_WORKING_HOUR_ROLLUP =====")
+print("===== CMP MAIN VERSION: CMP_V12_WORKING_HOUR_ROLLUP =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -1446,13 +1447,15 @@ async def generate_bulk_file(
 
     working_hour_source = str(working_hour_source or "direct").strip()
     bom_structure_path = None
+    working_hour_rollup_path = None
     if working_hour_source in ["include_semi", "semi", "semi_finished", "rollup", "rolled_up", "total"]:
-        if not LATEST_BOM_STRUCTURE_PATH.exists():
+        if not LATEST_WORKING_HOUR_ROLLUP_PATH.exists():
             return JSONResponse({
                 "ok": False,
-                "message": "No BOM Expansion result found. Please complete Module 2 → BOM Expansion first, then return to Step 2 to generate Product Activity Data Bulk."
+                "message": "No Working Hour Roll-up result found. Please complete Module 2 → BOM Expansion with Step 1 Output first, then return to Step 2 to generate Product Activity Data Bulk."
             }, status_code=400)
-        bom_structure_path = LATEST_BOM_STRUCTURE_PATH
+        working_hour_rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH
+        bom_structure_path = LATEST_BOM_STRUCTURE_PATH if LATEST_BOM_STRUCTURE_PATH.exists() else None
 
     try:
         summary = generate_product_activity_bulk_files_by_site_zip(
@@ -1462,6 +1465,7 @@ async def generate_bulk_file(
             token=token,
             working_hour_source=working_hour_source,
             bom_structure_path=bom_structure_path,
+            working_hour_rollup_path=working_hour_rollup_path,
         )
     except Exception as exc:
         traceback.print_exc()
@@ -1535,6 +1539,7 @@ def download_product_series_master(rule_set: str = DEFAULT_RULE_SET):
 async def process_bom_expansion(
     bom_file: UploadFile = File(...),
     template_file: UploadFile = File(...),
+    step1_file: Optional[UploadFile] = File(None),
     parent_col: str = Form(""),
     component_col: str = Form(""),
     qty_col: str = Form(""),
@@ -1555,14 +1560,26 @@ async def process_bom_expansion(
             status_code=400,
         )
 
+    if step1_file is not None and getattr(step1_file, "filename", None):
+        if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse(
+                {"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"},
+                status_code=400,
+            )
+
     token = uuid.uuid4().hex[:10]
 
     bom_path = UPLOAD_DIR / f"standard_bom_{token}_{Path(bom_file.filename).name}"
     template_path = UPLOAD_DIR / f"raw_material_template_{token}_{Path(template_file.filename).name}"
     output_path = OUTPUT_DIR / f"raw_material_activity_data_bulk_{token}.xlsx"
+    working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{token}.xlsx"
+    step1_path = None
 
     bom_path.write_bytes(await bom_file.read())
     template_path.write_bytes(await template_file.read())
+    if step1_file is not None and getattr(step1_file, "filename", None):
+        step1_path = UPLOAD_DIR / f"step1_for_rollup_{token}_{Path(step1_file.filename).name}"
+        step1_path.write_bytes(await step1_file.read())
 
     mapping = {
         "parent_col": parent_col,
@@ -1588,6 +1605,28 @@ async def process_bom_expansion(
         )
         summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
         summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
+        summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
+
+        if step1_path is not None:
+            rollup_summary = generate_working_hour_rollup_file(
+                step1_output_path=step1_path,
+                bom_structure_path=LATEST_BOM_STRUCTURE_PATH,
+                output_path=working_hour_rollup_output_path,
+            )
+            LATEST_WORKING_HOUR_ROLLUP_PATH.write_bytes(working_hour_rollup_output_path.read_bytes())
+            summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
+            summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
+            summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name
+            summary["working_hour_rollup_latest_download_url"] = f"/download/{LATEST_WORKING_HOUR_ROLLUP_PATH.name}"
+            summary["working_hour_rollup_rows"] = int(rollup_summary.get("summary_rows", 0))
+            summary["working_hour_rollup_detail_rows"] = int(rollup_summary.get("detail_rows", 0))
+            summary["working_hour_rollup_total_direct_hours"] = float(rollup_summary.get("total_direct_hours", 0))
+            summary["working_hour_rollup_total_semi_hours"] = float(rollup_summary.get("total_semi_hours", 0))
+            summary["working_hour_rollup_total_hours"] = float(rollup_summary.get("total_hours", 0))
+        else:
+            summary["working_hour_rollup_filename"] = ""
+            summary["working_hour_rollup_download_url"] = ""
+            summary["working_hour_rollup_rows"] = 0
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse(

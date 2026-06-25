@@ -231,6 +231,18 @@
         "en": "Upload Standard BOM",
         "zh": "上傳標準 BOM"
     },
+    "uploadStep1OutputForRollup": {
+        "en": "Upload Step 1 Output File for Working Hour Roll-up",
+        "zh": "上傳 Step 1 輸出檔（用於工時 Roll-up）"
+    },
+    "downloadWorkingHourRollup": {
+        "en": "Download Working Hour Roll-up",
+        "zh": "下載工時 Roll-up"
+    },
+    "processingBomExpansion": {
+        "en": "Processing BOM Expansion...",
+        "zh": "正在處理 BOM 展開..."
+    },
     "uploadRawMaterialBulkTemplate": {
         "en": "Upload Raw Material Bulk Template",
         "zh": "上傳原物料 Bulk 範本"
@@ -591,6 +603,10 @@
     "Upload Raw Material Bulk Template": "上傳原物料 Bulk 範本",
     "Process BOM Expansion": "執行 BOM 展開",
     "Download Raw Material Bulk": "下載原物料 Bulk",
+    "Download Working Hour Roll-up": "下載工時 Roll-up",
+    "Upload Step 1 Output File for Working Hour Roll-up": "上傳 Step 1 輸出檔（用於工時 Roll-up）",
+    "Working Hour Roll-up Rows": "工時 Roll-up 筆數",
+    "Semi Working Hours": "半品工時",
     "BOM Expansion Logic": "BOM 展開邏輯",
     "Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.": "設定 BOM 展開來源欄位名稱。使用「預設」套用系統設定，或使用「確認」套用輸入內容。",
     "Parent Material": "母件料號",

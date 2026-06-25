@@ -420,6 +420,10 @@
 
               <label data-i18n="uploadRawMaterialBulkTemplate">Upload Raw Material Bulk Template</label>
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+
+              <label data-i18n="uploadStep1OutputForRollup">Upload Step 1 Output File for Working Hour Roll-up</label>
+              <input id="bomStep1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" />
+
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⌘</span>
                 <span data-i18n="processBomExpansion">Process BOM Expansion</span>
@@ -441,6 +445,7 @@
             </div>
 
             <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk</span></a>
+            <a id="workingHourRollupDownload" class="download disabled" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
 
 
           </section>
@@ -698,6 +703,7 @@ const homeButton = document.getElementById('homeButton');
 
 const bomForm = document.getElementById('bomForm');
 const bomDownload = document.getElementById('bomDownload');
+const workingHourRollupDownload = document.getElementById('workingHourRollupDownload');
 const bomProcessingStatus = document.getElementById('bomProcessingStatus');
 const bomStatusTitle = document.getElementById('bomStatusTitle');
 const bomStatusText = document.getElementById('bomStatusText');
@@ -945,13 +951,13 @@ function stopBomProgressSuccess(summary) {
   setBomProcessingState(
     'success',
     cmpT('bomExpansionCompleted', 'BOM Expansion completed'),
-    `Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Max BOM Level: ${summary.max_level}.`,
+    `Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Max BOM Level: ${summary.max_level}; Working Hour Roll-up rows: ${summary.working_hour_rollup_rows || 0}.`,
     cmpT('completed', 'Completed'),
     100
   );
 
   bomLog.textContent =
-    `Completed.\nProducts: ${summary.products}\nSemi-finished Components: ${summary.semi_finished}\nActivity Data Rows: ${summary.activity_rows}\nRaw Materials: ${summary.raw_materials}\nMax BOM Level: ${summary.max_level}`;
+    `Completed.\nProducts: ${summary.products}\nSemi-finished Components: ${summary.semi_finished}\nActivity Data Rows: ${summary.activity_rows}\nRaw Materials: ${summary.raw_materials}\nMax BOM Level: ${summary.max_level}\nWorking Hour Roll-up Rows: ${summary.working_hour_rollup_rows || 0}\nSemi Working Hours: ${summary.working_hour_rollup_total_semi_hours || 0}`;
 }
 
 function stopBomProgressError(message) {
@@ -995,7 +1001,11 @@ bomForm.addEventListener('submit', async (e) => {
 
   bomDownload.classList.add('disabled');
   bomDownload.href = '#';
-  bomLog.textContent = 'Processing BOM Expansion...';
+  if (workingHourRollupDownload) {
+    workingHourRollupDownload.classList.add('disabled');
+    workingHourRollupDownload.href = '#';
+  }
+  bomLog.textContent = cmpT('processingBomExpansion', 'Processing BOM Expansion...');
 
   startBomEstimatedProgress();
 
@@ -1009,6 +1019,10 @@ bomForm.addEventListener('submit', async (e) => {
 
     bomDownload.href = data.download_url;
     bomDownload.classList.remove('disabled');
+    if (workingHourRollupDownload && data.summary && data.summary.working_hour_rollup_download_url) {
+      workingHourRollupDownload.href = data.summary.working_hour_rollup_download_url;
+      workingHourRollupDownload.classList.remove('disabled');
+    }
     stopBomProgressSuccess(data.summary);
   } catch (err) {
     stopBomProgressError(err.message);

@@ -115,6 +115,47 @@ def normalize_working_hour_source(value: Any) -> str:
     return "direct"
 
 
+
+
+def _read_working_hour_rollup(working_hour_rollup_path: str | Path | None) -> pd.DataFrame:
+    if not working_hour_rollup_path:
+        return pd.DataFrame()
+    path = Path(working_hour_rollup_path)
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_excel(path, sheet_name="Summary", dtype=object)
+    except ValueError:
+        return pd.read_excel(path, sheet_name=0, dtype=object)
+
+
+def _build_total_hour_lookup_from_rollup(working_hour_rollup_path: str | Path | None) -> tuple[dict[tuple[str, str], float], dict[str, float]]:
+    rollup = _read_working_hour_rollup(working_hour_rollup_path)
+    if rollup.empty:
+        return {}, {}
+    material_col = _find_optional_column(rollup, ["Material Number", "Material", "Product"])
+    site_col = _find_optional_column(rollup, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
+    total_col = _find_optional_column(rollup, ["Total Annual Working Hour", "Total Working Hour", "Total Hour", "Total Hours"])
+    if not material_col or not total_col:
+        return {}, {}
+    work = rollup.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material)
+    work["_site_key"] = work[site_col].apply(lambda x: str(x or "").strip().upper()) if site_col else ""
+    work["_total_hour"] = work[total_col].apply(_safe_number)
+    by_site: dict[tuple[str, str], float] = {}
+    for _, r in work.groupby(["_site_key", "_material_key"], dropna=False, as_index=False)["_total_hour"].sum().iterrows():
+        site = str(r["_site_key"] or "").strip()
+        material = str(r["_material_key"] or "").strip()
+        if material:
+            by_site[(site, material)] = float(r["_total_hour"] or 0)
+    by_mat: dict[str, float] = {}
+    for _, r in work.groupby(["_material_key"], dropna=False, as_index=False)["_total_hour"].sum().iterrows():
+        material = str(r["_material_key"] or "").strip()
+        if material:
+            by_mat[material] = float(r["_total_hour"] or 0)
+    return by_site, by_mat
+
+
 def _read_latest_bom_structure(bom_structure_path: str | Path | None) -> pd.DataFrame:
     if not bom_structure_path:
         return pd.DataFrame()
@@ -191,6 +232,7 @@ def generate_product_activity_bulk_file(
     output_path: str | Path,
     working_hour_source: str = "direct",
     bom_structure_path: str | Path | None = None,
+    working_hour_rollup_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """
     方案 1：直接複製原始 Bulk Template，再只覆蓋指定分頁的指定儲存格內容。
@@ -232,16 +274,21 @@ def generate_product_activity_bulk_file(
 
     working_hour_source = normalize_working_hour_source(working_hour_source)
     semi_hour_by_material: dict[str, float] = {}
+    rollup_by_site_material: dict[tuple[str, str], float] = {}
+    rollup_by_material: dict[str, float] = {}
     if working_hour_source == "include_semi":
-        if bom_structure_path is None or not Path(bom_structure_path).exists():
-            raise ValueError("No BOM Expansion result found. Please complete Module 2 → BOM Expansion first, then return to Step 2 to generate Product Activity Data Bulk.")
-        semi_hour_by_material = _build_semi_hour_per_product(
-            step1_df=df,
-            material_col=material_col,
-            qty_col=qty_col,
-            direct_hour_col=labor_hours_col,
-            bom_structure_path=bom_structure_path,
-        )
+        if working_hour_rollup_path is not None and Path(working_hour_rollup_path).exists():
+            rollup_by_site_material, rollup_by_material = _build_total_hour_lookup_from_rollup(working_hour_rollup_path)
+        elif bom_structure_path is not None and Path(bom_structure_path).exists():
+            semi_hour_by_material = _build_semi_hour_per_product(
+                step1_df=df,
+                material_col=material_col,
+                qty_col=qty_col,
+                direct_hour_col=labor_hours_col,
+                bom_structure_path=bom_structure_path,
+            )
+        else:
+            raise ValueError("No Working Hour Roll-up result found. Please complete Module 2 → BOM Expansion with Step 1 Output first, then return to Step 2 to generate Product Activity Data Bulk.")
 
     is_wip_col = None
     for candidate in ["Is_WIP", "Is WIP", "WIP"]:
@@ -316,23 +363,6 @@ def generate_product_activity_bulk_file(
 
         year = _as_year(row.get(year_col))
         qty = row.get(qty_col)
-        labor_hours = row.get(labor_hours_col) if labor_hours_col else None
-        direct_labor_hours = 0.0
-        semi_labor_hours = 0.0
-        if labor_hours_col:
-            labor_hours = pd.to_numeric(labor_hours, errors="coerce")
-            direct_labor_hours = 0 if pd.isna(labor_hours) else float(labor_hours)
-
-            if working_hour_source == "include_semi":
-                semi_labor_hours = float(semi_hour_by_material.get(_normalize_material(product_name), 0) or 0)
-
-            labor_hours = direct_labor_hours + semi_labor_hours
-
-            # 年度總工時等於 0 的產品不寫入 Bulk。
-            # 0.01、0.001 等任何非 0 小數仍需保留並寫入。
-            if labor_hours == 0:
-                excluded_zero_labor_hour_rows += 1
-                continue
 
         product_name = str(product_name).strip()
         product_description = _safe_text(row.get(material_desc_col)) if material_desc_col else ""
@@ -341,6 +371,35 @@ def generate_product_activity_bulk_file(
         if not production_site:
             # Rule Master only mode: keep blank if Step1 did not provide Production Site.
             production_site = ""
+
+        labor_hours = row.get(labor_hours_col) if labor_hours_col else None
+        direct_labor_hours = 0.0
+        semi_labor_hours = 0.0
+        if labor_hours_col:
+            labor_hours = pd.to_numeric(labor_hours, errors="coerce")
+            direct_labor_hours = 0 if pd.isna(labor_hours) else float(labor_hours)
+
+            if working_hour_source == "include_semi":
+                material_key = _normalize_material(product_name)
+                site_key = str(production_site or "").strip().upper()
+                if rollup_by_site_material or rollup_by_material:
+                    if (site_key, material_key) in rollup_by_site_material:
+                        labor_hours = float(rollup_by_site_material.get((site_key, material_key), 0) or 0)
+                    elif material_key in rollup_by_material:
+                        labor_hours = float(rollup_by_material.get(material_key, 0) or 0)
+                    else:
+                        labor_hours = direct_labor_hours
+                else:
+                    semi_labor_hours = float(semi_hour_by_material.get(material_key, 0) or 0)
+                    labor_hours = direct_labor_hours + semi_labor_hours
+            else:
+                labor_hours = direct_labor_hours
+
+            # 年度總工時等於 0 的產品不寫入 Bulk。
+            # 0.01、0.001 等任何非 0 小數仍需保留並寫入。
+            if labor_hours == 0:
+                excluded_zero_labor_hour_rows += 1
+                continue
 
         # 分頁 1：Input Sheet Activity Data
         activity_ws.cell(activity_row, 1).value = product_name
@@ -390,7 +449,8 @@ def generate_product_activity_bulk_file(
         "labor_hours_unit_written_to_bulk": bool(labor_hours_col and activity_labor_hours_unit_col),
         "labor_hours_unit_template_column": int(activity_labor_hours_unit_col) if activity_labor_hours_unit_col else None,
         "working_hour_source": working_hour_source,
-        "semi_finished_working_hour_products": int(len(semi_hour_by_material)) if isinstance(semi_hour_by_material, dict) else 0,
+        "working_hour_rollup_used": bool(rollup_by_site_material or rollup_by_material),
+        "semi_finished_working_hour_products": int(len(semi_hour_by_material)) if isinstance(semi_hour_by_material, dict) else int(len(rollup_by_material)),
     }
 
 
@@ -402,6 +462,7 @@ def generate_product_activity_bulk_files_by_site(
     token: str | None = None,
     working_hour_source: str = "direct",
     bom_structure_path: str | Path | None = None,
+    working_hour_rollup_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """Generate one or multiple bulk files according to Production Site.
 
@@ -419,7 +480,7 @@ def generate_product_activity_bulk_files_by_site(
 
     if production_site_col is None:
         output_path = output_dir / f"formatted_product_activity_data_bulk_create_{token}.xlsx"
-        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
+        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
         return {
             "split_by_production_site": False,
             "production_site_count": 1,
@@ -438,7 +499,7 @@ def generate_product_activity_bulk_files_by_site(
     if len(sites) <= 1:
         site = sites[0] if sites else "ALL"
         output_path = output_dir / f"formatted_product_activity_data_bulk_create_{_sanitize_filename(site)}_{token}.xlsx"
-        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
+        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
         return {
             "split_by_production_site": False,
             "production_site_count": len(sites) or 1,
@@ -463,7 +524,7 @@ def generate_product_activity_bulk_files_by_site(
             with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
                 site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
 
-            summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
+            summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
             files.append({
                 "production_site": site,
                 "filename": output_path.name,
@@ -493,6 +554,7 @@ def generate_product_activity_bulk_files_by_site_zip(
     token: str | None = None,
     working_hour_source: str = "direct",
     bom_structure_path: str | Path | None = None,
+    working_hour_rollup_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """Generate Bulk files by Production Site and package them into one ZIP."""
     import zipfile
@@ -516,7 +578,7 @@ def generate_product_activity_bulk_files_by_site_zip(
 
         if production_site_col is None:
             output_path = tmpdir_path / f"formatted_product_activity_data_bulk_create_ALL_{token}.xlsx"
-            summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
+            summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
             generated_files.append({
                 "production_site": "ALL",
                 "filename": output_path.name,
@@ -540,7 +602,7 @@ def generate_product_activity_bulk_files_by_site_zip(
                 with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
                     site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
 
-                summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
+                summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
                 generated_files.append({
                     "production_site": site,
                     "filename": output_path.name,
@@ -578,4 +640,5 @@ def generate_product_activity_bulk_files_by_site_zip(
         "zip_output": True,
         "working_hour_source": normalize_working_hour_source(working_hour_source),
         "bom_structure_used": bool(bom_structure_path and Path(bom_structure_path).exists()),
+        "working_hour_rollup_used": bool(working_hour_rollup_path and Path(working_hour_rollup_path).exists()),
     }

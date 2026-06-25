@@ -356,3 +356,213 @@ def export_bom_structure_file(bom_path: str | Path, output_path: str | Path, map
     summary["output_filename"] = output_path.name
     summary["used_columns"] = used_columns
     return summary
+
+
+# =========================================================
+# V12 Working Hour Roll-up
+# Step1 Output + BOM Structure -> working_hour_rollup.xlsx
+# =========================================================
+
+STEP1_SOURCE_SHEET_NAME = "Plant_Material年度產量"
+
+
+def _find_step1_column(df: pd.DataFrame, candidates: list[str]) -> str:
+    normalized = {_normalize_col(c).lower(): c for c in df.columns}
+    for name in candidates:
+        key = _normalize_col(name).lower()
+        if key in normalized:
+            return normalized[key]
+    raise ValueError(f"找不到 Step1 欄位：{', '.join(candidates)}")
+
+
+def _find_step1_optional_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    try:
+        return _find_step1_column(df, candidates)
+    except ValueError:
+        return None
+
+
+def _normalize_material_key(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _read_bom_structure_file(path: str | Path) -> pd.DataFrame:
+    path = Path(path)
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_excel(path, sheet_name="BOM Structure", dtype=object)
+    except ValueError:
+        return pd.read_excel(path, sheet_name=0, dtype=object)
+
+
+def generate_working_hour_rollup_file(
+    step1_output_path: str | Path,
+    bom_structure_path: str | Path,
+    output_path: str | Path,
+) -> Dict[str, Any]:
+    """Generate auditable working-hour roll-up workbook.
+
+    Summary.Total Annual Working Hour is the source used by Step2 when
+    Include Semi-finished Working Hour is selected.
+    """
+    step1_output_path = Path(step1_output_path)
+    bom_structure_path = Path(bom_structure_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    step1_df = pd.read_excel(step1_output_path, sheet_name=STEP1_SOURCE_SHEET_NAME, dtype=object)
+    bom_df = _read_bom_structure_file(bom_structure_path)
+    if bom_df.empty:
+        raise ValueError("BOM Structure is empty. Please complete Module 2 → BOM Expansion first.")
+
+    material_col = _find_step1_column(step1_df, ["Material Number"])
+    qty_col = _find_step1_column(step1_df, ["年度生產量", "Annual Quantity", "Delivered quantity"])
+    hour_col = _find_step1_optional_column(step1_df, ["年度總工時", "Total working hours", "Selected Hours", "Total Hours", "Working Hours"])
+    if not hour_col:
+        raise ValueError("Step1 Output 找不到年度總工時欄位，無法產生 working_hour_rollup.xlsx")
+
+    plant_col = _find_step1_optional_column(step1_df, ["Plant"])
+    site_col = _find_step1_optional_column(step1_df, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
+    type_col = _find_step1_optional_column(step1_df, ["產品類型", "Product Type"])
+    wip_col = _find_step1_optional_column(step1_df, ["Is_WIP", "Is WIP", "WIP"])
+
+    work = step1_df.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_annual_qty"] = work[qty_col].apply(_safe_number)
+    work["_direct_hour"] = work[hour_col].apply(_safe_number)
+    work["_plant"] = work[plant_col].apply(_safe_text) if plant_col else ""
+    work["_production_site"] = work[site_col].apply(_safe_text) if site_col else ""
+    work["_product_type"] = work[type_col].apply(_safe_text) if type_col else ""
+    work["_is_wip"] = work[wip_col].apply(_safe_text) if wip_col else ""
+
+    summary_base = work.groupby(
+        ["_material_key", "_plant", "_production_site", "_product_type", "_is_wip"],
+        dropna=False,
+        as_index=False,
+    ).agg({"_annual_qty": "sum", "_direct_hour": "sum"})
+
+    parent_values = set(bom_df["Parent Material"].dropna().astype(str).str.strip().str.upper()) if "Parent Material" in bom_df.columns else set()
+    component_values = set(bom_df["Component"].dropna().astype(str).str.strip().str.upper()) if "Component" in bom_df.columns else set()
+    semi_materials = parent_values.intersection(component_values)
+
+    material_totals = work.groupby(["_material_key"], dropna=False, as_index=False).agg({"_annual_qty": "sum", "_direct_hour": "sum"})
+    qty_by_material = {}
+    direct_by_material = {}
+    hour_per_pc_by_material = {}
+    for _, r in material_totals.iterrows():
+        material = str(r["_material_key"] or "").strip()
+        qty = float(r["_annual_qty"] or 0)
+        hours = float(r["_direct_hour"] or 0)
+        qty_by_material[material] = qty
+        direct_by_material[material] = hours
+        hour_per_pc_by_material[material] = hours / qty if qty else 0.0
+
+    semi_hour_per_pc_rows = [{
+        "Semi Material": m,
+        "Semi Annual Qty": qty_by_material.get(m, 0.0),
+        "Semi Direct Annual Working Hour": direct_by_material.get(m, 0.0),
+        "Semi Direct Hour per PC": hour_per_pc_by_material.get(m, 0.0),
+    } for m in sorted(semi_materials)]
+    semi_hour_per_pc_df = pd.DataFrame(semi_hour_per_pc_rows)
+
+    target_col = _find_step1_optional_column(bom_df, ["Target Product", "target_product"])
+    parent_col = _find_step1_optional_column(bom_df, ["Parent Material", "parent_material"])
+    comp_col = _find_step1_optional_column(bom_df, ["Component", "component"])
+    acc_col = _find_step1_optional_column(bom_df, ["Accumulated Quantity", "usage", "Quantity"])
+    level_col = _find_step1_optional_column(bom_df, ["Level", "level"])
+    semi_flag_col = _find_step1_optional_column(bom_df, ["Is Semi-finished", "Is Semi", "semi_finished"])
+    if not target_col or not comp_col or not acc_col:
+        raise ValueError("BOM Structure 缺少 Target Product、Component 或 Accumulated Quantity 欄位")
+
+    b = bom_df.copy()
+    b["_target_key"] = b[target_col].apply(_normalize_material_key)
+    b["_component_key"] = b[comp_col].apply(_normalize_material_key)
+    b["_accumulated_qty"] = b[acc_col].apply(_safe_number)
+    if semi_flag_col:
+        b = b[b[semi_flag_col].astype(str).str.strip().str.upper().isin(["Y", "YES", "TRUE", "1"])].copy()
+    else:
+        b = b[b["_component_key"].isin(semi_materials)].copy()
+
+    detail_rows = []
+    semi_by_key: dict[tuple[str, str, str], float] = {}
+    for _, target_row in summary_base.iterrows():
+        target = str(target_row["_material_key"] or "").strip()
+        plant = _safe_text(target_row["_plant"])
+        site = _safe_text(target_row["_production_site"])
+        target_qty = float(target_row["_annual_qty"] or 0)
+        for _, edge in b[b["_target_key"] == target].iterrows():
+            semi = str(edge["_component_key"] or "").strip()
+            acc_qty = float(edge["_accumulated_qty"] or 0)
+            semi_hr_pc = float(hour_per_pc_by_material.get(semi, 0.0) or 0.0)
+            contrib_pc = acc_qty * semi_hr_pc
+            contrib_annual = target_qty * contrib_pc
+            if contrib_annual:
+                key = (target, plant, site)
+                semi_by_key[key] = semi_by_key.get(key, 0.0) + contrib_annual
+            detail_rows.append({
+                "Target Product": target,
+                "Plant": plant,
+                "Production Site": site,
+                "Target Annual Qty": target_qty,
+                "Parent Material": edge.get(parent_col, "") if parent_col else "",
+                "Semi Material": semi,
+                "BOM Accumulated Qty": acc_qty,
+                "Semi Direct Hour per PC": semi_hr_pc,
+                "Semi Hour Contribution per PC": contrib_pc,
+                "Semi Annual Working Hour Contribution": contrib_annual,
+                "Level": edge.get(level_col, "") if level_col else "",
+            })
+
+    detail_df = pd.DataFrame(detail_rows)
+    if detail_df.empty:
+        detail_df = pd.DataFrame(columns=["Target Product", "Plant", "Production Site", "Target Annual Qty", "Parent Material", "Semi Material", "BOM Accumulated Qty", "Semi Direct Hour per PC", "Semi Hour Contribution per PC", "Semi Annual Working Hour Contribution", "Level"])
+
+    summary_rows = []
+    for _, r in summary_base.iterrows():
+        material = str(r["_material_key"] or "").strip()
+        plant = _safe_text(r["_plant"])
+        site = _safe_text(r["_production_site"])
+        qty = float(r["_annual_qty"] or 0)
+        direct = float(r["_direct_hour"] or 0)
+        semi = float(semi_by_key.get((material, plant, site), 0.0) or 0.0)
+        total = direct + semi
+        summary_rows.append({
+            "Material Number": material,
+            "Plant": plant,
+            "Production Site": site,
+            "Product Type": _safe_text(r["_product_type"]),
+            "Is_WIP": _safe_text(r["_is_wip"]),
+            "Annual Qty": qty,
+            "Direct Annual Working Hour": direct,
+            "Semi Annual Working Hour": semi,
+            "Total Annual Working Hour": total,
+            "Direct Hour per PC": direct / qty if qty else 0.0,
+            "Semi Hour per PC": semi / qty if qty else 0.0,
+            "Total Hour per PC": total / qty if qty else 0.0,
+        })
+    summary_df = pd.DataFrame(summary_rows).sort_values(["Plant", "Production Site", "Material Number"]).reset_index(drop=True)
+
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, index=False, sheet_name="Summary")
+        detail_df.to_excel(writer, index=False, sheet_name="Roll-up Detail")
+        semi_hour_per_pc_df.to_excel(writer, index=False, sheet_name="Semi Hour per PC")
+        bom_df.to_excel(writer, index=False, sheet_name="BOM Structure")
+        for sheet in writer.book.worksheets:
+            sheet.freeze_panes = "A2"
+            for col in sheet.columns:
+                max_len = 12
+                letter = col[0].column_letter
+                for cell in col[:1000]:
+                    max_len = max(max_len, len(str(cell.value or "")) + 2)
+                sheet.column_dimensions[letter].width = min(max_len, 48)
+
+    return {
+        "output_filename": output_path.name,
+        "summary_rows": int(len(summary_df)),
+        "detail_rows": int(len(detail_df)),
+        "semi_materials": int(len(semi_hour_per_pc_df)),
+        "total_direct_hours": float(summary_df["Direct Annual Working Hour"].sum()) if not summary_df.empty else 0.0,
+        "total_semi_hours": float(summary_df["Semi Annual Working Hour"].sum()) if not summary_df.empty else 0.0,
+        "total_hours": float(summary_df["Total Annual Working Hour"].sum()) if not summary_df.empty else 0.0,
+    }
