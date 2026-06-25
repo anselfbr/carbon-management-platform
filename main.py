@@ -12,13 +12,14 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import generate_raw_material_bulk_file
+from bom_formatter import generate_raw_material_bulk_file, export_bom_structure_file
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
 DATA_DIR = BASE_DIR / "data"
 RULE_LIBRARY_DIR = BASE_DIR / "rule_library"
+LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 
 RULE_SET_MAP = {
     "IPS": "LiteOn_IPS",
@@ -34,7 +35,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V10_BU_RULE_LIBRARY =====")
+print("===== CMP MAIN VERSION: CMP_V11_SEMI_WORKING_HOUR_ROLLUP =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -1427,6 +1428,7 @@ async def process(request: Request):
 async def generate_bulk_file(
     step1_file: UploadFile = File(...),
     template_file: UploadFile = File(...),
+    working_hour_source: str = Form("direct"),
 ):
     if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
         return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
@@ -1442,12 +1444,24 @@ async def generate_bulk_file(
     step1_path.write_bytes(await step1_file.read())
     template_path.write_bytes(await template_file.read())
 
+    working_hour_source = str(working_hour_source or "direct").strip()
+    bom_structure_path = None
+    if working_hour_source in ["include_semi", "semi", "semi_finished", "rollup", "rolled_up", "total"]:
+        if not LATEST_BOM_STRUCTURE_PATH.exists():
+            return JSONResponse({
+                "ok": False,
+                "message": "No BOM Expansion result found. Please complete Module 2 → BOM Expansion first, then return to Step 2 to generate Product Activity Data Bulk."
+            }, status_code=400)
+        bom_structure_path = LATEST_BOM_STRUCTURE_PATH
+
     try:
         summary = generate_product_activity_bulk_files_by_site_zip(
             step1_output_path=step1_path,
             bulk_template_path=template_path,
             output_dir=OUTPUT_DIR,
             token=token,
+            working_hour_source=working_hour_source,
+            bom_structure_path=bom_structure_path,
         )
     except Exception as exc:
         traceback.print_exc()
@@ -1567,6 +1581,13 @@ async def process_bom_expansion(
             output_path=output_path,
             mapping=mapping,
         )
+        bom_structure_summary = export_bom_structure_file(
+            bom_path=bom_path,
+            output_path=LATEST_BOM_STRUCTURE_PATH,
+            mapping=mapping,
+        )
+        summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
+        summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse(

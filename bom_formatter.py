@@ -284,3 +284,75 @@ def generate_raw_material_bulk_file(
     summary["output_filename"] = output_path.name
     summary["used_columns"] = used_columns
     return summary
+
+
+
+def _explode_bom_structure(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Create normalized multi-level BOM structure for Step 2 working-hour roll-up."""
+    parent_set = set(df["_parent"].dropna().astype(str))
+    component_set = set(df["_component"].dropna().astype(str))
+    semi_finished_set = parent_set.intersection(component_set)
+    roots = sorted(parent_set - component_set) or sorted(parent_set)
+    children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for _, r in df.iterrows():
+        children[r["_parent"]].append({
+            "parent": r["_parent"], "component": r["_component"], "qty": r["_qty"],
+            "uom": r["_uom"], "description": r["_description"],
+            "material_group": r["_material_group"], "valid_from": r["_valid_from"],
+        })
+    rows: list[dict[str, Any]] = []
+    cycle_count = 0
+    for root in roots:
+        stack: list[tuple[str, float, int, list[str]]] = [(root, 1.0, 0, [root])]
+        while stack:
+            current_parent, accumulated_qty, level, path = stack.pop()
+            for child in children.get(current_parent, []):
+                component = child["component"]
+                next_qty = accumulated_qty * child["qty"]
+                next_level = level + 1
+                is_semi = component in semi_finished_set
+                if component in path:
+                    cycle_count += 1
+                    continue
+                rows.append({
+                    "Target Product": root,
+                    "Parent Material": current_parent,
+                    "Component": component,
+                    "Quantity Per Parent": child["qty"],
+                    "Accumulated Quantity": next_qty,
+                    "Unit": child["uom"],
+                    "Component Description": child["description"],
+                    "Material Group": child["material_group"],
+                    "Valid From": child["valid_from"],
+                    "Level": next_level,
+                    "Is Semi-finished": "Y" if is_semi else "N",
+                })
+                if is_semi:
+                    stack.append((component, next_qty, next_level, path + [component]))
+    structure = pd.DataFrame(rows)
+    if structure.empty:
+        structure = pd.DataFrame(columns=["Target Product", "Parent Material", "Component", "Quantity Per Parent", "Accumulated Quantity", "Unit", "Component Description", "Material Group", "Valid From", "Level", "Is Semi-finished"])
+    summary = {"products": len(roots), "semi_finished": len(semi_finished_set), "structure_rows": int(len(structure)), "max_level": int(structure["Level"].max()) if not structure.empty else 0, "cycles_skipped": cycle_count}
+    return structure, summary
+
+
+def export_bom_structure_file(bom_path: str | Path, output_path: str | Path, mapping: dict[str, str | None] | None = None) -> Dict[str, Any]:
+    """Export latest normalized BOM structure for Step 2 semi-finished working-hour roll-up."""
+    bom_path = Path(bom_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    bom_df, used_columns = _read_bom(bom_path, mapping=mapping)
+    structure, summary = _explode_bom_structure(bom_df)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        structure.to_excel(writer, index=False, sheet_name="BOM Structure")
+        ws = writer.book["BOM Structure"]
+        ws.freeze_panes = "A2"
+        for col in ws.columns:
+            max_len = 12
+            letter = col[0].column_letter
+            for cell in col[:1000]:
+                max_len = max(max_len, len(str(cell.value or "")) + 2)
+            ws.column_dimensions[letter].width = min(max_len, 45)
+    summary["output_filename"] = output_path.name
+    summary["used_columns"] = used_columns
+    return summary

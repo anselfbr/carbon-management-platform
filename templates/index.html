@@ -347,6 +347,15 @@
               <label>Upload Bulk Template File</label>
               <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
+              <label data-i18n="workingHourSource">Working Hour Source</label>
+              <select id="bulkWorkingHourSource" name="working_hour_source">
+                <option value="direct" data-i18n="directWorkingHour" selected>Direct Working Hour</option>
+                <option value="include_semi" data-i18n="includeSemiWorkingHour">Include Semi-finished Working Hour</option>
+              </select>
+              <p id="semiHourHint" class="hint" data-i18n="semiHourHint">
+                This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.
+              </p>
+
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⚙</span>
                 Generate Formatted Bulk File
@@ -673,6 +682,7 @@ const bulkStatusText = document.getElementById('bulkStatusText');
 const bulkStatusTime = document.getElementById('bulkStatusTime');
 const bulkProgressBar = document.getElementById('bulkProgressBar');
 const bulkDownload = document.getElementById('bulkDownload');
+const bulkWorkingHourSource = document.getElementById('bulkWorkingHourSource');
 const processingStatus = document.getElementById('processingStatus');
 const statusTitle = document.getElementById('statusTitle');
 const statusText = document.getElementById('statusText');
@@ -1192,7 +1202,7 @@ function stopBulkProgressSuccess(summary) {
   setBulkProcessingState(
     'success',
     'Batch formatting completed',
-    `Activity Data: ${summary.activity_rows} rows; Products: ${summary.product_rows} rows; Excluded WIP: ${summary.excluded_wip_rows} rows;${fileCountText}`,
+    `Activity Data: ${summary.activity_rows} rows; Products: ${summary.product_rows} rows; Excluded WIP: ${summary.excluded_wip_rows} rows;${fileCountText} Working Hour: ${summary.working_hour_source || 'direct'};`,
     'Completed',
     100
   );
@@ -1209,6 +1219,16 @@ function stopBulkProgressError(message) {
   );
 }
 
+if (bulkWorkingHourSource) {
+  bulkWorkingHourSource.addEventListener('change', () => {
+    if (bulkWorkingHourSource.value === 'include_semi') {
+      bulkStatusText.textContent = 'This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.';
+    } else {
+      bulkStatusText.textContent = 'Direct Working Hour Enabled.';
+    }
+  });
+}
+
 bulkForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
@@ -1219,6 +1239,10 @@ bulkForm.addEventListener('submit', async (e) => {
   startBulkEstimatedProgress();
 
   const fd = new FormData(bulkForm);
+  const workingHourSource = bulkWorkingHourSource ? bulkWorkingHourSource.value : 'direct';
+  if (workingHourSource === 'include_semi') {
+    bulkStatusText.textContent = 'Checking latest BOM Expansion result for semi-finished working hours.';
+  }
 
   try {
     const res = await fetch('/generate-bulk-file', { method: 'POST', body: fd });

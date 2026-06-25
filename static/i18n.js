@@ -21,6 +21,15 @@
     "Labor HR.Act Only": "人員工時",
     "Labor Allocation Source": "工時來源",
     "Working Hour Source": "工時來源",
+    "Direct Working Hour": "僅成品工時",
+    "Include Semi-finished Working Hour": "包含半品工時",
+    "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.": "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。",
+    "Checking latest BOM Expansion result for semi-finished working hours.": "正在檢查最新 BOM Expansion 結果以納入半品工時。",
+    "Direct Working Hour Enabled.": "已啟用僅成品工時。",
+    "No BOM Expansion result found. Please complete Module 2 → BOM Expansion first, then return to Step 2 to generate Product Activity Data Bulk.": "找不到 BOM Expansion 結果。請先完成 Module 2 → BOM Expansion，再回到 Step 2 產生 Product Activity Data Bulk。",
+    "Working Hour:": "工時來源：",
+    "direct": "僅成品",
+    "include_semi": "含半品",
     "Upload SAP Working Hour Orders": "生產工時工單",
     "Production Quantity Work Orders": "生產數量工單",
 
@@ -311,6 +320,18 @@
         option.textContent = optionText[option.value];
       }
     });
+
+    const bulkSelect = document.getElementById("bulkWorkingHourSource");
+    if (bulkSelect) {
+      const bulkOptionText = isZh
+        ? { direct: "僅成品工時", include_semi: "包含半品工時" }
+        : { direct: "Direct Working Hour", include_semi: "Include Semi-finished Working Hour" };
+      Array.from(bulkSelect.options).forEach(function (option) {
+        if (bulkOptionText[option.value]) {
+          option.textContent = bulkOptionText[option.value];
+        }
+      });
+    }
   }
 
   function translateTextNodes(root, targetLang) {

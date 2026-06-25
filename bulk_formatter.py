@@ -91,6 +91,89 @@ def _safe_text(value: Any) -> str:
     return str(value).strip()
 
 
+
+def _safe_number(value: Any) -> float:
+    if pd.isna(value):
+        return 0.0
+    text = str(value or "").strip()
+    if text.upper() in ["", "NAN", "NONE"]:
+        return 0.0
+    try:
+        return float(text.replace(",", ""))
+    except ValueError:
+        return 0.0
+
+
+def _normalize_material(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def normalize_working_hour_source(value: Any) -> str:
+    text = str(value or "direct").strip().lower().replace("-", "_").replace(" ", "_")
+    if text in {"include_semi", "semi", "semi_finished", "include_semifinished", "rollup", "rolled_up", "total"}:
+        return "include_semi"
+    return "direct"
+
+
+def _read_latest_bom_structure(bom_structure_path: str | Path | None) -> pd.DataFrame:
+    if not bom_structure_path:
+        return pd.DataFrame()
+    path = Path(bom_structure_path)
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_excel(path, sheet_name="BOM Structure", dtype=object)
+    except ValueError:
+        return pd.read_excel(path, sheet_name=0, dtype=object)
+
+
+def _build_semi_hour_per_product(step1_df: pd.DataFrame, material_col: str, qty_col: str, direct_hour_col: str | None, bom_structure_path: str | Path | None) -> dict[str, float]:
+    if not direct_hour_col:
+        return {}
+    bom_df = _read_latest_bom_structure(bom_structure_path)
+    if bom_df.empty:
+        return {}
+    target_col = _find_optional_column(bom_df, ["Target Product", "target_product"])
+    component_col = _find_optional_column(bom_df, ["Component", "component"])
+    accumulated_qty_col = _find_optional_column(bom_df, ["Accumulated Quantity", "usage", "Quantity"])
+    semi_col = _find_optional_column(bom_df, ["Is Semi-finished", "Is Semi", "semi_finished"])
+    if not target_col or not component_col or not accumulated_qty_col:
+        return {}
+    annual = step1_df.copy()
+    annual["_material_key"] = annual[material_col].apply(_normalize_material)
+    annual["_annual_qty"] = annual[qty_col].apply(_safe_number)
+    annual["_direct_hours"] = annual[direct_hour_col].apply(_safe_number)
+    grouped = annual.groupby("_material_key", dropna=False, as_index=False).agg({"_annual_qty":"sum", "_direct_hours":"sum"})
+    hour_per_pc, qty_by_material = {}, {}
+    for _, r in grouped.iterrows():
+        material = str(r["_material_key"] or "").strip()
+        qty = float(r["_annual_qty"] or 0)
+        hours = float(r["_direct_hours"] or 0)
+        if material and qty != 0:
+            hour_per_pc[material] = hours / qty
+            qty_by_material[material] = qty
+    if not hour_per_pc:
+        return {}
+    bom = bom_df.copy()
+    bom["_target_key"] = bom[target_col].apply(_normalize_material)
+    bom["_component_key"] = bom[component_col].apply(_normalize_material)
+    bom["_accumulated_qty"] = bom[accumulated_qty_col].apply(_safe_number)
+    if semi_col:
+        bom = bom[bom[semi_col].astype(str).str.strip().str.upper().isin(["Y", "YES", "TRUE", "1"])].copy()
+    else:
+        bom = bom[bom["_component_key"].isin(hour_per_pc.keys())].copy()
+    semi_per_pc_by_target: dict[str, float] = {}
+    for _, r in bom.iterrows():
+        target = str(r["_target_key"] or "").strip()
+        component = str(r["_component_key"] or "").strip()
+        if not target or not component:
+            continue
+        contribution = float(r["_accumulated_qty"] or 0) * float(hour_per_pc.get(component, 0) or 0)
+        if contribution:
+            semi_per_pc_by_target[target] = semi_per_pc_by_target.get(target, 0.0) + contribution
+    return {target: per_pc * float(qty_by_material.get(target, 0) or 0) for target, per_pc in semi_per_pc_by_target.items() if float(qty_by_material.get(target, 0) or 0)}
+
+
 def _clear_target_cells(ws, start_row: int, columns: list[int]) -> None:
     """
     只清除指定欄位的儲存格內容，不重建 sheet、不刪除列欄、不改格式。
@@ -106,6 +189,8 @@ def generate_product_activity_bulk_file(
     step1_output_path: str | Path,
     bulk_template_path: str | Path,
     output_path: str | Path,
+    working_hour_source: str = "direct",
+    bom_structure_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """
     方案 1：直接複製原始 Bulk Template，再只覆蓋指定分頁的指定儲存格內容。
@@ -144,6 +229,19 @@ def generate_product_activity_bulk_file(
         df,
         ["年度總工時", "Total working hours", "Selected Hours", "Total Hours", "Working Hours"],
     )
+
+    working_hour_source = normalize_working_hour_source(working_hour_source)
+    semi_hour_by_material: dict[str, float] = {}
+    if working_hour_source == "include_semi":
+        if bom_structure_path is None or not Path(bom_structure_path).exists():
+            raise ValueError("No BOM Expansion result found. Please complete Module 2 → BOM Expansion first, then return to Step 2 to generate Product Activity Data Bulk.")
+        semi_hour_by_material = _build_semi_hour_per_product(
+            step1_df=df,
+            material_col=material_col,
+            qty_col=qty_col,
+            direct_hour_col=labor_hours_col,
+            bom_structure_path=bom_structure_path,
+        )
 
     is_wip_col = None
     for candidate in ["Is_WIP", "Is WIP", "WIP"]:
@@ -219,9 +317,16 @@ def generate_product_activity_bulk_file(
         year = _as_year(row.get(year_col))
         qty = row.get(qty_col)
         labor_hours = row.get(labor_hours_col) if labor_hours_col else None
+        direct_labor_hours = 0.0
+        semi_labor_hours = 0.0
         if labor_hours_col:
             labor_hours = pd.to_numeric(labor_hours, errors="coerce")
-            labor_hours = 0 if pd.isna(labor_hours) else float(labor_hours)
+            direct_labor_hours = 0 if pd.isna(labor_hours) else float(labor_hours)
+
+            if working_hour_source == "include_semi":
+                semi_labor_hours = float(semi_hour_by_material.get(_normalize_material(product_name), 0) or 0)
+
+            labor_hours = direct_labor_hours + semi_labor_hours
 
             # 年度總工時等於 0 的產品不寫入 Bulk。
             # 0.01、0.001 等任何非 0 小數仍需保留並寫入。
@@ -284,6 +389,8 @@ def generate_product_activity_bulk_file(
         "labor_hours_template_column": int(activity_labor_hours_col) if activity_labor_hours_col else None,
         "labor_hours_unit_written_to_bulk": bool(labor_hours_col and activity_labor_hours_unit_col),
         "labor_hours_unit_template_column": int(activity_labor_hours_unit_col) if activity_labor_hours_unit_col else None,
+        "working_hour_source": working_hour_source,
+        "semi_finished_working_hour_products": int(len(semi_hour_by_material)) if isinstance(semi_hour_by_material, dict) else 0,
     }
 
 
@@ -293,6 +400,8 @@ def generate_product_activity_bulk_files_by_site(
     bulk_template_path: str | Path,
     output_dir: str | Path,
     token: str | None = None,
+    working_hour_source: str = "direct",
+    bom_structure_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """Generate one or multiple bulk files according to Production Site.
 
@@ -310,7 +419,7 @@ def generate_product_activity_bulk_files_by_site(
 
     if production_site_col is None:
         output_path = output_dir / f"formatted_product_activity_data_bulk_create_{token}.xlsx"
-        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path)
+        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
         return {
             "split_by_production_site": False,
             "production_site_count": 1,
@@ -329,7 +438,7 @@ def generate_product_activity_bulk_files_by_site(
     if len(sites) <= 1:
         site = sites[0] if sites else "ALL"
         output_path = output_dir / f"formatted_product_activity_data_bulk_create_{_sanitize_filename(site)}_{token}.xlsx"
-        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path)
+        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
         return {
             "split_by_production_site": False,
             "production_site_count": len(sites) or 1,
@@ -354,7 +463,7 @@ def generate_product_activity_bulk_files_by_site(
             with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
                 site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
 
-            summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path)
+            summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
             files.append({
                 "production_site": site,
                 "filename": output_path.name,
@@ -382,6 +491,8 @@ def generate_product_activity_bulk_files_by_site_zip(
     bulk_template_path: str | Path,
     output_dir: str | Path,
     token: str | None = None,
+    working_hour_source: str = "direct",
+    bom_structure_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """Generate Bulk files by Production Site and package them into one ZIP."""
     import zipfile
@@ -405,7 +516,7 @@ def generate_product_activity_bulk_files_by_site_zip(
 
         if production_site_col is None:
             output_path = tmpdir_path / f"formatted_product_activity_data_bulk_create_ALL_{token}.xlsx"
-            summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path)
+            summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
             generated_files.append({
                 "production_site": "ALL",
                 "filename": output_path.name,
@@ -429,7 +540,7 @@ def generate_product_activity_bulk_files_by_site_zip(
                 with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
                     site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
 
-                summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path)
+                summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path)
                 generated_files.append({
                     "production_site": site,
                     "filename": output_path.name,
@@ -465,4 +576,6 @@ def generate_product_activity_bulk_files_by_site_zip(
         "output_filename": zip_name,
         "download_url": f"/download/{zip_name}",
         "zip_output": True,
+        "working_hour_source": normalize_working_hour_source(working_hour_source),
+        "bom_structure_used": bool(bom_structure_path and Path(bom_structure_path).exists()),
     }
