@@ -21,6 +21,34 @@
     "Labor HR.Act Only": "人員工時",
     "Labor Allocation Source": "工時來源",
     "Working Hour Source": "工時來源",
+    "Current Rule Set": "目前規則組",
+    "Current Rules": "目前規則數",
+    "Last Import": "最近匯入",
+    "Rule Master ready": "Rule Master 已就緒",
+    "Select a Business Unit Rule Set and import a Rule Master file.": "請選擇 BU 規則組並匯入 Rule Master 檔案。",
+    "No file selected": "尚未選擇檔案",
+    "Please select a Rule Master file before importing.": "請先選擇 Rule Master 檔案後再匯入。",
+    "Rule Master import failed": "Rule Master 匯入失敗",
+    "Please check the file format.": "請確認檔案格式。",
+    "Import Success": "匯入成功",
+    "Rule Set:": "規則組：",
+    "Total Rules:": "規則總數：",
+    "Imported at:": "匯入時間：",
+    "Uploading rule file to": "正在上傳規則檔至",
+    "Business Unit Rule Set": "BU 規則組",
+    "Download Bulk ZIP File": "下載 Bulk ZIP 檔",
+    "Files in ZIP:": "ZIP 檔案數：",
+    "Activity Data:": "Activity Data：",
+    "Products:": "Products：",
+    "Excluded WIP:": "排除 WIP：",
+    "rows": "筆",
+    "Semi-finished:": "半品：",
+    "Semi-finished Components:": "半品元件數：",
+    "Raw material rows:": "原物料筆數：",
+    "Raw Materials:": "原物料數：",
+    "Max BOM Level:": "最大 BOM 階層：",
+    "Error:": "錯誤：",
+    "Enter BOM column name": "輸入 BOM 欄位名稱",
     "Direct Working Hour": "僅成品工時",
     "Include Semi-finished Working Hour": "包含半品工時",
     "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.": "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。",
@@ -234,6 +262,40 @@
     "Import failed": "匯入失敗"
   };
 
+
+  const keyed = {
+    zh: {
+      modules: "模組", productDataPreparation: "產品資料準備", ruleManagement: "規則管理",
+      bomExpansion: "BOM 展開", carbonEmissionFactorSelection: "碳排放係數選擇", pcfCalculation: "產品碳足跡計算",
+      productionEnvironment: "正式環境", onlineVersion: "線上｜版本 1.0", ruleMasterEnabled: "Rule Master 已啟用",
+      multiFileUpload: "多檔上傳", version10: "版本 1.0", currentRuleSet: "目前規則組", currentRules: "目前規則數", lastImport: "最近匯入",
+      businessUnitRuleSet: "BU 規則組", productionQuantityWorkOrders: "生產數量工單", uploadSapWorkingHourOrders: "生產工時工單", laborAllocationSource: "工時來源", reportingYear: "報告年度",
+      uploadStep1OutputFile: "上傳 Step 1 輸出檔", uploadBulkTemplateFile: "上傳 Bulk 範本檔", workingHourSource: "工時來源", directWorkingHour: "僅成品工時", includeSemiWorkingHour: "包含半品工時",
+      semiHourHint: "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。",
+      uploadStandardBom: "上傳標準 BOM", uploadRawMaterialBulkTemplate: "上傳原物料 Bulk 範本", uploadRuleMaster: "上傳 Rule Master",
+      runConsolidationClassification: "執行合併與分類", generateFormattedBulkFile: "產生格式化 Bulk 檔", processBomExpansion: "執行 BOM 展開", importRuleMaster: "匯入 Rule Master",
+      downloadStep1OutputExcel: "下載 Step 1 輸出 Excel", downloadFormattedBulkFile: "下載格式化 Bulk 檔", downloadRawMaterialBulk: "下載原物料 Bulk", downloadRuleMaster: "下載 Rule Master", downloadProductSeriesMaster: "下載 Product Series Master"
+    },
+    en: {
+      modules: "Modules", productDataPreparation: "Product Data Preparation", ruleManagement: "Rule Management",
+      bomExpansion: "BOM Expansion", carbonEmissionFactorSelection: "Carbon Emission Factor Selection", pcfCalculation: "PCF Calculation",
+      productionEnvironment: "Production Environment", onlineVersion: "Online | Version 1.0", ruleMasterEnabled: "Rule Master Enabled",
+      multiFileUpload: "Multi-file Upload", version10: "Version 1.0", currentRuleSet: "Current Rule Set", currentRules: "Current Rules", lastImport: "Last Import",
+      businessUnitRuleSet: "Business Unit Rule Set", productionQuantityWorkOrders: "Production Quantity Work Orders", uploadSapWorkingHourOrders: "Upload SAP Working Hour Orders", laborAllocationSource: "Labor Allocation Source", reportingYear: "Reporting Year",
+      uploadStep1OutputFile: "Upload Step 1 Output File", uploadBulkTemplateFile: "Upload Bulk Template File", workingHourSource: "Working Hour Source", directWorkingHour: "Direct Working Hour", includeSemiWorkingHour: "Include Semi-finished Working Hour",
+      semiHourHint: "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.",
+      uploadStandardBom: "Upload Standard BOM", uploadRawMaterialBulkTemplate: "Upload Raw Material Bulk Template", uploadRuleMaster: "Upload Rule Master",
+      runConsolidationClassification: "Run Consolidation & Classification", generateFormattedBulkFile: "Generate Formatted Bulk File", processBomExpansion: "Process BOM Expansion", importRuleMaster: "Import Rule Master",
+      downloadStep1OutputExcel: "Download Step 1 Output Excel", downloadFormattedBulkFile: "Download Formatted Bulk File", downloadRawMaterialBulk: "Download Raw Material Bulk", downloadRuleMaster: "Download Rule Master", downloadProductSeriesMaster: "Download Product Series Master"
+    }
+  };
+  function translateKeyedElements(targetLang) {
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      const key = el.getAttribute("data-i18n");
+      if (keyed[targetLang] && keyed[targetLang][key]) el.textContent = keyed[targetLang][key];
+    });
+  }
+
   const en = {};
   Object.keys(zh).forEach(function (key) {
     en[zh[key]] = key;
@@ -241,6 +303,7 @@
 
   const preserveExact = new Set([
     "CMP", "SAP", "BOM", "PCF", "WIP", "NB", "TP", "SCMC", "SN", "SP", "SM", "SK",
+    "IPS", "AE", "PC&CE", "PC_CE", "-",
     "Order、Plant、Material Number、Material description、Delivered quantity (GMEIN)、Actual finish date",
     "Priority、Rule Type、Key、Product Type、Customer、Customer Code Logic、Is_WIP、Enabled",
     "851- / 852- prefix → WIP",
@@ -378,6 +441,7 @@
     button.textContent = currentLang === "zh" ? "EN" : "中";
 
     translateTextNodes(document.body, currentLang);
+    translateKeyedElements(currentLang);
     translateAttributes(currentLang);
     normalizeWorkingHourTexts();
 
@@ -408,6 +472,7 @@
           mutation.target.nodeValue = translateString(mutation.target.nodeValue, currentLang);
         }
       });
+      translateKeyedElements(currentLang);
       translateAttributes(currentLang);
       normalizeWorkingHourTexts();
     }, 0);

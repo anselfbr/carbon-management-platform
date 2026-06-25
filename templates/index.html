@@ -154,45 +154,45 @@
       </div>
 
       <nav class="side-nav" aria-label="Platform modules">
-        <div class="nav-label">Modules</div>
+        <div class="nav-label" data-i18n="modules">Modules</div>
 
         <button class="nav-item active" type="button" data-main="prep">
           <span class="module-index">1</span>
           <span class="nav-icon">▣</span>
-          <span class="nav-text"><b>Product Data Preparation</b></span>
+          <span class="nav-text"><b data-i18n="productDataPreparation">Product Data Preparation</b></span>
         </button>
 
         <div class="sub-nav">
           <button class="sub-nav-item" type="button" data-page="rule-management">
             <span class="sub-dot"></span>
-            <span>Rule Management</span>
+            <span data-i18n="ruleManagement">Rule Management</span>
           </button>
         </div>
 
         <button class="nav-item" type="button" data-main="bom">
           <span class="module-index">2</span>
           <span class="nav-icon">⌘</span>
-          <span class="nav-text"><b>BOM Expansion</b></span>
+          <span class="nav-text"><b data-i18n="bomExpansion">BOM Expansion</b></span>
         </button>
 
         <button class="nav-item" type="button" data-main="factor">
           <span class="module-index">3</span>
           <span class="nav-icon">◇</span>
-          <span class="nav-text"><b>Carbon Emission Factor Selection</b></span>
+          <span class="nav-text"><b data-i18n="carbonEmissionFactorSelection">Carbon Emission Factor Selection</b></span>
         </button>
 
         <button class="nav-item" type="button" data-main="pcf">
           <span class="module-index">4</span>
           <span class="nav-icon">♻</span>
-          <span class="nav-text"><b>PCF Calculation</b></span>
+          <span class="nav-text"><b data-i18n="pcfCalculation">PCF Calculation</b></span>
         </button>
       </nav>
 
       <div class="system-card">
         <span class="status-dot"></span>
         <div>
-          <b>Production Environment</b>
-          <p>Online | Version 1.0</p>
+          <b data-i18n="productionEnvironment">Production Environment</b>
+          <p data-i18n="onlineVersion">Online | Version 1.0</p>
         </div>
       </div>
     </aside>
@@ -208,9 +208,9 @@
           </p>
         </div>
         <div class="top-actions">
-          <span class="badge">Rule Master Enabled</span>
-          <span class="badge badge-blue">Multi-file Upload</span>
-          <span class="badge badge-green">Version 1.0</span>
+          <span class="badge" data-i18n="ruleMasterEnabled">Rule Master Enabled</span>
+          <span class="badge badge-blue" data-i18n="multiFileUpload">Multi-file Upload</span>
+          <span class="badge badge-green" data-i18n="version10">Version 1.0</span>
         </div>
       </header>
 
@@ -268,32 +268,32 @@
             </div>
 
             <form id="form" class="form-panel">
-              <label>Business Unit Rule Set</label>
+              <label data-i18n="businessUnitRuleSet">Business Unit Rule Set</label>
               <select id="ruleSet" name="rule_set">
                 <option value="IPS" selected>IPS</option>
                 <option value="AE">AE</option>
                 <option value="PC_CE">PC&amp;CE</option>
               </select>
 
-              <label>Production Quantity Work Orders</label>
+              <label data-i18n="productionQuantityWorkOrders">Production Quantity Work Orders</label>
               <input id="files" name="files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
 
-              <label>Upload SAP Working Hour Orders</label>
+              <label data-i18n="uploadSapWorkingHourOrders">Upload SAP Working Hour Orders</label>
               <input id="laborFiles" name="labor_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
 
-              <label>Labor Allocation Source</label>
+              <label data-i18n="laborAllocationSource">Labor Allocation Source</label>
               <select id="laborMode" name="labor_mode">
                 <option value="both" selected>Labor HR.Act + FOH-Others.Act</option>
                 <option value="labor_hr">Labor HR.Act Only</option>
                 <option value="foh">FOH-Others.Act Only</option>
               </select>
 
-              <label>Reporting Year</label>
+              <label data-i18n="reportingYear">Reporting Year</label>
               <input id="year" name="year" type="number" placeholder="e.g. 2024；blank = all years" />
 
               <button type="submit" class="btn-primary">
                 <span class="btn-icon">▶</span>
-                Run Consolidation & Classification
+                <span data-i18n="runConsolidationClassification">Run Consolidation & Classification</span>
               </button>
             </form>
 
@@ -311,7 +311,7 @@
               </div>
             </div>
 
-            <a id="download" class="download disabled" href="#">Download Step 1 Output Excel</a>
+            <a id="download" class="download disabled" href="#"><span data-i18n="downloadStep1OutputExcel">Download Step 1 Output Excel</span></a>
 
             <div class="divider"></div>
 
@@ -341,10 +341,10 @@
             </div>
 
             <form id="bulkForm" class="form-panel">
-              <label>Upload Step 1 Output File</label>
+              <label data-i18n="uploadStep1OutputFile">Upload Step 1 Output File</label>
               <input id="step1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
-              <label>Upload Bulk Template File</label>
+              <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
               <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <label data-i18n="workingHourSource">Working Hour Source</label>
@@ -358,7 +358,7 @@
 
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⚙</span>
-                Generate Formatted Bulk File
+                <span data-i18n="generateFormattedBulkFile">Generate Formatted Bulk File</span>
               </button>
             </form>
 
@@ -376,7 +376,7 @@
               </div>
             </div>
 
-            <a id="bulkDownload" class="download disabled" href="#">Download Formatted Bulk File</a>
+            <a id="bulkDownload" class="download disabled" href="#"><span data-i18n="downloadFormattedBulkFile">Download Formatted Bulk File</span></a>
 
             <p class="hint">
               Step 2 extracts required fields from the Step 1 output and writes them into the bulk template.
@@ -415,14 +415,14 @@
         <section class="workspace">
           <section class="card primary-card">
             <form id="bomForm" class="form-panel">
-              <label>Upload Standard BOM</label>
+              <label data-i18n="uploadStandardBom">Upload Standard BOM</label>
               <input id="bomFile" name="bom_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
-              <label>Upload Raw Material Bulk Template</label>
+              <label data-i18n="uploadRawMaterialBulkTemplate">Upload Raw Material Bulk Template</label>
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⌘</span>
-                Process BOM Expansion
+                <span data-i18n="processBomExpansion">Process BOM Expansion</span>
               </button>
             </form>
 
@@ -440,7 +440,7 @@
               </div>
             </div>
 
-            <a id="bomDownload" class="download disabled" href="#">Download Raw Material Bulk</a>
+            <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk</span></a>
 
 
           </section>
@@ -566,38 +566,38 @@
 
             <div class="rule-import-meta">
               <div class="metric">
-                <b>Current Rule Set</b>
-                <span id="currentRuleSetText">IPS</span>
+                <b data-i18n="currentRuleSet">Current Rule Set</b>
+                <span id="currentRuleSetText">-</span>
               </div>
               <div class="metric">
-                <b>Current Rules</b>
+                <b data-i18n="currentRules">Current Rules</b>
                 <span id="currentRuleCountText">-</span>
               </div>
               <div class="metric">
-                <b>Last Import</b>
+                <b data-i18n="lastImport">Last Import</b>
                 <span id="lastRuleImportText">-</span>
               </div>
             </div>
 
             <form id="ruleForm" class="rule-form">
-              <label>Business Unit Rule Set</label>
+              <label data-i18n="businessUnitRuleSet">Business Unit Rule Set</label>
               <select id="ruleManagementSet" name="rule_set">
                 <option value="IPS" selected>IPS</option>
                 <option value="AE">AE</option>
                 <option value="PC_CE">PC&amp;CE</option>
               </select>
 
-              <label>Upload Rule Master</label>
+              <label data-i18n="uploadRuleMaster">Upload Rule Master</label>
               <input id="ruleFile" name="file" type="file" accept=".xlsx,.xls,.xlsm,.csv" />
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⬆</span>
-                Import Rule Master
+                <span data-i18n="importRuleMaster">Import Rule Master</span>
               </button>
             </form>
 
             <div class="download-row">
-              <a id="downloadRuleMaster" class="link-button" href="/download-rule-master?rule_set=IPS">Download Rule Master</a>
-              <a id="downloadProductSeriesMaster" class="link-button" href="/download-product-series-master?rule_set=IPS">Download Product Series Master</a>
+              <a id="downloadRuleMaster" class="link-button" href="/download-rule-master?rule_set=IPS"><span data-i18n="downloadRuleMaster">Download Rule Master</span></a>
+              <a id="downloadProductSeriesMaster" class="link-button" href="/download-product-series-master?rule_set=IPS"><span data-i18n="downloadProductSeriesMaster">Download Product Series Master</span></a>
             </div>
           </section>
 
@@ -740,7 +740,6 @@ function updateRuleManagementLinks() {
   if (downloadProductSeriesMaster) {
     downloadProductSeriesMaster.href = `/download-product-series-master?rule_set=${encodeURIComponent(value)}`;
   }
-  if (currentRuleSetText) currentRuleSetText.textContent = formatRuleSetLabel(value);
 }
 
 if (ruleManagementSet) {
