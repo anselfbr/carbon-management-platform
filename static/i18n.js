@@ -823,7 +823,8 @@
     const value = String(text || "").trim();
     if (!value) return true;
     if (preserveExact.has(value)) return true;
-    if (/^~?\d+s remaining$/.test(value)) return true;\n    if (/^約\s*\d+\s*秒$/.test(value)) return true;
+    if (/^~?\d+s remaining$/.test(value)) return true;
+    if (/^約\s*\d+\s*秒$/.test(value)) return true;
     if (/^~?\d+秒$/.test(value)) return true;
     if (/^\d+$/.test(value)) return true;
     return false;
@@ -958,7 +959,11 @@
   button.addEventListener("click", function (event) {
     event.preventDefault();
     event.stopPropagation();
-    applyLanguage(currentLang === "en" ? "zh" : "en");
+    try {
+      applyLanguage(currentLang === "en" ? "zh" : "en");
+    } catch (err) {
+      console.error("CMP i18n toggle failed:", err);
+    }
   });
 
   const observer = new MutationObserver(function (mutations) {
