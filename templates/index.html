@@ -148,8 +148,8 @@
       <div class="logo-block" id="homeLogo" role="button" tabindex="0">
         <div class="logo-mark">CMP</div>
         <div>
-          <div class="logo-title">Carbon Management Platform</div>
-          <div class="logo-subtitle">Manufacturing Data Layer</div>
+          <div class="logo-title" data-i18n="logoTitle">Carbon Management Platform</div>
+          <div class="logo-subtitle" data-i18n="logoSubtitle">Manufacturing Data Layer</div>
         </div>
       </div>
 
@@ -200,7 +200,7 @@
     <main class="content">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Carbon Management Platform</p>
+          <p class="eyebrow" data-i18n="eyebrowCarbonManagementPlatform">Carbon Management Platform</p>
           <h1 id="pageTitle">Carbon Management Platform</h1>
           <p class="lead" id="pageLead">
             Prepare manufacturing data, expand BOM structures, select emission factors,
@@ -222,35 +222,35 @@
       <section id="dashboard" class="page-section active">
         <section class="dashboard-module-grid">
           <button class="dashboard-module-card" type="button" data-dashboard-target="prep">
-            <span class="module-number-box module-blue"><em>Module</em><b>01</b></span>
+            <span class="module-number-box module-blue"><em data-i18n="module">Module</em><b>01</b></span>
             <span class="module-card-copy">
-              <strong>Product Data Preparation</strong>
+              <strong data-i18n="productDataPreparation">Product Data Preparation</strong>
               <i></i>
-              <small><span class="mini-icon">▣</span>Work order & batch preparation</small>
+              <small><span class="mini-icon">▣</span><span data-i18n="workOrderBatchPreparation">Work order & batch preparation</span></small>
             </span>
           </button>
           <button class="dashboard-module-card" type="button" data-dashboard-target="bom">
-            <span class="module-number-box module-purple"><em>Module</em><b>02</b></span>
+            <span class="module-number-box module-purple"><em data-i18n="module">Module</em><b>02</b></span>
             <span class="module-card-copy">
-              <strong>BOM Expansion</strong>
+              <strong data-i18n="bomExpansion">BOM Expansion</strong>
               <i></i>
-              <small><span class="mini-icon">▱</span>Multi-level BOM explosion</small>
+              <small><span class="mini-icon">▱</span><span data-i18n="multiLevelBomExplosion">Multi-level BOM explosion</span></small>
             </span>
           </button>
           <button class="dashboard-module-card" type="button" data-dashboard-target="factor">
-            <span class="module-number-box module-cyan"><em>Module</em><b>03</b></span>
+            <span class="module-number-box module-cyan"><em data-i18n="module">Module</em><b>03</b></span>
             <span class="module-card-copy">
-              <strong>Carbon Emission Factor Selection</strong>
+              <strong data-i18n="carbonEmissionFactorSelection">Carbon Emission Factor Selection</strong>
               <i></i>
-              <small><span class="mini-icon">◇</span>Factor mapping and selection</small>
+              <small><span class="mini-icon">◇</span><span data-i18n="factorMappingSelection">Factor mapping and selection</span></small>
             </span>
           </button>
           <button class="dashboard-module-card" type="button" data-dashboard-target="pcf">
-            <span class="module-number-box module-green"><em>Module</em><b>04</b></span>
+            <span class="module-number-box module-green"><em data-i18n="module">Module</em><b>04</b></span>
             <span class="module-card-copy">
-              <strong>PCF Calculation</strong>
+              <strong data-i18n="pcfCalculation">PCF Calculation</strong>
               <i></i>
-              <small><span class="mini-icon">▥</span>Product carbon footprint</small>
+              <small><span class="mini-icon">▥</span><span data-i18n="productCarbonFootprint">Product carbon footprint</span></small>
             </span>
           </button>
         </section>
@@ -261,10 +261,10 @@
           <section class="card primary-card">
             <div class="section-title">
               <div>
-                <h2>Step 1 · Work Order Processing</h2>
-                <p>Upload one or multiple SAP production work order files.</p>
+                <h2 data-i18n="step1WorkOrderProcessing">Step 1 · Work Order Processing</h2>
+                <p data-i18n="uploadSapProductionWorkOrderFiles">Upload one or multiple SAP production work order files.</p>
               </div>
-              <span class="step-chip">Step 1</span>
+              <span class="step-chip" data-i18n="step1">Step 1</span>
             </div>
 
             <form id="form" class="form-panel">
@@ -289,7 +289,7 @@
               </select>
 
               <label data-i18n="reportingYear">Reporting Year</label>
-              <input id="year" name="year" type="number" placeholder="e.g. 2024；blank = all years" />
+              <input id="year" name="year" type="number" placeholder="e.g. 2024；blank = all years" data-i18n-placeholder="yearPlaceholder" />
 
               <button type="submit" class="btn-primary">
                 <span class="btn-icon">▶</span>
@@ -317,26 +317,26 @@
 
             <div class="section-title">
               <div>
-                <h2>Step 2 · Batch Data Formatting</h2>
-                <p>Convert Step 1 output and batch file template into a standardized batch file.</p>
+                <h2 data-i18n="step2BatchDataFormatting">Step 2 · Batch Data Formatting</h2>
+                <p data-i18n="convertStep1OutputBulkTemplate">Convert Step 1 output and batch file template into a standardized batch file.</p>
               </div>
-              <span class="step-chip">Step 2</span>
+              <span class="step-chip" data-i18n="step2">Step 2</span>
             </div>
 
             <div class="placeholder-flow">
               <div class="flow-card">
-                <b>Step 1 Output</b>
-                <span>Annual output & classification result</span>
+                <b data-i18n="step1Output">Step 1 Output</b>
+                <span data-i18n="annualOutputClassificationResult">Annual output & classification result</span>
               </div>
               <div class="flow-arrow">+</div>
               <div class="flow-card">
-                <b>Batch Template</b>
-                <span>Required batch file format</span>
+                <b data-i18n="batchTemplate">Batch Template</b>
+                <span data-i18n="requiredBatchFileFormat">Required batch file format</span>
               </div>
               <div class="flow-arrow">→</div>
               <div class="flow-card strong">
-                <b>Formatted Batch File</b>
-                <span>Ready for downstream processing</span>
+                <b data-i18n="formattedBatchFile">Formatted Batch File</b>
+                <span data-i18n="readyForDownstreamProcessing">Ready for downstream processing</span>
               </div>
             </div>
 
@@ -378,7 +378,7 @@
 
             <a id="bulkDownload" class="download disabled" href="#"><span data-i18n="downloadFormattedBulkFile">Download Formatted Bulk File</span></a>
 
-            <p class="hint">
+            <p class="hint" data-i18n="step2Hint">
               Step 2 extracts required fields from the Step 1 output and writes them into the bulk template.
               Activity Data and Products sheets will be populated automatically.
             </p>
@@ -386,16 +386,16 @@
 
           <section class="card insight-card">
             <nav class="tabs">
-              <button class="tab active" data-tab="log">Execution Log</button>
-              <button class="tab" data-tab="summary">Summary</button>
-              <button class="tab" data-tab="rule">Rules</button>
+              <button class="tab active" data-tab="log" data-i18n="executionLog">Execution Log</button>
+              <button class="tab" data-tab="summary" data-i18n="summary">Summary</button>
+              <button class="tab" data-tab="rule" data-i18n="rules">Rules</button>
             </nav>
 
             <pre id="log" class="panel active">Ready. Upload production quantity work orders and optional labor work orders to start processing.</pre>
             <div id="summary" class="panel"></div>
 
             <div id="rule" class="panel">
-              <h3>Version 1.0 Decision Flow</h3>
+              <h3 data-i18n="version10DecisionFlow">Version 1.0 Decision Flow</h3>
               <ol>
                 <li><b>Product Series Engine</b>: punctuation-based segmentation, then full-text Regex Prefix Search.</li>
                 <li><b>Rule Master</b>: priority-based classification logic.</li>
@@ -403,7 +403,7 @@
                 <li><b>Default WIP</b>: classify as WIP if no rule is matched.</li>
               </ol>
 
-              <h3>Required SAP Fields</h3>
+              <h3 data-i18n="requiredSapFields">Required SAP Fields</h3>
               <p>Order、Plant、Material Number、Material description、Delivered quantity (GMEIN)、Actual finish date</p>
             </div>
           </section>
@@ -446,93 +446,93 @@
           </section>
 
           <section class="card insight-card">
-            <h2>BOM Expansion Logic</h2>
-            <p>Configure source column names for BOM Expansion. Use <b>Default</b> for system settings or <b>Confirm</b> to apply your input.</p>
+            <h2 data-i18n="bomExpansionLogic">BOM Expansion Logic</h2>
+            <p data-i18n="bomColumnMappingHint">Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.</p>
 
             <div class="logic-mapping-table">
               <div class="logic-mapping-row" data-default="Parent Node">
-                <span class="logic-mapping-label">Parent Material</span>
+                <span class="logic-mapping-label" data-i18n="parentMaterial">Parent Material</span>
                 <div class="logic-mapping-control">
-                  <input form="bomForm" name="parent_col" type="text" placeholder="Enter BOM column name" />
-                  <button class="mapping-default-btn" type="button">Default</button>
-                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <input form="bomForm" name="parent_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
+                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
+                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
                   <div class="mapping-current">Current Setting: <b>Parent Node</b></div>
                 </div>
               </div>
 
               <div class="logic-mapping-row" data-default="Component">
-                <span class="logic-mapping-label">Component</span>
+                <span class="logic-mapping-label" data-i18n="component">Component</span>
                 <div class="logic-mapping-control">
-                  <input form="bomForm" name="component_col" type="text" placeholder="Enter BOM column name" />
-                  <button class="mapping-default-btn" type="button">Default</button>
-                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <input form="bomForm" name="component_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
+                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
+                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
                   <div class="mapping-current">Current Setting: <b>Component</b></div>
                 </div>
               </div>
 
               <div class="logic-mapping-row" data-default="CS03 Qty">
-                <span class="logic-mapping-label">Quantity</span>
+                <span class="logic-mapping-label" data-i18n="quantity">Quantity</span>
                 <div class="logic-mapping-control">
-                  <input form="bomForm" name="qty_col" type="text" placeholder="Enter BOM column name" />
-                  <button class="mapping-default-btn" type="button">Default</button>
-                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <input form="bomForm" name="qty_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
+                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
+                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
                   <div class="mapping-current">Current Setting: <b>CS03 Qty</b></div>
                 </div>
               </div>
 
               <div class="logic-mapping-row" data-default="CS03 UoM">
-                <span class="logic-mapping-label">Unit</span>
+                <span class="logic-mapping-label" data-i18n="unit">Unit</span>
                 <div class="logic-mapping-control">
-                  <input form="bomForm" name="unit_col" type="text" placeholder="Enter BOM column name" />
-                  <button class="mapping-default-btn" type="button">Default</button>
-                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <input form="bomForm" name="unit_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
+                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
+                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
                   <div class="mapping-current">Current Setting: <b>CS03 UoM</b></div>
                 </div>
               </div>
 
               <div class="logic-mapping-row" data-default="Component Description">
-                <span class="logic-mapping-label">Component Description</span>
+                <span class="logic-mapping-label" data-i18n="componentDescription">Component Description</span>
                 <div class="logic-mapping-control">
-                  <input form="bomForm" name="description_col" type="text" placeholder="Enter BOM column name" />
-                  <button class="mapping-default-btn" type="button">Default</button>
-                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <input form="bomForm" name="description_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
+                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
+                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
                   <div class="mapping-current">Current Setting: <b>Component Description</b></div>
                 </div>
               </div>
 
               <div class="logic-mapping-row" data-default="Material group">
-                <span class="logic-mapping-label">Material Group</span>
+                <span class="logic-mapping-label" data-i18n="materialGroup">Material Group</span>
                 <div class="logic-mapping-control">
-                  <input form="bomForm" name="material_group_col" type="text" placeholder="Enter BOM column name" />
-                  <button class="mapping-default-btn" type="button">Default</button>
-                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <input form="bomForm" name="material_group_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
+                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
+                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
                   <div class="mapping-current">Current Setting: <b>Material group</b></div>
                 </div>
               </div>
 
               <div class="logic-mapping-row" data-default="BOM Valid From">
-                <span class="logic-mapping-label">Valid From</span>
+                <span class="logic-mapping-label" data-i18n="validFrom">Valid From</span>
                 <div class="logic-mapping-control">
-                  <input form="bomForm" name="valid_from_col" type="text" placeholder="Enter BOM column name" />
-                  <button class="mapping-default-btn" type="button">Default</button>
-                  <button class="mapping-confirm-btn" type="button">Confirm</button>
+                  <input form="bomForm" name="valid_from_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
+                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
+                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
                   <div class="mapping-current">Current Setting: <b>BOM Valid From</b></div>
                 </div>
               </div>
 
               <div class="logic-mapping-row read-only">
-                <span class="logic-mapping-label">Semi-finished Rule</span>
-                <div class="logic-readonly-value">Component also exists as Parent Node</div>
+                <span class="logic-mapping-label" data-i18n="semiFinishedRule">Semi-finished Rule</span>
+                <div class="logic-readonly-value" data-i18n="semiFinishedRuleDesc">Component also exists as Parent Node</div>
               </div>
 
               <div class="logic-mapping-row read-only">
-                <span class="logic-mapping-label">Quantity Roll-up</span>
-                <div class="logic-readonly-value">Multiply quantities across all BOM levels</div>
+                <span class="logic-mapping-label" data-i18n="quantityRollUp">Quantity Roll-up</span>
+                <div class="logic-readonly-value" data-i18n="quantityRollUpDesc">Multiply quantities across all BOM levels</div>
               </div>
             </div>
 
-            <h2>Raw Material Bulk Output</h2>
-            <p>Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.</p>
+            <h2 data-i18n="rawMaterialBulkOutput">Raw Material Bulk Output</h2>
+            <p data-i18n="rawMaterialBulkOutputHint">Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.</p>
 
             <pre id="bomLog" class="rule-log">BOM Expansion is ready.</pre>
           </section>
@@ -545,13 +545,13 @@
           <section class="card primary-card">
             <div class="section-title">
               <div>
-                <h2>Rule Management</h2>
-                <p>Import and download classification rule masters for Product Data Preparation.</p>
+                <h2 data-i18n="ruleManagement">Rule Management</h2>
+                <p data-i18n="importDownloadClassificationRules">Import and download classification rule masters for Product Data Preparation.</p>
               </div>
-              <span class="step-chip">Rule Master</span>
+              <span class="step-chip" data-i18n="ruleMaster">Rule Master</span>
             </div>
 
-            <p class="hint">
+            <p class="hint" data-i18n="ruleManagementHint">
               Rule Management is a sub-function under Product Data Preparation. It controls product type classification,
               product series mapping, WIP judgment and customer mapping logic.
             </p>
@@ -559,8 +559,8 @@
             <div id="ruleImportStatus" class="rule-import-status idle">
               <div class="rule-import-status-icon">●</div>
               <div>
-                <b id="ruleImportStatusTitle">Rule Master ready</b>
-                <p id="ruleImportStatusText">Select a Business Unit Rule Set and import a Rule Master file.</p>
+                <b id="ruleImportStatusTitle" data-i18n="ruleMasterReady">Rule Master ready</b>
+                <p id="ruleImportStatusText" data-i18n="selectBuAndImportRuleMaster">Select a Business Unit Rule Set and import a Rule Master file.</p>
               </div>
             </div>
 
@@ -602,43 +602,43 @@
           </section>
 
           <section class="card insight-card rule-guide-card">
-            <h2>Rule Master Fields</h2>
+            <h2 data-i18n="ruleMasterFields">Rule Master Fields</h2>
             <p>Priority、Rule Type、Key、Product Type、Product Line、Production Site、Customer、Customer Code Logic、Is_WIP、Enabled</p>
 
-            <h2>Rule Type Guide</h2>
+            <h2 data-i18n="ruleTypeGuide">Rule Type Guide</h2>
             <div class="rule-guide-grid">
               <div class="rule-guide-item">
-                <b>Plant Exact</b>
-                <span>Plant 完全符合，例如：3760 → 石碣廠-IPS</span>
+                <b data-i18n="ruleTypePlantExact">Plant Exact</b>
+                <span data-i18n="ruleTypePlantExactDesc">Plant 完全符合，例如：3760 → 石碣廠-IPS</span>
               </div>
               <div class="rule-guide-item">
-                <b>Material Number Exact</b>
-                <span>完整料號比對，例如：SG-96000-00A</span>
+                <b data-i18n="ruleTypeMaterialNumberExact">Material Number Exact</b>
+                <span data-i18n="ruleTypeMaterialNumberExactDesc">完整料號比對，例如：SG-96000-00A</span>
               </div>
               <div class="rule-guide-item">
-                <b>Material Number Prefix</b>
-                <span>料號前綴比對，例如：850-、851-、852-</span>
+                <b data-i18n="ruleTypeMaterialNumberPrefix">Material Number Prefix</b>
+                <span data-i18n="ruleTypeMaterialNumberPrefixDesc">料號前綴比對，例如：850-、851-、852-</span>
               </div>
               <div class="rule-guide-item">
-                <b>Series Exact</b>
-                <span>完整產品系列比對，例如：SN3103B02</span>
+                <b data-i18n="ruleTypeSeriesExact">Series Exact</b>
+                <span data-i18n="ruleTypeSeriesExactDesc">完整產品系列比對，例如：SN3103B02</span>
               </div>
               <div class="rule-guide-item">
-                <b>Series Prefix</b>
-                <span>產品系列前綴比對，例如：SN、SP、FU、SCMC</span>
+                <b data-i18n="ruleTypeSeriesPrefix">Series Prefix</b>
+                <span data-i18n="ruleTypeSeriesPrefixDesc">產品系列前綴比對，例如：SN、SP、FU、SCMC</span>
               </div>
               <div class="rule-guide-item">
-                <b>Description Contains</b>
-                <span>Material description 包含關鍵字，例如：TOUCHPAD MODULE、ASSY</span>
+                <b data-i18n="ruleTypeDescriptionContains">Description Contains</b>
+                <span data-i18n="ruleTypeDescriptionContainsDesc">Material description 包含關鍵字，例如：TOUCHPAD MODULE、ASSY</span>
               </div>
             </div>
 
-            <h2>Maintenance Principles</h2>
+            <h2 data-i18n="maintenancePrinciples">Maintenance Principles</h2>
             <ul>
-              <li>Priority 數字越小，優先度越高。</li>
-              <li>Product Line 與 Production Site 僅由 Rule Master 控制。</li>
-              <li>新增或調整分類規則時，只需修改對應 BU 的 rule_master.csv，不需修改 main.py。</li>
-              <li>若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。</li>
+              <li data-i18n="maintenancePriority">Priority 數字越小，優先度越高。</li>
+              <li data-i18n="maintenanceRuleMasterControlsSite">Product Line 與 Production Site 僅由 Rule Master 控制。</li>
+              <li data-i18n="maintenanceChangeRuleMasterOnly">新增或調整分類規則時，只需修改對應 BU 的 rule_master.csv，不需修改 main.py。</li>
+              <li data-i18n="maintenanceBlankKeptBlank">若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。</li>
             </ul>
 
             <pre id="ruleLog" class="rule-log">Rule Management is ready.</pre>
@@ -710,12 +710,57 @@ function formatRuleSetLabel(value) {
   return value || 'IPS';
 }
 
+function cmpLang() {
+  return localStorage.getItem('cmp_lang') || 'en';
+}
+
+function cmpT(key, fallback) {
+  if (window.CMPI18N && typeof window.CMPI18N.t === 'function') {
+    return window.CMPI18N.t(key, fallback);
+  }
+  return fallback || key;
+}
+
+function cmpApplyI18n() {
+  if (window.CMPI18N && typeof window.CMPI18N.apply === 'function') {
+    window.CMPI18N.apply(cmpLang());
+  }
+}
+
+function setText(el, key, fallback) {
+  if (!el) return;
+  el.setAttribute('data-i18n-dynamic', key);
+  el.textContent = cmpT(key, fallback);
+}
+
+function formatDynamic(templateKey, fallback, values) {
+  let text = cmpT(templateKey, fallback);
+  Object.keys(values || {}).forEach((key) => {
+    text = text.replaceAll(`{${key}}`, values[key]);
+  });
+  return text;
+}
+
+
 function setRuleImportStatus(mode, title, text) {
   if (!ruleImportStatus) return;
   ruleImportStatus.classList.remove('idle', 'running', 'success', 'error');
   ruleImportStatus.classList.add(mode);
-  if (ruleImportStatusTitle) ruleImportStatusTitle.textContent = title;
-  if (ruleImportStatusText) ruleImportStatusText.textContent = text;
+
+  if (typeof title === 'object') {
+    setText(ruleImportStatusTitle, title.key, title.fallback);
+  } else if (ruleImportStatusTitle) {
+    ruleImportStatusTitle.removeAttribute('data-i18n-dynamic');
+    ruleImportStatusTitle.textContent = title;
+  }
+
+  if (typeof text === 'object') {
+    setText(ruleImportStatusText, text.key, text.fallback);
+  } else if (ruleImportStatusText) {
+    ruleImportStatusText.removeAttribute('data-i18n-dynamic');
+    ruleImportStatusText.textContent = text;
+  }
+  cmpApplyI18n();
 }
 
 function showRuleToast(type, title, text) {
@@ -795,6 +840,7 @@ function activateDashboard() {
   pageTitle.textContent = pageMessages.dashboard.title;
   pageLead.textContent = pageMessages.dashboard.lead;
   pageLead.style.display = 'block';
+  cmpApplyI18n();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
 }
 
@@ -819,6 +865,7 @@ function activatePrepPage(pageId) {
   pageTitle.textContent = pageMessages[pageId].title;
   pageLead.textContent = pageMessages[pageId].lead;
   pageLead.style.display = pageMessages[pageId].lead ? 'block' : 'none';
+  cmpApplyI18n();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
 }
 
@@ -839,6 +886,7 @@ function activateBomPage() {
   pageTitle.textContent = 'BOM Expansion';
   pageLead.textContent = 'Expand multi-level BOM structures, roll up raw material quantities, and generate raw material bulk files.';
   pageLead.style.display = 'block';
+  cmpApplyI18n();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
 }
 
@@ -849,6 +897,7 @@ function setBomProcessingState(mode, title, text, timeText, progress) {
   bomStatusText.textContent = text;
   bomStatusTime.textContent = timeText;
   bomProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  cmpApplyI18n();
 }
 
 function startBomEstimatedProgress() {
@@ -1022,6 +1071,7 @@ function setProcessingState(mode, title, text, timeText, progress) {
   statusText.textContent = text;
   statusTime.textContent = timeText;
   progressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  cmpApplyI18n();
 }
 
 function startEstimatedProgress(fileCount) {
@@ -1156,6 +1206,7 @@ function setBulkProcessingState(mode, title, text, timeText, progress) {
   bulkStatusText.textContent = text;
   bulkStatusTime.textContent = timeText;
   bulkProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  cmpApplyI18n();
 }
 
 function startBulkEstimatedProgress() {
@@ -1266,18 +1317,18 @@ ruleForm.onsubmit = async (e) => {
   const selectedRuleSet = ruleManagementSet ? ruleManagementSet.value : 'IPS';
 
   if (!f.files.length) {
-    setRuleImportStatus('error', 'No file selected', 'Please select a Rule Master file before importing.');
-    showRuleToast('error', 'Import failed', 'Please select a Rule Master file first.');
-    alert('Please select a rule file first.');
+    setRuleImportStatus('error', {key:'noFileSelected', fallback:'No file selected'}, {key:'pleaseSelectRuleMasterBeforeImport', fallback:'Please select a Rule Master file before importing.'});
+    showRuleToast('error', cmpT('importFailed', 'Import failed'), cmpT('pleaseSelectRuleFileFirst', 'Please select a Rule Master file first.'));
+    alert(cmpT('pleaseSelectRuleFileFirst', 'Please select a rule file first.'));
     return;
   }
 
   setRuleImportStatus(
     'running',
-    'Importing Rule Master...',
-    `Uploading rule file to ${formatRuleSetLabel(selectedRuleSet)}.`
+    {key:'importingRuleMaster', fallback:'Importing Rule Master...'},
+    {key:'uploadingRuleFile', fallback:formatDynamic('uploadingRuleFileTo', 'Uploading rule file to {ruleSet}.', {ruleSet: formatRuleSetLabel(selectedRuleSet)})}
   );
-  ruleLog.textContent = 'Importing Rule Master...';
+  ruleLog.textContent = cmpT('importingRuleMaster', 'Importing Rule Master...');
 
   const fd = new FormData(ruleForm);
   try {
@@ -1291,8 +1342,8 @@ ruleForm.onsubmit = async (e) => {
 
     setRuleImportStatus(
       'success',
-      'Rule Master imported successfully',
-      `Rule Set: ${formatRuleSetLabel(importedRuleSet)} · Total Rules: ${count}`
+      {key:'ruleMasterImportedSuccessfully', fallback:'Rule Master imported successfully'},
+      {key:'ruleImportSuccessDetail', fallback:formatDynamic('ruleImportSuccessDetail', 'Rule Set: {ruleSet} · Total Rules: {count}', {ruleSet: formatRuleSetLabel(importedRuleSet), count})}
     );
 
     if (currentRuleSetText) currentRuleSetText.textContent = formatRuleSetLabel(importedRuleSet);
@@ -1301,18 +1352,18 @@ ruleForm.onsubmit = async (e) => {
 
     showRuleToast(
       'success',
-      'Import Success',
-      `Rule Set: ${formatRuleSetLabel(importedRuleSet)} · Total Rules: ${count}`
+      cmpT('importSuccess', 'Import Success'),
+      formatDynamic('ruleImportSuccessDetail', 'Rule Set: {ruleSet} · Total Rules: {count}', {ruleSet: formatRuleSetLabel(importedRuleSet), count})
     );
 
     ruleLog.textContent =
-      `Rule Master imported successfully.\nRule Set: ${formatRuleSetLabel(importedRuleSet)}\nTotal rules: ${count}\nImported at: ${importedAt}`;
+      `${cmpT('ruleMasterImportedSuccessfully', 'Rule Master imported successfully.')}\n${cmpT('ruleSetLabel', 'Rule Set')}: ${formatRuleSetLabel(importedRuleSet)}\n${cmpT('totalRulesLabel', 'Total rules')}: ${count}\n${cmpT('importedAtLabel', 'Imported at')}: ${importedAt}`;
 
     updateRuleManagementLinks();
   } catch (err) {
-    setRuleImportStatus('error', 'Rule Master import failed', err.message || 'Import failed.');
-    showRuleToast('error', 'Import failed', err.message || 'Please check the file format.');
-    ruleLog.textContent = 'Error: ' + err.message;
+    setRuleImportStatus('error', {key:'ruleMasterImportFailed', fallback:'Rule Master import failed'}, err.message || cmpT('importFailed', 'Import failed.'));
+    showRuleToast('error', cmpT('importFailed', 'Import failed'), err.message || cmpT('pleaseCheckFileFormat', 'Please check the file format.'));
+    ruleLog.textContent = cmpT('errorPrefix', 'Error: ') + err.message;
   }
 };
 </script>

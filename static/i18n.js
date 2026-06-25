@@ -1,9 +1,6 @@
-/* CMP i18n v1.1
-   Safe implementation:
-   - Standalone file
-   - Does not modify existing platform functions
-   - Does not overwrite existing click handlers
-   - Uses MutationObserver to translate texts created dynamically by the original page JS
+/* CMP i18n v2.0
+   Key-based + dynamic text translation.
+   This file does not overwrite existing platform click handlers.
 */
 (function () {
   const button = document.getElementById("langToggle");
@@ -13,57 +10,534 @@
   let currentLang = localStorage.getItem(STORAGE_KEY) || "en";
   let isApplying = false;
 
-  const zh = {
-    "Carbon Management Platform | Product Data Preparation": "碳管理平台 | 產品資料準備",
-    "Reading labor work orders": "讀取生產工時工單",
-    "Labor HR.Act + FOH-Others.Act": "人員+設備工時",
-    "FOH-Others.Act Only": "設備工時",
-    "Labor HR.Act Only": "人員工時",
-    "Labor Allocation Source": "工時來源",
-    "Working Hour Source": "工時來源",
-    "Current Rule Set": "目前規則組",
-    "Current Rules": "目前規則數",
-    "Last Import": "最近匯入",
-    "Rule Master ready": "Rule Master 已就緒",
-    "Select a Business Unit Rule Set and import a Rule Master file.": "請選擇 BU 規則組並匯入 Rule Master 檔案。",
-    "No file selected": "尚未選擇檔案",
-    "Please select a Rule Master file before importing.": "請先選擇 Rule Master 檔案後再匯入。",
-    "Rule Master import failed": "Rule Master 匯入失敗",
-    "Please check the file format.": "請確認檔案格式。",
-    "Import Success": "匯入成功",
-    "Rule Set:": "規則組：",
-    "Total Rules:": "規則總數：",
-    "Imported at:": "匯入時間：",
-    "Uploading rule file to": "正在上傳規則檔至",
-    "Business Unit Rule Set": "BU 規則組",
-    "Download Bulk ZIP File": "下載 Bulk ZIP 檔",
-    "Files in ZIP:": "ZIP 檔案數：",
-    "Activity Data:": "Activity Data：",
-    "Products:": "Products：",
-    "Excluded WIP:": "排除 WIP：",
-    "rows": "筆",
-    "Semi-finished:": "半品：",
-    "Semi-finished Components:": "半品元件數：",
-    "Raw material rows:": "原物料筆數：",
-    "Raw Materials:": "原物料數：",
-    "Max BOM Level:": "最大 BOM 階層：",
-    "Error:": "錯誤：",
-    "Enter BOM column name": "輸入 BOM 欄位名稱",
-    "Direct Working Hour": "僅成品工時",
-    "Include Semi-finished Working Hour": "包含半品工時",
-    "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.": "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。",
-    "Checking latest BOM Expansion result for semi-finished working hours.": "正在檢查最新 BOM Expansion 結果以納入半品工時。",
-    "Direct Working Hour Enabled.": "已啟用僅成品工時。",
-    "No BOM Expansion result found. Please complete Module 2 → BOM Expansion first, then return to Step 2 to generate Product Activity Data Bulk.": "找不到 BOM Expansion 結果。請先完成 Module 2 → BOM Expansion，再回到 Step 2 產生 Product Activity Data Bulk。",
-    "Working Hour:": "工時來源：",
-    "direct": "僅成品",
-    "include_semi": "含半品",
-    "Upload SAP Working Hour Orders": "生產工時工單",
-    "Production Quantity Work Orders": "生產數量工單",
+  const keyed = {
+    "logoTitle": {
+        "en": "Carbon Management Platform",
+        "zh": "碳管理平台"
+    },
+    "logoSubtitle": {
+        "en": "Manufacturing Data Layer",
+        "zh": "製造資料層"
+    },
+    "eyebrowCarbonManagementPlatform": {
+        "en": "Carbon Management Platform",
+        "zh": "碳管理平台"
+    },
+    "modules": {
+        "en": "Modules",
+        "zh": "模組"
+    },
+    "module": {
+        "en": "Module",
+        "zh": "模組"
+    },
+    "productDataPreparation": {
+        "en": "Product Data Preparation",
+        "zh": "產品資料準備"
+    },
+    "ruleManagement": {
+        "en": "Rule Management",
+        "zh": "規則管理"
+    },
+    "bomExpansion": {
+        "en": "BOM Expansion",
+        "zh": "BOM 展開"
+    },
+    "carbonEmissionFactorSelection": {
+        "en": "Carbon Emission Factor Selection",
+        "zh": "碳排放係數選擇"
+    },
+    "pcfCalculation": {
+        "en": "PCF Calculation",
+        "zh": "產品碳足跡計算"
+    },
+    "productionEnvironment": {
+        "en": "Production Environment",
+        "zh": "正式環境"
+    },
+    "onlineVersion": {
+        "en": "Online | Version 1.0",
+        "zh": "線上｜版本 1.0"
+    },
+    "ruleMasterEnabled": {
+        "en": "Rule Master Enabled",
+        "zh": "Rule Master 已啟用"
+    },
+    "multiFileUpload": {
+        "en": "Multi-file Upload",
+        "zh": "多檔上傳"
+    },
+    "version10": {
+        "en": "Version 1.0",
+        "zh": "版本 1.0"
+    },
+    "workOrderBatchPreparation": {
+        "en": "Work order & batch preparation",
+        "zh": "工單與批次資料準備"
+    },
+    "multiLevelBomExplosion": {
+        "en": "Multi-level BOM explosion",
+        "zh": "多階 BOM 展開"
+    },
+    "factorMappingSelection": {
+        "en": "Factor mapping and selection",
+        "zh": "係數對應與選擇"
+    },
+    "productCarbonFootprint": {
+        "en": "Product carbon footprint",
+        "zh": "產品碳足跡"
+    },
+    "businessUnitRuleSet": {
+        "en": "Business Unit Rule Set",
+        "zh": "BU 規則組"
+    },
+    "productionQuantityWorkOrders": {
+        "en": "Production Quantity Work Orders",
+        "zh": "生產數量工單"
+    },
+    "uploadSapWorkingHourOrders": {
+        "en": "Upload SAP Working Hour Orders",
+        "zh": "生產工時工單"
+    },
+    "laborAllocationSource": {
+        "en": "Labor Allocation Source",
+        "zh": "工時來源"
+    },
+    "reportingYear": {
+        "en": "Reporting Year",
+        "zh": "報告年度"
+    },
+    "yearPlaceholder": {
+        "en": "e.g. 2024; blank = all years",
+        "zh": "例如：2024；空白＝全部年度"
+    },
+    "runConsolidationClassification": {
+        "en": "Run Consolidation & Classification",
+        "zh": "執行合併與分類"
+    },
+    "downloadStep1OutputExcel": {
+        "en": "Download Step 1 Output Excel",
+        "zh": "下載 Step 1 輸出 Excel"
+    },
+    "step1WorkOrderProcessing": {
+        "en": "Step 1 · Work Order Processing",
+        "zh": "步驟 1 · 工單處理"
+    },
+    "uploadSapProductionWorkOrderFiles": {
+        "en": "Upload one or multiple SAP production work order files.",
+        "zh": "上傳一份或多份 SAP 生產工單檔案。"
+    },
+    "step1": {
+        "en": "Step 1",
+        "zh": "步驟 1"
+    },
+    "step2BatchDataFormatting": {
+        "en": "Step 2 · Batch Data Formatting",
+        "zh": "步驟 2 · 批次資料格式化"
+    },
+    "convertStep1OutputBulkTemplate": {
+        "en": "Convert Step 1 output and batch file template into a standardized batch file.",
+        "zh": "將 Step 1 輸出與批次範本轉換為標準化批次檔。"
+    },
+    "step2": {
+        "en": "Step 2",
+        "zh": "步驟 2"
+    },
+    "step1Output": {
+        "en": "Step 1 Output",
+        "zh": "Step 1 輸出"
+    },
+    "annualOutputClassificationResult": {
+        "en": "Annual output & classification result",
+        "zh": "年度產量與分類結果"
+    },
+    "batchTemplate": {
+        "en": "Batch Template",
+        "zh": "批次範本"
+    },
+    "requiredBatchFileFormat": {
+        "en": "Required batch file format",
+        "zh": "必要批次檔格式"
+    },
+    "formattedBatchFile": {
+        "en": "Formatted Batch File",
+        "zh": "已格式化批次檔"
+    },
+    "readyForDownstreamProcessing": {
+        "en": "Ready for downstream processing",
+        "zh": "可供後續處理"
+    },
+    "uploadStep1OutputFile": {
+        "en": "Upload Step 1 Output File",
+        "zh": "上傳 Step 1 輸出檔"
+    },
+    "uploadBulkTemplateFile": {
+        "en": "Upload Bulk Template File",
+        "zh": "上傳 Bulk 範本檔"
+    },
+    "workingHourSource": {
+        "en": "Working Hour Source",
+        "zh": "工時來源"
+    },
+    "directWorkingHour": {
+        "en": "Direct Working Hour",
+        "zh": "僅成品工時"
+    },
+    "includeSemiWorkingHour": {
+        "en": "Include Semi-finished Working Hour",
+        "zh": "包含半品工時"
+    },
+    "semiHourHint": {
+        "en": "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.",
+        "zh": "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。"
+    },
+    "generateFormattedBulkFile": {
+        "en": "Generate Formatted Bulk File",
+        "zh": "產生格式化 Bulk 檔"
+    },
+    "downloadFormattedBulkFile": {
+        "en": "Download Formatted Bulk File",
+        "zh": "下載格式化 Bulk 檔"
+    },
+    "downloadBulkZipFile": {
+        "en": "Download Bulk ZIP File",
+        "zh": "下載 Bulk ZIP 檔"
+    },
+    "step2Hint": {
+        "en": "Step 2 extracts required fields from the Step 1 output and writes them into the bulk template. Activity Data and Products sheets will be populated automatically.",
+        "zh": "Step 2 會從 Step 1 輸出擷取必要欄位並寫入 Bulk 範本。系統會自動填入 Activity Data 與 Products 分頁。"
+    },
+    "executionLog": {
+        "en": "Execution Log",
+        "zh": "執行紀錄"
+    },
+    "summary": {
+        "en": "Summary",
+        "zh": "摘要"
+    },
+    "rules": {
+        "en": "Rules",
+        "zh": "規則"
+    },
+    "version10DecisionFlow": {
+        "en": "Version 1.0 Decision Flow",
+        "zh": "版本 1.0 判斷流程"
+    },
+    "requiredSapFields": {
+        "en": "Required SAP Fields",
+        "zh": "必要 SAP 欄位"
+    },
+    "uploadStandardBom": {
+        "en": "Upload Standard BOM",
+        "zh": "上傳標準 BOM"
+    },
+    "uploadRawMaterialBulkTemplate": {
+        "en": "Upload Raw Material Bulk Template",
+        "zh": "上傳原物料 Bulk 範本"
+    },
+    "processBomExpansion": {
+        "en": "Process BOM Expansion",
+        "zh": "執行 BOM 展開"
+    },
+    "downloadRawMaterialBulk": {
+        "en": "Download Raw Material Bulk",
+        "zh": "下載原物料 Bulk"
+    },
+    "bomExpansionLogic": {
+        "en": "BOM Expansion Logic",
+        "zh": "BOM 展開邏輯"
+    },
+    "bomColumnMappingHint": {
+        "en": "Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.",
+        "zh": "設定 BOM 展開來源欄位名稱。使用「預設」套用系統設定，或使用「確認」套用輸入內容。"
+    },
+    "parentMaterial": {
+        "en": "Parent Material",
+        "zh": "母件料號"
+    },
+    "component": {
+        "en": "Component",
+        "zh": "元件料號"
+    },
+    "quantity": {
+        "en": "Quantity",
+        "zh": "數量"
+    },
+    "unit": {
+        "en": "Unit",
+        "zh": "單位"
+    },
+    "componentDescription": {
+        "en": "Component Description",
+        "zh": "元件描述"
+    },
+    "materialGroup": {
+        "en": "Material Group",
+        "zh": "物料群組"
+    },
+    "validFrom": {
+        "en": "Valid From",
+        "zh": "有效起始日"
+    },
+    "default": {
+        "en": "Default",
+        "zh": "預設"
+    },
+    "confirm": {
+        "en": "Confirm",
+        "zh": "確認"
+    },
+    "enterBomColumnName": {
+        "en": "Enter BOM column name",
+        "zh": "輸入 BOM 欄位名稱"
+    },
+    "semiFinishedRule": {
+        "en": "Semi-finished Rule",
+        "zh": "半成品判斷規則"
+    },
+    "semiFinishedRuleDesc": {
+        "en": "Component also exists as Parent Node",
+        "zh": "Component 同時存在於 Parent Node"
+    },
+    "quantityRollUp": {
+        "en": "Quantity Roll-up",
+        "zh": "數量展開邏輯"
+    },
+    "quantityRollUpDesc": {
+        "en": "Multiply quantities across all BOM levels",
+        "zh": "跨 BOM 階層累乘數量"
+    },
+    "rawMaterialBulkOutput": {
+        "en": "Raw Material Bulk Output",
+        "zh": "原物料 Bulk 輸出"
+    },
+    "rawMaterialBulkOutputHint": {
+        "en": "Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.",
+        "zh": "系統會填入 Input Sheet Activity Data 與 Input Sheet Raw Material。Optional 欄位不會寫入。"
+    },
+    "ruleMaster": {
+        "en": "Rule Master",
+        "zh": "Rule Master"
+    },
+    "importDownloadClassificationRules": {
+        "en": "Import and download classification rule masters for Product Data Preparation.",
+        "zh": "匯入與下載產品資料準備使用的分類規則主檔。"
+    },
+    "ruleManagementHint": {
+        "en": "Rule Management is a sub-function under Product Data Preparation. It controls product type classification, product series mapping, WIP judgment and customer mapping logic.",
+        "zh": "規則管理是產品資料準備下的子功能，用於控制產品類型分類、產品系列對應、WIP 判斷與客戶對應邏輯。"
+    },
+    "ruleMasterReady": {
+        "en": "Rule Master ready",
+        "zh": "Rule Master 已就緒"
+    },
+    "selectBuAndImportRuleMaster": {
+        "en": "Select a Business Unit Rule Set and import a Rule Master file.",
+        "zh": "請選擇 BU 規則組並匯入 Rule Master 檔案。"
+    },
+    "currentRuleSet": {
+        "en": "Current Rule Set",
+        "zh": "目前規則組"
+    },
+    "currentRules": {
+        "en": "Current Rules",
+        "zh": "目前規則數"
+    },
+    "lastImport": {
+        "en": "Last Import",
+        "zh": "最近匯入"
+    },
+    "uploadRuleMaster": {
+        "en": "Upload Rule Master",
+        "zh": "上傳 Rule Master"
+    },
+    "importRuleMaster": {
+        "en": "Import Rule Master",
+        "zh": "匯入 Rule Master"
+    },
+    "downloadRuleMaster": {
+        "en": "Download Rule Master",
+        "zh": "下載 Rule Master"
+    },
+    "downloadProductSeriesMaster": {
+        "en": "Download Product Series Master",
+        "zh": "下載 Product Series Master"
+    },
+    "ruleMasterFields": {
+        "en": "Rule Master Fields",
+        "zh": "Rule Master 欄位"
+    },
+    "ruleTypeGuide": {
+        "en": "Rule Type Guide",
+        "zh": "Rule Type 說明"
+    },
+    "ruleTypePlantExact": {
+        "en": "Plant Exact",
+        "zh": "Plant Exact"
+    },
+    "ruleTypePlantExactDesc": {
+        "en": "Plant exact match, for example: 3760 → Shijie Plant-IPS",
+        "zh": "Plant 完全符合，例如：3760 → 石碣廠-IPS"
+    },
+    "ruleTypeMaterialNumberExact": {
+        "en": "Material Number Exact",
+        "zh": "Material Number Exact"
+    },
+    "ruleTypeMaterialNumberExactDesc": {
+        "en": "Exact material number match, for example: SG-96000-00A",
+        "zh": "完整料號比對，例如：SG-96000-00A"
+    },
+    "ruleTypeMaterialNumberPrefix": {
+        "en": "Material Number Prefix",
+        "zh": "Material Number Prefix"
+    },
+    "ruleTypeMaterialNumberPrefixDesc": {
+        "en": "Material number prefix match, for example: 850-, 851-, 852-",
+        "zh": "料號前綴比對，例如：850-、851-、852-"
+    },
+    "ruleTypeSeriesExact": {
+        "en": "Series Exact",
+        "zh": "Series Exact"
+    },
+    "ruleTypeSeriesExactDesc": {
+        "en": "Exact product series match, for example: SN3103B02",
+        "zh": "完整產品系列比對，例如：SN3103B02"
+    },
+    "ruleTypeSeriesPrefix": {
+        "en": "Series Prefix",
+        "zh": "Series Prefix"
+    },
+    "ruleTypeSeriesPrefixDesc": {
+        "en": "Product series prefix match, for example: SN, SP, FU, SCMC",
+        "zh": "產品系列前綴比對，例如：SN、SP、FU、SCMC"
+    },
+    "ruleTypeDescriptionContains": {
+        "en": "Description Contains",
+        "zh": "Description Contains"
+    },
+    "ruleTypeDescriptionContainsDesc": {
+        "en": "Material description contains keywords, for example: TOUCHPAD MODULE, ASSY",
+        "zh": "Material description 包含關鍵字，例如：TOUCHPAD MODULE、ASSY"
+    },
+    "maintenancePrinciples": {
+        "en": "Maintenance Principles",
+        "zh": "維護原則"
+    },
+    "maintenancePriority": {
+        "en": "The smaller the Priority number, the higher the priority.",
+        "zh": "Priority 數字越小，優先度越高。"
+    },
+    "maintenanceRuleMasterControlsSite": {
+        "en": "Product Line and Production Site are controlled only by Rule Master.",
+        "zh": "Product Line 與 Production Site 僅由 Rule Master 控制。"
+    },
+    "maintenanceChangeRuleMasterOnly": {
+        "en": "When adding or adjusting classification rules, only modify the corresponding BU rule_master.csv; main.py does not need to be modified.",
+        "zh": "新增或調整分類規則時，只需修改對應 BU 的 rule_master.csv，不需修改 main.py。"
+    },
+    "maintenanceBlankKeptBlank": {
+        "en": "If Product Line or Production Site is blank, the platform keeps it blank and does not infer automatically.",
+        "zh": "若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。"
+    },
+    "noFileSelected": {
+        "en": "No file selected",
+        "zh": "尚未選擇檔案"
+    },
+    "pleaseSelectRuleMasterBeforeImport": {
+        "en": "Please select a Rule Master file before importing.",
+        "zh": "請先選擇 Rule Master 檔案後再匯入。"
+    },
+    "pleaseSelectRuleFileFirst": {
+        "en": "Please select a rule file first.",
+        "zh": "請先選擇規則檔。"
+    },
+    "importFailed": {
+        "en": "Import failed",
+        "zh": "匯入失敗"
+    },
+    "importingRuleMaster": {
+        "en": "Importing Rule Master...",
+        "zh": "正在匯入 Rule Master..."
+    },
+    "uploadingRuleFileTo": {
+        "en": "Uploading rule file to {ruleSet}.",
+        "zh": "正在上傳規則檔至 {ruleSet}。"
+    },
+    "ruleMasterImportedSuccessfully": {
+        "en": "Rule Master imported successfully.",
+        "zh": "Rule Master 匯入成功。"
+    },
+    "ruleImportSuccessDetail": {
+        "en": "Rule Set: {ruleSet} · Total Rules: {count}",
+        "zh": "規則組：{ruleSet} · 規則總數：{count}"
+    },
+    "importSuccess": {
+        "en": "Import Success",
+        "zh": "匯入成功"
+    },
+    "ruleSetLabel": {
+        "en": "Rule Set",
+        "zh": "規則組"
+    },
+    "totalRulesLabel": {
+        "en": "Total rules",
+        "zh": "規則總數"
+    },
+    "importedAtLabel": {
+        "en": "Imported at",
+        "zh": "匯入時間"
+    },
+    "ruleMasterImportFailed": {
+        "en": "Rule Master import failed",
+        "zh": "Rule Master 匯入失敗"
+    },
+    "pleaseCheckFileFormat": {
+        "en": "Please check the file format.",
+        "zh": "請確認檔案格式。"
+    },
+    "errorPrefix": {
+        "en": "Error: ",
+        "zh": "錯誤："
+    },
+    "readyForProcessing": {
+        "en": "Ready for processing",
+        "zh": "準備處理"
+    },
+    "readyForBatchFormatting": {
+        "en": "Ready for batch formatting",
+        "zh": "準備批次格式化"
+    },
+    "readyForBomExpansion": {
+        "en": "Ready for BOM Expansion",
+        "zh": "準備 BOM 展開"
+    },
+    "idle": {
+        "en": "Idle",
+        "zh": "待命"
+    },
+    "completed": {
+        "en": "Completed",
+        "zh": "已完成"
+    },
+    "processingInProgress": {
+        "en": "Processing in progress",
+        "zh": "處理中"
+    },
+    "processingCompleted": {
+        "en": "Processing completed",
+        "zh": "處理完成"
+    },
+    "processingFailed": {
+        "en": "Processing failed",
+        "zh": "處理失敗"
+    }
+};
 
+  const phraseZh = {
     "Carbon Management Platform": "碳管理平台",
     "Manufacturing Data Layer": "製造資料層",
     "Modules": "模組",
+    "Module": "模組",
     "Product Data Preparation": "產品資料準備",
     "Rule Management": "規則管理",
     "BOM Expansion": "BOM 展開",
@@ -74,31 +548,21 @@
     "Rule Master Enabled": "Rule Master 已啟用",
     "Multi-file Upload": "多檔上傳",
     "Version 1.0": "版本 1.0",
-
-    "Prepare manufacturing data, expand BOM structures, select emission factors, and calculate product carbon footprints.": "準備製造資料、展開 BOM 結構、選擇碳排放係數，並計算產品碳足跡。",
-    "Prepare manufacturing data, expand BOM structures, select emission factors, and calculate product carbon footprints.": "準備製造資料、展開 BOM 結構、選擇碳排放係數，並計算產品碳足跡。",
-    "Prepare production output and batch data for product carbon footprint workflows.": "準備產品碳足跡流程所需的生產產出與批次資料。",
-    "Maintain Product Data Preparation rules, including Rule Master and Product Series Master.": "維護 Product Data Preparation Rules，包含 Rule Master 與 Product Series Master。",
-    "Expand multi-level BOM structures, roll up raw material quantities, and generate raw material bulk files.": "展開多階 BOM 結構、彙總原物料數量，並產生原物料 Bulk 檔。",
-
-    "Module": "模組",
     "Work order & batch preparation": "工單與批次資料準備",
     "Multi-level BOM explosion": "多階 BOM 展開",
     "Factor mapping and selection": "係數對應與選擇",
     "Product carbon footprint": "產品碳足跡",
-
+    "Business Unit Rule Set": "BU 規則組",
+    "Production Quantity Work Orders": "生產數量工單",
+    "Upload SAP Working Hour Orders": "生產工時工單",
+    "Labor Allocation Source": "工時來源",
+    "Reporting Year": "報告年度",
+    "e.g. 2024; blank = all years": "例如：2024；空白＝全部年度",
+    "Run Consolidation & Classification": "執行合併與分類",
+    "Download Step 1 Output Excel": "下載 Step 1 輸出 Excel",
     "Step 1 · Work Order Processing": "步驟 1 · 工單處理",
     "Upload one or multiple SAP production work order files.": "上傳一份或多份 SAP 生產工單檔案。",
     "Step 1": "步驟 1",
-    "Upload SAP Production Work Orders": "生產數量工單",
-    "Reporting Year": "報告年度",
-    "Run Consolidation & Classification": "執行合併與分類",
-    "Ready for processing": "準備處理",
-    "Upload SAP work orders and start the classification workflow.": "上傳 SAP 工單並開始分類流程。",
-    "Upload production quantity work orders and optional labor work orders to start the classification workflow.": "上傳生產數量工單與選填生產工時工單後開始分類流程。",
-    "Idle": "待命",
-    "Download Step 1 Output Excel": "下載 Step 1 輸出 Excel",
-
     "Step 2 · Batch Data Formatting": "步驟 2 · 批次資料格式化",
     "Convert Step 1 output and batch file template into a standardized batch file.": "將 Step 1 輸出與批次範本轉換為標準化批次檔。",
     "Step 2": "步驟 2",
@@ -110,40 +574,25 @@
     "Ready for downstream processing": "可供後續處理",
     "Upload Step 1 Output File": "上傳 Step 1 輸出檔",
     "Upload Bulk Template File": "上傳 Bulk 範本檔",
+    "Working Hour Source": "工時來源",
+    "Direct Working Hour": "僅成品工時",
+    "Include Semi-finished Working Hour": "包含半品工時",
+    "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.": "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。",
     "Generate Formatted Bulk File": "產生格式化 Bulk 檔",
-    "Ready for batch formatting": "準備批次格式化",
-    "Upload Step 1 output and bulk template to generate formatted bulk file.": "上傳 Step 1 輸出與 Bulk 範本以產生格式化檔案。",
     "Download Formatted Bulk File": "下載格式化 Bulk 檔",
-    "Step 2 extracts required fields from the Step 1 output and writes them into the bulk template.": "Step 2 會從 Step 1 輸出擷取必要欄位並寫入 Bulk 範本。",
-    "Activity Data and Products sheets will be populated automatically.": "系統會自動填入 Activity Data 與 Products 分頁。",
-
+    "Download Bulk ZIP File": "下載 Bulk ZIP 檔",
+    "Step 2 extracts required fields from the Step 1 output and writes them into the bulk template. Activity Data and Products sheets will be populated automatically.": "Step 2 會從 Step 1 輸出擷取必要欄位並寫入 Bulk 範本。系統會自動填入 Activity Data 與 Products 分頁。",
     "Execution Log": "執行紀錄",
     "Summary": "摘要",
     "Rules": "規則",
-    "Ready. Upload SAP production work orders and start processing.": "準備完成。請上傳 SAP 生產工單並開始處理。",
-    "Ready. Upload production quantity work orders and optional labor work orders to start processing.": "準備完成。請上傳生產數量工單與選填生產工時工單後開始處理。",
     "Version 1.0 Decision Flow": "版本 1.0 判斷流程",
-    "Product Series Engine": "產品系列引擎",
-    "punctuation-based segmentation, then full-text Regex Prefix Search.": "以標點符號分段，再進行全文 Regex 前綴搜尋。",
-    "Rule Master": "規則主檔",
-    "priority-based classification logic.": "以優先順序為基礎的分類邏輯。",
-    "Product Series Master": "產品系列主檔",
-    "fallback mapping by product series.": "依產品系列進行備援對應。",
-    "Default WIP": "預設 WIP",
-    "classify as WIP if no rule is matched.": "若沒有命中任何規則，則分類為 WIP。",
     "Required SAP Fields": "必要 SAP 欄位",
-
     "Upload Standard BOM": "上傳標準 BOM",
     "Upload Raw Material Bulk Template": "上傳原物料 Bulk 範本",
     "Process BOM Expansion": "執行 BOM 展開",
-    "Ready for BOM Expansion": "準備 BOM 展開",
-    "Upload standard BOM and raw material bulk template to start processing.": "上傳標準 BOM 與原物料 Bulk 範本後開始處理。",
     "Download Raw Material Bulk": "下載原物料 Bulk",
     "BOM Expansion Logic": "BOM 展開邏輯",
-    "Configure source column names for BOM Expansion.": "設定 BOM 展開來源欄位名稱。",
-    "Use": "使用",
-    "for system settings or": "套用系統設定，或使用",
-    "to apply your input.": "套用輸入內容。",
+    "Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.": "設定 BOM 展開來源欄位名稱。使用「預設」套用系統設定，或使用「確認」套用輸入內容。",
     "Parent Material": "母件料號",
     "Component": "元件料號",
     "Quantity": "數量",
@@ -153,83 +602,86 @@
     "Valid From": "有效起始日",
     "Default": "預設",
     "Confirm": "確認",
-    "Current Setting:": "目前設定：",
-    "Parent Node": "Parent Node",
-    "CS03 Qty": "CS03 Qty",
-    "CS03 UoM": "CS03 UoM",
-    "Material group": "Material group",
-    "BOM Valid From": "BOM Valid From",
+    "Enter BOM column name": "輸入 BOM 欄位名稱",
     "Semi-finished Rule": "半成品判斷規則",
     "Component also exists as Parent Node": "Component 同時存在於 Parent Node",
     "Quantity Roll-up": "數量展開邏輯",
     "Multiply quantities across all BOM levels": "跨 BOM 階層累乘數量",
     "Raw Material Bulk Output": "原物料 Bulk 輸出",
-    "Input Sheet Activity Data and Input Sheet Raw Material will be populated.": "系統會填入 Input Sheet Activity Data 與 Input Sheet Raw Material。",
-    "Optional fields are not written.": "Optional 欄位不會寫入。",
-    "BOM Expansion is ready.": "BOM 展開已準備完成。",
-
+    "Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.": "系統會填入 Input Sheet Activity Data 與 Input Sheet Raw Material。Optional 欄位不會寫入。",
+    "Rule Master": "Rule Master",
     "Import and download classification rule masters for Product Data Preparation.": "匯入與下載產品資料準備使用的分類規則主檔。",
-    "Rule Management is a sub-function under Product Data Preparation.": "規則管理是產品資料準備下的子功能。",
-    "It controls product type classification, product series mapping, WIP judgment and customer mapping logic.": "用於控制產品類型分類、產品系列對應、WIP 判斷與客戶對應邏輯。",
-    "Maintain Product Data Preparation Rules, including Rule Master and Product Series Master.": "維護 Product Data Preparation Rules，包含 Rule Master 與 Product Series Master。",
-    "Rule Type Guide": "Rule Type 說明",
-    "Maintenance Principles": "維護原則",
-    "Plant 完全符合，例如：3760 → 石碣廠-IPS": "Plant 完全符合，例如：3760 → 石碣廠-IPS",
-    "完整料號比對，例如：SG-96000-00A": "完整料號比對，例如：SG-96000-00A",
-    "料號前綴比對，例如：850-、851-、852-": "料號前綴比對，例如：850-、851-、852-",
-    "完整產品系列比對，例如：SN3103B02": "完整產品系列比對，例如：SN3103B02",
-    "產品系列前綴比對，例如：SN、SP、FU、SCMC": "產品系列前綴比對，例如：SN、SP、FU、SCMC",
-    "Material description 包含關鍵字，例如：TOUCHPAD MODULE、ASSY": "Material description 包含關鍵字，例如：TOUCHPAD MODULE、ASSY",
-    "Priority 數字越小，優先度越高。": "Priority 數字越小，優先度越高。",
-    "Product Line 與 Production Site 僅由 Rule Master 控制。": "Product Line 與 Production Site 僅由 Rule Master 控制。",
-    "新增或調整分類規則時，只需修改 rule_master.csv，不需修改 main.py。": "新增或調整分類規則時，只需修改 rule_master.csv，不需修改 main.py。",
-    "若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。": "若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。",
+    "Rule Management is a sub-function under Product Data Preparation. It controls product type classification, product series mapping, WIP judgment and customer mapping logic.": "規則管理是產品資料準備下的子功能，用於控制產品類型分類、產品系列對應、WIP 判斷與客戶對應邏輯。",
+    "Rule Master ready": "Rule Master 已就緒",
+    "Select a Business Unit Rule Set and import a Rule Master file.": "請選擇 BU 規則組並匯入 Rule Master 檔案。",
+    "Current Rule Set": "目前規則組",
+    "Current Rules": "目前規則數",
+    "Last Import": "最近匯入",
     "Upload Rule Master": "上傳 Rule Master",
     "Import Rule Master": "匯入 Rule Master",
     "Download Rule Master": "下載 Rule Master",
     "Download Product Series Master": "下載 Product Series Master",
     "Rule Master Fields": "Rule Master 欄位",
-    "Default Rules": "預設規則",
-    "Rule Management is ready.": "規則管理已準備完成。",
-
-    "1. Product Data Preparation": "1. 產品資料準備",
-    "Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.": "完成 Step 1 工單處理、Step 2 批次資料格式化與規則管理。",
-    "2. BOM Expansion": "2. BOM 展開",
-    "Reserved module. This area can be extended for multi-level BOM explosion.": "預留模組。此區可延伸為多階 BOM 展開。",
-    "3. Carbon Emission Factor Selection": "3. 碳排放係數選擇",
-    "Reserved module. This area can be extended for emission factor mapping and selection.": "預留模組。此區可延伸為排放係數對應與選擇。",
-    "4. PCF Calculation": "4. 產品碳足跡計算",
-    "Reserved module. This area can be extended for product carbon footprint calculation.": "預留模組。此區可延伸為產品碳足跡計算。",
-
-    "Processing...": "處理中...",
-    "Reading Excel files": "讀取 Excel 檔案",
-    "Merging work orders": "合併工單",
-    "Filtering year": "篩選年度",
-    "Annual output summary": "年度產量彙總",
-    "WIP decision": "WIP 判斷",
-    "Excel export": "Excel 匯出",
-    "Completed.": "已完成。",
-    "Year": "年度",
-    "Uploaded files": "上傳檔案數",
-    "Labor files": "工時檔案數",
-    "Total hours": "總工時",
-    "Uploaded Files": "上傳檔案數",
-    "Labor Files": "工時檔案數",
-    "Work order rows": "工單筆數",
-    "Work Order Rows": "工單筆數",
-    "Summary rows": "彙總筆數",
-    "Summary Rows": "彙總筆數",
-    "Total output": "總產量",
-    "Total Output": "總產量",
-    "Total Hours": "總工時",
-    "WIP rows": "WIP 筆數",
-    "WIP Rows": "WIP 筆數",
-    "Processing completed": "處理完成",
-    "Classification result is ready. You can download the Excel output.": "分類結果已完成，可下載 Excel 輸出檔。",
+    "Rule Type Guide": "Rule Type 說明",
+    "Plant Exact": "Plant Exact",
+    "Plant exact match, for example: 3760 → Shijie Plant-IPS": "Plant 完全符合，例如：3760 → 石碣廠-IPS",
+    "Material Number Exact": "Material Number Exact",
+    "Exact material number match, for example: SG-96000-00A": "完整料號比對，例如：SG-96000-00A",
+    "Material Number Prefix": "Material Number Prefix",
+    "Material number prefix match, for example: 850-, 851-, 852-": "料號前綴比對，例如：850-、851-、852-",
+    "Series Exact": "Series Exact",
+    "Exact product series match, for example: SN3103B02": "完整產品系列比對，例如：SN3103B02",
+    "Series Prefix": "Series Prefix",
+    "Product series prefix match, for example: SN, SP, FU, SCMC": "產品系列前綴比對，例如：SN、SP、FU、SCMC",
+    "Description Contains": "Description Contains",
+    "Material description contains keywords, for example: TOUCHPAD MODULE, ASSY": "Material description 包含關鍵字，例如：TOUCHPAD MODULE、ASSY",
+    "Maintenance Principles": "維護原則",
+    "The smaller the Priority number, the higher the priority.": "Priority 數字越小，優先度越高。",
+    "Product Line and Production Site are controlled only by Rule Master.": "Product Line 與 Production Site 僅由 Rule Master 控制。",
+    "When adding or adjusting classification rules, only modify the corresponding BU rule_master.csv; main.py does not need to be modified.": "新增或調整分類規則時，只需修改對應 BU 的 rule_master.csv，不需修改 main.py。",
+    "If Product Line or Production Site is blank, the platform keeps it blank and does not infer automatically.": "若 Product Line 或 Production Site 空白，平台會保持空白，不自動推論。",
+    "No file selected": "尚未選擇檔案",
+    "Please select a Rule Master file before importing.": "請先選擇 Rule Master 檔案後再匯入。",
+    "Please select a rule file first.": "請先選擇規則檔。",
+    "Import failed": "匯入失敗",
+    "Importing Rule Master...": "正在匯入 Rule Master...",
+    "Uploading rule file to {ruleSet}.": "正在上傳規則檔至 {ruleSet}。",
+    "Rule Master imported successfully.": "Rule Master 匯入成功。",
+    "Rule Set: {ruleSet} · Total Rules: {count}": "規則組：{ruleSet} · 規則總數：{count}",
+    "Import Success": "匯入成功",
+    "Rule Set": "規則組",
+    "Total rules": "規則總數",
+    "Imported at": "匯入時間",
+    "Rule Master import failed": "Rule Master 匯入失敗",
+    "Please check the file format.": "請確認檔案格式。",
+    "Error: ": "錯誤：",
+    "Ready for processing": "準備處理",
+    "Ready for batch formatting": "準備批次格式化",
+    "Ready for BOM Expansion": "準備 BOM 展開",
+    "Idle": "待命",
     "Completed": "已完成",
+    "Processing in progress": "處理中",
+    "Processing completed": "處理完成",
     "Processing failed": "處理失敗",
+    "Prepare manufacturing data, expand BOM structures, select emission factors, and calculate product carbon footprints.": "準備製造資料、展開 BOM 結構、選擇碳排放係數，並計算產品碳足跡。",
+    "Prepare production output and batch data for product carbon footprint workflows.": "準備產品碳足跡流程所需的生產產出與批次資料。",
+    "Maintain Product Data Preparation Rules, including Rule Master and Product Series Master.": "維護 Product Data Preparation Rules，包含 Rule Master 與 Product Series Master。",
+    "Expand multi-level BOM structures, roll up raw material quantities, and generate raw material bulk files.": "展開多階 BOM 結構、彙總原物料數量，並產生原物料 Bulk 檔。",
+    "Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.": "完成 Step 1 工單處理、Step 2 批次資料格式化與規則管理。",
+    "Reserved module. This area can be extended for multi-level BOM explosion.": "預留模組。此區可延伸為多階 BOM 展開。",
+    "Reserved module. This area can be extended for emission factor mapping and selection.": "預留模組。此區可延伸為排放係數對應與選擇。",
+    "Reserved module. This area can be extended for product carbon footprint calculation.": "預留模組。此區可延伸為產品碳足跡計算。",
+    "Upload production quantity work orders and optional labor work orders to start the classification workflow.": "上傳生產數量工單與選填生產工時工單後開始分類流程。",
+    "Ready. Upload production quantity work orders and optional labor work orders to start processing.": "準備完成。請上傳生產數量工單與選填生產工時工單後開始處理。",
+    "Reading Excel files and applying classification rules. Please keep this page open.": "正在讀取 Excel 並套用分類規則，請保持頁面開啟。",
+    "Reading uploaded Excel files...": "讀取上傳的 Excel 檔案...",
+    "Merging SAP production work orders...": "合併 SAP 生產工單...",
+    "Filtering reporting year...": "篩選報告年度...",
+    "Extracting product series...": "解析產品系列...",
+    "Applying Rule Master and Product Series Master...": "套用 Rule Master 與 Product Series Master...",
+    "Generating output Excel...": "產生輸出 Excel...",
+    "Classification result is ready. You can download the Excel output.": "分類結果已完成，可下載 Excel 輸出檔。",
     "Please review the error message and input file format.": "請確認錯誤訊息與輸入檔格式。",
-
     "BOM Expansion in progress": "BOM 展開處理中",
     "Reading standard BOM and validating raw material bulk template.": "讀取標準 BOM 並檢查原物料 Bulk 範本。",
     "Reading BOM structure...": "讀取 BOM 結構...",
@@ -242,7 +694,7 @@
     "BOM Expansion failed": "BOM 展開失敗",
     "Please review the BOM and raw material bulk template.": "請檢查 BOM 與原物料 Bulk 範本。",
     "Processing BOM Expansion...": "正在處理 BOM 展開...",
-
+    "BOM Expansion is ready.": "BOM 展開已準備完成。",
     "Batch formatting in progress": "批次格式化處理中",
     "Reading Step 1 output and validating the bulk template.": "讀取 Step 1 輸出並檢查 Bulk 範本。",
     "Reading Step 1 output file...": "讀取 Step 1 輸出檔...",
@@ -254,145 +706,143 @@
     "Batch formatting completed": "批次格式化完成",
     "Batch formatting failed": "批次格式化失敗",
     "Please review the input files and template format.": "請檢查輸入檔案與範本格式。",
+    "Checking latest BOM Expansion result for semi-finished working hours.": "正在檢查最新 BOM Expansion 結果以納入半品工時。",
+    "Direct Working Hour Enabled.": "已啟用僅成品工時。",
+    "Processing...": "處理中...",
+    "Completed.": "已完成。",
+    "Error:": "錯誤：",
+    "Year": "年度",
+    "Uploaded files": "上傳檔案數",
+    "Uploaded Files": "上傳檔案數",
+    "Labor files": "工時檔案數",
+    "Labor Files": "工時檔案數",
+    "Work order rows": "工單筆數",
+    "Work Order Rows": "工單筆數",
+    "Summary rows": "彙總筆數",
+    "Summary Rows": "彙總筆數",
+    "Total output": "總產量",
+    "Total Output": "總產量",
+    "Total hours": "總工時",
+    "Total Hours": "總工時",
+    "WIP rows": "WIP 筆數",
+    "WIP Rows": "WIP 筆數",
+    "Files in ZIP": "ZIP 檔案數",
+    "Activity Data": "Activity Data",
+    "Products": "Products",
+    "Excluded WIP": "排除 WIP",
+    "Working Hour": "工時來源",
+    "Semi-finished": "半品",
+    "Semi-finished Components": "半品元件數",
+    "Raw material rows": "原物料筆數",
+    "Raw Materials": "原物料數",
+    "Max BOM Level": "最大 BOM 階層",
+    "Current Setting:": "目前設定：",
+    "Rule Management is ready.": "規則管理已準備完成。",
+    "Labor HR.Act + FOH-Others.Act": "人員+設備工時",
+    "Labor HR.Act Only": "人員工時",
+    "FOH-Others.Act Only": "設備工時",
+    "direct": "僅成品",
+    "include_semi": "含半品"
+};
 
-    "Please select a rule file first.": "請先選擇規則檔。",
-    "Importing Rule Master...": "正在匯入 Rule Master...",
-    "Rule Master imported successfully.": "Rule Master 匯入成功。",
-    "Total rules:": "規則總數：",
-    "Import failed": "匯入失敗"
-  };
-
-
-  const keyed = {
-    zh: {
-      modules: "模組", productDataPreparation: "產品資料準備", ruleManagement: "規則管理",
-      bomExpansion: "BOM 展開", carbonEmissionFactorSelection: "碳排放係數選擇", pcfCalculation: "產品碳足跡計算",
-      productionEnvironment: "正式環境", onlineVersion: "線上｜版本 1.0", ruleMasterEnabled: "Rule Master 已啟用",
-      multiFileUpload: "多檔上傳", version10: "版本 1.0", currentRuleSet: "目前規則組", currentRules: "目前規則數", lastImport: "最近匯入",
-      businessUnitRuleSet: "BU 規則組", productionQuantityWorkOrders: "生產數量工單", uploadSapWorkingHourOrders: "生產工時工單", laborAllocationSource: "工時來源", reportingYear: "報告年度",
-      uploadStep1OutputFile: "上傳 Step 1 輸出檔", uploadBulkTemplateFile: "上傳 Bulk 範本檔", workingHourSource: "工時來源", directWorkingHour: "僅成品工時", includeSemiWorkingHour: "包含半品工時",
-      semiHourHint: "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。",
-      uploadStandardBom: "上傳標準 BOM", uploadRawMaterialBulkTemplate: "上傳原物料 Bulk 範本", uploadRuleMaster: "上傳 Rule Master",
-      runConsolidationClassification: "執行合併與分類", generateFormattedBulkFile: "產生格式化 Bulk 檔", processBomExpansion: "執行 BOM 展開", importRuleMaster: "匯入 Rule Master",
-      downloadStep1OutputExcel: "下載 Step 1 輸出 Excel", downloadFormattedBulkFile: "下載格式化 Bulk 檔", downloadRawMaterialBulk: "下載原物料 Bulk", downloadRuleMaster: "下載 Rule Master", downloadProductSeriesMaster: "下載 Product Series Master"
-    },
-    en: {
-      modules: "Modules", productDataPreparation: "Product Data Preparation", ruleManagement: "Rule Management",
-      bomExpansion: "BOM Expansion", carbonEmissionFactorSelection: "Carbon Emission Factor Selection", pcfCalculation: "PCF Calculation",
-      productionEnvironment: "Production Environment", onlineVersion: "Online | Version 1.0", ruleMasterEnabled: "Rule Master Enabled",
-      multiFileUpload: "Multi-file Upload", version10: "Version 1.0", currentRuleSet: "Current Rule Set", currentRules: "Current Rules", lastImport: "Last Import",
-      businessUnitRuleSet: "Business Unit Rule Set", productionQuantityWorkOrders: "Production Quantity Work Orders", uploadSapWorkingHourOrders: "Upload SAP Working Hour Orders", laborAllocationSource: "Labor Allocation Source", reportingYear: "Reporting Year",
-      uploadStep1OutputFile: "Upload Step 1 Output File", uploadBulkTemplateFile: "Upload Bulk Template File", workingHourSource: "Working Hour Source", directWorkingHour: "Direct Working Hour", includeSemiWorkingHour: "Include Semi-finished Working Hour",
-      semiHourHint: "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.",
-      uploadStandardBom: "Upload Standard BOM", uploadRawMaterialBulkTemplate: "Upload Raw Material Bulk Template", uploadRuleMaster: "Upload Rule Master",
-      runConsolidationClassification: "Run Consolidation & Classification", generateFormattedBulkFile: "Generate Formatted Bulk File", processBomExpansion: "Process BOM Expansion", importRuleMaster: "Import Rule Master",
-      downloadStep1OutputExcel: "Download Step 1 Output Excel", downloadFormattedBulkFile: "Download Formatted Bulk File", downloadRawMaterialBulk: "Download Raw Material Bulk", downloadRuleMaster: "Download Rule Master", downloadProductSeriesMaster: "Download Product Series Master"
-    }
-  };
-  function translateKeyedElements(targetLang) {
-    document.querySelectorAll("[data-i18n]").forEach(function (el) {
-      const key = el.getAttribute("data-i18n");
-      if (keyed[targetLang] && keyed[targetLang][key]) el.textContent = keyed[targetLang][key];
-    });
-  }
-
-  const en = {};
-  Object.keys(zh).forEach(function (key) {
-    en[zh[key]] = key;
+  const phraseEn = {};
+  Object.keys(phraseZh).forEach(function (en) {
+    phraseEn[phraseZh[en]] = en;
   });
 
   const preserveExact = new Set([
     "CMP", "SAP", "BOM", "PCF", "WIP", "NB", "TP", "SCMC", "SN", "SP", "SM", "SK",
     "IPS", "AE", "PC&CE", "PC_CE", "-",
     "Order、Plant、Material Number、Material description、Delivered quantity (GMEIN)、Actual finish date",
-    "Priority、Rule Type、Key、Product Type、Customer、Customer Code Logic、Is_WIP、Enabled",
-    "851- / 852- prefix → WIP",
-    "Material description contains Touch pad module → TP",
-    "SCMC prefix → default WIP, can be overridden by description rules",
-    "Material description contains ASSY → WIP",
-    "SN → NB；SP → TP；SM → DT Mouse；SK → DT Keyboard"
+    "Priority、Rule Type、Key、Product Type、Product Line、Production Site、Customer、Customer Code Logic、Is_WIP、Enabled",
+    "Parent Node", "CS03 Qty", "CS03 UoM", "Material group", "BOM Valid From"
   ]);
 
-  function isSkippableText(text) {
-    const t = text.trim();
-    if (!t) return true;
-    if (preserveExact.has(t)) return true;
-    if (/^~?\d+s remaining$/.test(t)) return true;
-    return false;
+  function t(key, fallback) {
+    if (keyed[key] && keyed[key][currentLang]) return keyed[key][currentLang];
+    return fallback || key;
   }
 
-  function getDict(targetLang) {
-    return targetLang === "zh" ? zh : en;
+  function format(key, fallback, values) {
+    let text = t(key, fallback);
+    Object.keys(values || {}).forEach(function (name) {
+      text = text.split("{" + name + "}").join(values[name]);
+    });
+    return text;
+  }
+
+  function isSkippableText(text) {
+    const value = String(text || "").trim();
+    if (!value) return true;
+    if (preserveExact.has(value)) return true;
+    if (/^~?\d+s remaining$/.test(value)) return true;
+    if (/^~?\d+秒$/.test(value)) return true;
+    if (/^\d+$/.test(value)) return true;
+    return false;
   }
 
   function translateString(input, targetLang) {
     if (!input || isSkippableText(input)) return input;
 
-    const dict = getDict(targetLang);
-    let output = input;
+    const dict = targetLang === "zh" ? phraseZh : phraseEn;
+    let output = String(input);
 
-    // Exact normalized match first
-    const normalized = input.replace(/\s+/g, " ").trim();
+    const normalized = output.replace(/\s+/g, " ").trim();
     if (dict[normalized]) {
-      return input.replace(input.trim(), dict[normalized]);
+      return output.replace(output.trim(), dict[normalized]);
     }
 
-    // Phrase replacement, longest first
-    const keys = Object.keys(dict).sort(function (a, b) { return b.length - a.length; });
-    keys.forEach(function (key) {
-      const val = dict[key];
-      output = output.split(key).join(val);
-    });
+    Object.keys(dict)
+      .sort(function (a, b) { return b.length - a.length; })
+      .forEach(function (key) {
+        if (!key) return;
+        output = output.split(key).join(dict[key]);
+      });
 
     return output;
   }
 
-
-  function normalizeWorkingHourTexts() {
-    const isZh = currentLang === "zh";
-
-    document.querySelectorAll("label").forEach(function (label) {
-      const t = label.textContent.replace(/\s+/g, " ").trim();
-      if (
-        t === "Labor Allocation Source" ||
-        t === "Working Hour Source" ||
-        t === "工時擷取選項" ||
-        t === "工時來源"
-      ) {
-        label.textContent = isZh ? "工時來源" : "Working Hour Source";
+  function translateKeyedElements(targetLang) {
+    document.querySelectorAll("[data-i18n]").forEach(function (el) {
+      const key = el.getAttribute("data-i18n");
+      if (keyed[key] && keyed[key][targetLang]) {
+        el.textContent = keyed[key][targetLang];
       }
     });
 
-    const select = document.getElementById("laborMode");
-    if (!select) return;
-
-    const optionText = isZh
-      ? {
-          both: "人員+設備工時",
-          labor_hr: "人員工時",
-          foh: "設備工時"
-        }
-      : {
-          both: "Labor HR.Act + FOH-Others.Act",
-          labor_hr: "Labor HR.Act Only",
-          foh: "FOH-Others.Act Only"
-        };
-
-    Array.from(select.options).forEach(function (option) {
-      if (optionText[option.value]) {
-        option.textContent = optionText[option.value];
+    document.querySelectorAll("[data-i18n-dynamic]").forEach(function (el) {
+      const key = el.getAttribute("data-i18n-dynamic");
+      if (keyed[key] && keyed[key][targetLang]) {
+        el.textContent = keyed[key][targetLang];
       }
     });
 
-    const bulkSelect = document.getElementById("bulkWorkingHourSource");
-    if (bulkSelect) {
-      const bulkOptionText = isZh
+    document.querySelectorAll("[data-i18n-placeholder]").forEach(function (el) {
+      const key = el.getAttribute("data-i18n-placeholder");
+      if (keyed[key] && keyed[key][targetLang]) {
+        el.setAttribute("placeholder", keyed[key][targetLang]);
+      }
+    });
+  }
+
+  function normalizeSelectOptions() {
+    const labor = document.getElementById("laborMode");
+    if (labor) {
+      const opts = currentLang === "zh"
+        ? { both: "人員+設備工時", labor_hr: "人員工時", foh: "設備工時" }
+        : { both: "Labor HR.Act + FOH-Others.Act", labor_hr: "Labor HR.Act Only", foh: "FOH-Others.Act Only" };
+      Array.from(labor.options).forEach(function (option) {
+        if (opts[option.value]) option.textContent = opts[option.value];
+      });
+    }
+
+    const bulk = document.getElementById("bulkWorkingHourSource");
+    if (bulk) {
+      const opts = currentLang === "zh"
         ? { direct: "僅成品工時", include_semi: "包含半品工時" }
         : { direct: "Direct Working Hour", include_semi: "Include Semi-finished Working Hour" };
-      Array.from(bulkSelect.options).forEach(function (option) {
-        if (bulkOptionText[option.value]) {
-          option.textContent = bulkOptionText[option.value];
-        }
+      Array.from(bulk.options).forEach(function (option) {
+        if (opts[option.value]) option.textContent = opts[option.value];
       });
     }
   }
@@ -403,7 +853,8 @@
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
         if (parent.closest("script, style")) return NodeFilter.FILTER_REJECT;
-        if (parent.closest("#laborMode")) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("select")) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("[data-i18n], [data-i18n-dynamic]")) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
@@ -417,7 +868,7 @@
   }
 
   function translateAttributes(targetLang) {
-    document.querySelectorAll("[placeholder]").forEach(function (el) {
+    document.querySelectorAll("[placeholder]:not([data-i18n-placeholder])").forEach(function (el) {
       el.setAttribute("placeholder", translateString(el.getAttribute("placeholder"), targetLang));
     });
 
@@ -435,18 +886,25 @@
     if (isApplying) return;
     isApplying = true;
 
-    currentLang = targetLang;
+    currentLang = targetLang || currentLang;
     localStorage.setItem(STORAGE_KEY, currentLang);
     document.documentElement.lang = currentLang === "zh" ? "zh-Hant" : "en";
     button.textContent = currentLang === "zh" ? "EN" : "中";
 
-    translateTextNodes(document.body, currentLang);
     translateKeyedElements(currentLang);
+    translateTextNodes(document.body, currentLang);
     translateAttributes(currentLang);
-    normalizeWorkingHourTexts();
+    normalizeSelectOptions();
 
     isApplying = false;
   }
+
+  window.CMPI18N = {
+    t: function (key, fallback) { return t(key, fallback); },
+    format: function (key, fallback, values) { return format(key, fallback, values); },
+    apply: function (lang) { applyLanguage(lang || currentLang); },
+    current: function () { return currentLang; }
+  };
 
   button.addEventListener("click", function (event) {
     event.preventDefault();
@@ -454,9 +912,8 @@
     applyLanguage(currentLang === "en" ? "zh" : "en");
   });
 
-  // Translate future text generated by existing page scripts.
   const observer = new MutationObserver(function (mutations) {
-    if (isApplying || currentLang !== "zh") return;
+    if (isApplying) return;
 
     window.setTimeout(function () {
       mutations.forEach(function (mutation) {
@@ -464,6 +921,7 @@
           if (node.nodeType === Node.TEXT_NODE) {
             node.nodeValue = translateString(node.nodeValue, currentLang);
           } else if (node.nodeType === Node.ELEMENT_NODE) {
+            translateKeyedElements(currentLang);
             translateTextNodes(node, currentLang);
           }
         });
@@ -472,9 +930,10 @@
           mutation.target.nodeValue = translateString(mutation.target.nodeValue, currentLang);
         }
       });
+
       translateKeyedElements(currentLang);
       translateAttributes(currentLang);
-      normalizeWorkingHourTexts();
+      normalizeSelectOptions();
     }, 0);
   });
 
@@ -484,6 +943,5 @@
     characterData: true
   });
 
-  // Initial state
   applyLanguage(currentLang);
 })();
