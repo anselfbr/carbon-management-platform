@@ -276,12 +276,11 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
 
 
 def generate_raw_material_bulk_file(
-    bom_path: str | Path,
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
     raw_material_template_path: str | Path,
     output_path: str | Path,
     mapping: dict[str, str | None] | None = None,
 ) -> Dict[str, Any]:
-    bom_path = Path(bom_path)
     raw_material_template_path = Path(raw_material_template_path)
     output_path = Path(output_path)
 
@@ -398,9 +397,12 @@ def _explode_bom_structure(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, An
     return structure, summary
 
 
-def export_bom_structure_file(bom_path: str | Path, output_path: str | Path, mapping: dict[str, str | None] | None = None) -> Dict[str, Any]:
+def export_bom_structure_file(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+) -> Dict[str, Any]:
     """Export latest normalized BOM structure for Step 2 semi-finished working-hour roll-up."""
-    bom_path = Path(bom_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
