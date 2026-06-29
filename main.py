@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import generate_raw_material_bulk_file, export_bom_structure_file, generate_working_hour_rollup_file
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, export_bom_structure_file, generate_working_hour_rollup_file
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -36,7 +36,8 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V13_MULTI_BOM_UPLOAD =====")
+print("===== CMP MAIN VERSION: CMP_V14_MULTI_BOM_XML_REPAIR =====")
+print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -1671,6 +1672,9 @@ async def process_bom_expansion(request: Request):
             summary["working_hour_rollup_filename"] = ""
             summary["working_hour_rollup_download_url"] = ""
             summary["working_hour_rollup_rows"] = 0
+
+        summary["app_version"] = "CMP_V14_MULTI_BOM_XML_REPAIR"
+        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse(
@@ -1681,6 +1685,8 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
+        "app_version": "CMP_V14_MULTI_BOM_XML_REPAIR",
+        "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": f"/download/{output_path.name}",
     }

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
 import shutil
+import tempfile
+import zipfile
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -13,6 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
+BOM_FORMATTER_VERSION = "CMP_V14_MULTI_BOM_XML_REPAIR"
 
 
 DEFAULT_MAPPING = {
@@ -72,6 +76,79 @@ def _safe_number(value: Any) -> float:
         return 0.0
 
 
+
+_XML_NUMERIC_CHAR_REF_RE = re.compile(rb"&#(?:x([0-9A-Fa-f]+)|([0-9]+));")
+_XML_INVALID_ASCII_CONTROL_RE = re.compile(rb"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
+def _is_valid_xml_char_number(codepoint: int) -> bool:
+    """Return True if the code point is valid in XML 1.0."""
+    return (
+        codepoint in (0x09, 0x0A, 0x0D)
+        or 0x20 <= codepoint <= 0xD7FF
+        or 0xE000 <= codepoint <= 0xFFFD
+        or 0x10000 <= codepoint <= 0x10FFFF
+    )
+
+
+def _clean_invalid_xml_bytes(data: bytes) -> bytes:
+    """Remove invalid XML 1.0 character references/control bytes from XLSX XML parts.
+
+    Some SAP-exported Excel files contain strings such as ``&#11;`` or
+    ``&#x0B;`` inside sharedStrings.xml. openpyxl rejects those XML files with
+    "reference to invalid character number". Removing only invalid XML
+    characters keeps the workbook readable without changing normal BOM values.
+    """
+
+    def replace_numeric_ref(match: re.Match[bytes]) -> bytes:
+        raw_hex, raw_dec = match.groups()
+        try:
+            codepoint = int(raw_hex, 16) if raw_hex is not None else int(raw_dec, 10)
+        except Exception:
+            return b""
+        return match.group(0) if _is_valid_xml_char_number(codepoint) else b""
+
+    data = _XML_NUMERIC_CHAR_REF_RE.sub(replace_numeric_ref, data)
+    data = _XML_INVALID_ASCII_CONTROL_RE.sub(b"", data)
+    return data
+
+
+def _repair_xlsx_invalid_xml(source_path: str | Path, repaired_path: str | Path) -> Path:
+    """Create a temporary XLSX copy with invalid XML characters removed."""
+    source_path = Path(source_path)
+    repaired_path = Path(repaired_path)
+    with zipfile.ZipFile(source_path, "r") as zin, zipfile.ZipFile(repaired_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename.lower().endswith((".xml", ".rels")):
+                data = _clean_invalid_xml_bytes(data)
+            zout.writestr(item, data)
+    return repaired_path
+
+
+def _read_excel_first_sheet(path: str | Path) -> pd.DataFrame:
+    """Read the first sheet from a sanitized XLSX copy.
+
+    SAP/exported BOM workbooks can contain invalid XML numeric character
+    references such as ``&#11;`` in sharedStrings.xml. openpyxl fails before
+    pandas can build the DataFrame. Therefore we always sanitize XML parts into
+    a temporary workbook first, then read that repaired workbook.
+    """
+    path = Path(path)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        repaired_path = Path(tmp_dir) / f"repaired_{path.name}"
+        try:
+            _repair_xlsx_invalid_xml(path, repaired_path)
+            return pd.read_excel(repaired_path, sheet_name=0, dtype=object)
+        except Exception as repaired_exc:
+            # Fall back to direct read only if the repair/copy itself was the issue.
+            # If direct read also fails, return the clearer repaired-read error.
+            try:
+                return pd.read_excel(path, sheet_name=0, dtype=object)
+            except Exception:
+                raise ValueError(f"Excel XML 修復後仍無法讀取：{repaired_exc}") from repaired_exc
+
+
 def _date_from_value(value: Any) -> date:
     if pd.isna(value) or value in [None, ""]:
         return date(datetime.now().year, 1, 1)
@@ -97,7 +174,7 @@ def _clear_target_cells(ws, start_row: int, columns: list[int]) -> None:
 
 
 def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None) -> tuple[pd.DataFrame, dict[str, str]]:
-    df = pd.read_excel(bom_path, sheet_name=0, dtype=object)
+    df = _read_excel_first_sheet(bom_path)
     m = _resolve_mapping(mapping)
 
     parent_col = _find_column(df, m["parent_col"])
