@@ -607,12 +607,11 @@ def _sanitize_filename_part(value: Any, fallback: str = "Unassigned") -> str:
 def _read_step1_product_master_maps(step1_output_path: str | Path) -> tuple[dict[str, str], Dict[str, Any]]:
     """Read Step1 output and return product master-data maps.
 
-    Module 2 uses the Step1 output as product master data:
+    Module 2 uses Step1 output only for product-level master data:
     - Material Number / Target Product -> Production Site for split export.
-    - Material Number / Target Product -> Material Group for Raw Material Bulk.
 
-    Material Group intentionally comes from Step1 output, not the Standard BOM
-    Material group column, because Step1 is the controlled classification result.
+    Material Group is a raw-material attribute and must remain sourced from
+    the Standard BOM Material group column. Step1 output must not overwrite it.
     """
     step1_output_path = Path(step1_output_path)
     try:
@@ -622,6 +621,7 @@ def _read_step1_product_master_maps(step1_output_path: str | Path) -> tuple[dict
 
     material_col = _find_step1_column(df, ["Material Number", "Material", "Product Material Number"])
     site_col = _find_step1_column(df, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
+
     work = df.copy()
     work["_material_key"] = work[material_col].apply(_normalize_material_key)
     work["_production_site"] = work[site_col].apply(_safe_text)
@@ -632,7 +632,6 @@ def _read_step1_product_master_maps(step1_output_path: str | Path) -> tuple[dict
 
     for material, group in work.groupby("_material_key", dropna=False):
         sites = sorted({str(x).strip() for x in group["_production_site"] if str(x).strip()})
-        material_groups = sorted({str(x).strip() for x in group["_step1_material_group"] if str(x).strip()})
 
         if sites:
             site_map[str(material)] = sites[0]
@@ -642,8 +641,10 @@ def _read_step1_product_master_maps(step1_output_path: str | Path) -> tuple[dict
     return site_map, {
         "step1_rows": int(len(df)),
         "step1_mapped_materials": int(len(site_map)),
-                "step1_site_conflicts": duplicate_site_conflicts,
-            }
+        "step1_site_conflicts": duplicate_site_conflicts,
+        "material_group_source": "Standard BOM",
+        "transportation_destination_source": "Step1 Production Site",
+    }
 
 
 def generate_raw_material_bulk_files_by_site_zip(
@@ -681,6 +682,11 @@ def generate_raw_material_bulk_files_by_site_zip(
         # Step1 Output is the product master-data source; Standard BOM only provides material structure and usage.
         work["transport_destination"] = work["_production_site"]
 
+        # V14.7: Material Group is a raw-material attribute from Standard BOM.
+        # Do not overwrite it with Step1 product classification fields.
+        if "material_group" not in work.columns:
+            work["material_group"] = ""
+
     site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
 
     generated_files: list[dict[str, Any]] = []
@@ -690,7 +696,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for site in site_values:
             site_df = work[work["_production_site"] == site].copy()
-            site_df = site_df.drop(columns=["_target_key", "_production_site", "_step1_material_group"], errors="ignore")
+            site_df = site_df.drop(columns=["_target_key", "_production_site"], errors="ignore")
             safe_site = _sanitize_filename_part(site)
             file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
 
