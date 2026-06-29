@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V14_4_RAW_MATERIAL_BULK_BY_PRODUCTION_SITE"
+BOM_FORMATTER_VERSION = "CMP_V14_5_STEP1_MASTER_DATA_MATERIAL_GROUP"
 
 
 DEFAULT_MAPPING = {
@@ -604,11 +604,15 @@ def _sanitize_filename_part(value: Any, fallback: str = "Unassigned") -> str:
     return text[:80] or fallback
 
 
-def _read_step1_production_site_map(step1_output_path: str | Path) -> tuple[dict[str, str], Dict[str, Any]]:
-    """Read Step1 output and return Material Number -> Production Site mapping.
+def _read_step1_product_master_maps(step1_output_path: str | Path) -> tuple[dict[str, str], dict[str, str], Dict[str, Any]]:
+    """Read Step1 output and return product master-data maps.
 
-    Module 2 already accepts a Step1 output file for working-hour roll-up. V14.4
-    reuses that same upload to split Raw Material Bulk files by Production Site.
+    Module 2 uses the Step1 output as product master data:
+    - Material Number / Target Product -> Production Site for split export.
+    - Material Number / Target Product -> Material Group for Raw Material Bulk.
+
+    Material Group intentionally comes from Step1 output, not the Standard BOM
+    Material group column, because Step1 is the controlled classification result.
     """
     step1_output_path = Path(step1_output_path)
     try:
@@ -618,27 +622,44 @@ def _read_step1_production_site_map(step1_output_path: str | Path) -> tuple[dict
 
     material_col = _find_step1_column(df, ["Material Number", "Material", "Product Material Number"])
     site_col = _find_step1_column(df, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
+    material_group_col = _find_step1_optional_column(df, [
+        "Material Group", "Material group", "material_group", "物料群組",
+        "Product Line", "product line", "產品線", "歸屬類型", "Production Site Type",
+    ])
 
     work = df.copy()
     work["_material_key"] = work[material_col].apply(_normalize_material_key)
     work["_production_site"] = work[site_col].apply(_safe_text)
+    work["_step1_material_group"] = work[material_group_col].apply(_safe_text) if material_group_col else ""
 
-    work = work[(work["_material_key"] != "") & (work["_production_site"] != "")].copy()
+    work = work[work["_material_key"] != ""].copy()
 
     site_map: dict[str, str] = {}
-    duplicate_conflicts: list[str] = []
+    material_group_map: dict[str, str] = {}
+    duplicate_site_conflicts: list[str] = []
+    duplicate_material_group_conflicts: list[str] = []
+
     for material, group in work.groupby("_material_key", dropna=False):
         sites = sorted({str(x).strip() for x in group["_production_site"] if str(x).strip()})
-        if not sites:
-            continue
-        site_map[str(material)] = sites[0]
-        if len(sites) > 1:
-            duplicate_conflicts.append(f"{material}: {', '.join(sites)}")
+        material_groups = sorted({str(x).strip() for x in group["_step1_material_group"] if str(x).strip()})
 
-    return site_map, {
+        if sites:
+            site_map[str(material)] = sites[0]
+            if len(sites) > 1:
+                duplicate_site_conflicts.append(f"{material}: {', '.join(sites)}")
+
+        if material_groups:
+            material_group_map[str(material)] = material_groups[0]
+            if len(material_groups) > 1:
+                duplicate_material_group_conflicts.append(f"{material}: {', '.join(material_groups)}")
+
+    return site_map, material_group_map, {
         "step1_rows": int(len(df)),
         "step1_mapped_materials": int(len(site_map)),
-        "step1_site_conflicts": duplicate_conflicts,
+        "step1_mapped_material_groups": int(len(material_group_map)),
+        "step1_material_group_column": material_group_col or "",
+        "step1_site_conflicts": duplicate_site_conflicts,
+        "step1_material_group_conflicts": duplicate_material_group_conflicts,
     }
 
 
@@ -664,7 +685,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
     exploded, base_summary = _explode_bom(bom_df)
 
-    site_map, step1_summary = _read_step1_production_site_map(step1_output_path)
+    site_map, material_group_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
 
     work = exploded.copy()
     if work.empty:
@@ -673,6 +694,17 @@ def generate_raw_material_bulk_files_by_site_zip(
         work["_target_key"] = work["target_product"].apply(_normalize_material_key)
         work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
         work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+
+        # V14.5: Raw Material Bulk Material Group follows Step1 classification result.
+        # Standard BOM Material group is retained in BOM structure, but not used for
+        # Raw Material Bulk activity rows when Step1 output is provided.
+        if "material_group" not in work.columns:
+            work["material_group"] = ""
+        work["_step1_material_group"] = work["_target_key"].map(material_group_map).fillna("")
+        work["material_group"] = work["_step1_material_group"].where(
+            work["_step1_material_group"].astype(str).str.strip().ne(""),
+            work["material_group"],
+        )
 
     site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
 
@@ -683,7 +715,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for site in site_values:
             site_df = work[work["_production_site"] == site].copy()
-            site_df = site_df.drop(columns=["_target_key", "_production_site"], errors="ignore")
+            site_df = site_df.drop(columns=["_target_key", "_production_site", "_step1_material_group"], errors="ignore")
             safe_site = _sanitize_filename_part(site)
             file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
 
