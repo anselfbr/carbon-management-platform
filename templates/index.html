@@ -415,8 +415,8 @@
         <section class="workspace">
           <section class="card primary-card">
             <form id="bomForm" class="form-panel">
-              <label data-i18n="uploadStandardBom">Upload Standard BOM</label>
-              <input id="bomFile" name="bom_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+              <label data-i18n="uploadStandardBomFiles">Upload Standard BOM Files</label>
+              <input id="bomFile" name="bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
 
               <label data-i18n="uploadRawMaterialBulkTemplate">Upload Raw Material Bulk Template</label>
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
@@ -920,7 +920,7 @@ function startBomEstimatedProgress() {
   setBomProcessingState(
     'running',
     cmpT('bomExpansionInProgress', 'BOM Expansion in progress'),
-    cmpT('readingBomValidatingTemplate', 'Reading standard BOM and validating raw material bulk template.'),
+    cmpT('readingBomValidatingTemplate', 'Reading standard BOM file(s) and validating raw material bulk template.'),
     cmpRemainingText(estimatedSeconds),
     6
   );
@@ -934,7 +934,7 @@ function startBomEstimatedProgress() {
     bomProgressBar.style.width = `${progress}%`;
 
     const stages = [
-      cmpT('stageReadingBomStructure', 'Reading BOM structure...'),
+      cmpT('stageReadingBomStructure', 'Reading and merging BOM file(s)...'),
       cmpT('stageDetectingSemiFinished', 'Detecting semi-finished components...'),
       cmpT('stageExpandingMultiLevelBom', 'Expanding multi-level BOM...'),
       cmpT('stageCalculatingRollup', 'Calculating material quantity roll-up...'),
@@ -951,13 +951,13 @@ function stopBomProgressSuccess(summary) {
   setBomProcessingState(
     'success',
     cmpT('bomExpansionCompleted', 'BOM Expansion completed'),
-    `Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Max BOM Level: ${summary.max_level}; Working Hour Roll-up rows: ${summary.working_hour_rollup_rows || 0}.`,
+    `BOM Files: ${summary.bom_files || 1}; Rows: ${summary.bom_rows_after_dedup || 0}; Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}; Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Max BOM Level: ${summary.max_level}; Working Hour Roll-up rows: ${summary.working_hour_rollup_rows || 0}.`,
     cmpT('completed', 'Completed'),
     100
   );
 
   bomLog.textContent =
-    `Completed.\nProducts: ${summary.products}\nSemi-finished Components: ${summary.semi_finished}\nActivity Data Rows: ${summary.activity_rows}\nRaw Materials: ${summary.raw_materials}\nMax BOM Level: ${summary.max_level}\nWorking Hour Roll-up Rows: ${summary.working_hour_rollup_rows || 0}\nSemi Working Hours: ${summary.working_hour_rollup_total_semi_hours || 0}`;
+    `Completed.\nBOM Files: ${summary.bom_files || 1}\nBOM Rows Before Dedup: ${summary.bom_rows_before_dedup || 0}\nBOM Rows After Dedup: ${summary.bom_rows_after_dedup || 0}\nDuplicates Removed: ${summary.bom_duplicate_rows_removed || 0}\nProducts: ${summary.products}\nSemi-finished Components: ${summary.semi_finished}\nActivity Data Rows: ${summary.activity_rows}\nRaw Materials: ${summary.raw_materials}\nMax BOM Level: ${summary.max_level}\nWorking Hour Roll-up Rows: ${summary.working_hour_rollup_rows || 0}\nSemi Working Hours: ${summary.working_hour_rollup_total_semi_hours || 0}`;
 }
 
 function stopBomProgressError(message) {

@@ -131,6 +131,64 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     return df, used_columns
 
 
+
+
+def _as_bom_path_list(bom_path: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[Path]:
+    """Normalize single or multiple BOM paths while preserving backward compatibility."""
+    if isinstance(bom_path, (list, tuple)):
+        return [Path(p) for p in bom_path]
+    return [Path(bom_path)]
+
+
+def _read_boms(
+    bom_paths: str | Path | list[str | Path] | tuple[str | Path, ...],
+    mapping: dict[str, str | None] | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Read and merge one or multiple standard BOM Excel files.
+
+    Only fully identical normalized BOM rows are removed. Rows with different
+    quantities, units, descriptions, material groups, or valid-from dates are
+    preserved to avoid accidental data loss.
+    """
+    paths = _as_bom_path_list(bom_paths)
+    if not paths:
+        raise ValueError("請至少上傳一個 Standard BOM Excel 檔案")
+
+    frames: list[pd.DataFrame] = []
+    used_columns: dict[str, str] | None = None
+    source_rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for path in paths:
+        try:
+            df, cols = _read_bom(path, mapping=mapping)
+            part = df.copy()
+            part["_source_file"] = path.name
+            frames.append(part)
+            used_columns = used_columns or cols
+            source_rows.append({"filename": path.name, "rows": int(len(part))})
+        except Exception as exc:
+            errors.append(f"{path.name}: {exc}")
+
+    if errors:
+        raise ValueError("；".join(errors))
+    if not frames:
+        raise ValueError("沒有可處理的 BOM 資料")
+
+    merged = pd.concat(frames, ignore_index=True)
+    before_dedup = int(len(merged))
+    dedup_subset = ["_parent", "_component", "_qty", "_uom", "_description", "_material_group", "_valid_from"]
+    merged = merged.drop_duplicates(subset=dedup_subset, keep="first").reset_index(drop=True)
+    after_dedup = int(len(merged))
+
+    used = dict(used_columns or {})
+    used["bom_files"] = int(len(paths))
+    used["bom_rows_before_dedup"] = before_dedup
+    used["bom_rows_after_dedup"] = after_dedup
+    used["bom_duplicate_rows_removed"] = before_dedup - after_dedup
+    used["bom_source_files"] = source_rows
+    return merged, used
+
 def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     parent_set = set(df["_parent"].dropna().astype(str))
     component_set = set(df["_component"].dropna().astype(str))
@@ -230,7 +288,7 @@ def generate_raw_material_bulk_file(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(raw_material_template_path, output_path)
 
-    bom_df, used_columns = _read_bom(bom_path, mapping=mapping)
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
     exploded, summary = _explode_bom(bom_df)
 
     wb = load_workbook(output_path)
@@ -283,6 +341,10 @@ def generate_raw_material_bulk_file(
 
     summary["output_filename"] = output_path.name
     summary["used_columns"] = used_columns
+    summary["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
+    summary["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
+    summary["bom_rows_after_dedup"] = int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0
+    summary["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
     return summary
 
 
@@ -341,7 +403,7 @@ def export_bom_structure_file(bom_path: str | Path, output_path: str | Path, map
     bom_path = Path(bom_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    bom_df, used_columns = _read_bom(bom_path, mapping=mapping)
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
     structure, summary = _explode_bom_structure(bom_df)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         structure.to_excel(writer, index=False, sheet_name="BOM Structure")
@@ -355,6 +417,10 @@ def export_bom_structure_file(bom_path: str | Path, output_path: str | Path, map
             ws.column_dimensions[letter].width = min(max_len, 45)
     summary["output_filename"] = output_path.name
     summary["used_columns"] = used_columns
+    summary["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
+    summary["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
+    summary["bom_rows_after_dedup"] = int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0
+    summary["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
     return summary
 
 

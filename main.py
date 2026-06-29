@@ -36,7 +36,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V12_WORKING_HOUR_ROLLUP =====")
+print("===== CMP MAIN VERSION: CMP_V13_MULTI_BOM_UPLOAD =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -1336,7 +1336,7 @@ def debug_version():
         "app": "Carbon Management Platform",
         "version": "PROCESS_MANUAL_FORM_V6",
         "process_endpoint": "manual form compatible",
-        "supports": ["files multi-upload", "file single-upload", "blank year", "BU rule library"],
+        "supports": ["files multi-upload", "file single-upload", "Module 2 multi-BOM upload", "blank year", "BU rule library"],
     }
 
 @app.post("/process")
@@ -1536,21 +1536,56 @@ def download_product_series_master(rule_set: str = DEFAULT_RULE_SET):
 # Standard BOM + Raw Material Bulk Template -> Raw Material Bulk
 # =========================================================
 @app.post("/process-bom-expansion")
-async def process_bom_expansion(
-    bom_file: UploadFile = File(...),
-    template_file: UploadFile = File(...),
-    step1_file: Optional[UploadFile] = File(None),
-    parent_col: str = Form(""),
-    component_col: str = Form(""),
-    qty_col: str = Form(""),
-    unit_col: str = Form(""),
-    description_col: str = Form(""),
-    material_group_col: str = Form(""),
-    valid_from_col: str = Form(""),
-):
-    if not bom_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+async def process_bom_expansion(request: Request):
+    """Module 2 BOM Expansion.
+
+    V13 supports multiple Standard BOM Excel files.
+    Accepted file field names:
+    - bom_files: new multi-upload field
+    - bom_file: backward-compatible single-upload field
+    """
+    try:
+        form = await request.form()
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": f"無法讀取上傳表單：{exc}"}, status_code=400)
+
+    def is_upload_file_like(item) -> bool:
+        return bool(getattr(item, "filename", None)) and hasattr(item, "read")
+
+    bom_uploads = []
+    for item in form.getlist("bom_files") + form.getlist("bom_file"):
+        if is_upload_file_like(item):
+            bom_uploads.append(item)
+
+    template_file = form.get("template_file")
+    step1_file = form.get("step1_file")
+
+    parent_col = str(form.get("parent_col") or "")
+    component_col = str(form.get("component_col") or "")
+    qty_col = str(form.get("qty_col") or "")
+    unit_col = str(form.get("unit_col") or "")
+    description_col = str(form.get("description_col") or "")
+    material_group_col = str(form.get("material_group_col") or "")
+    valid_from_col = str(form.get("valid_from_col") or "")
+
+    if not bom_uploads:
         return JSONResponse(
-            {"ok": False, "message": "Standard BOM 請上傳 Excel 檔案"},
+            {"ok": False, "message": "請至少上傳一個 Standard BOM Excel 檔案"},
+            status_code=400,
+        )
+
+    for bom_file in bom_uploads:
+        filename = str(getattr(bom_file, "filename", "") or "")
+        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse(
+                {"ok": False, "message": f"{filename} 不是 Standard BOM Excel 檔案"},
+                status_code=400,
+            )
+
+    if not template_file or not getattr(template_file, "filename", None):
+        return JSONResponse(
+            {"ok": False, "message": "請上傳 Raw Material Bulk Template"},
             status_code=400,
         )
 
@@ -1569,13 +1604,18 @@ async def process_bom_expansion(
 
     token = uuid.uuid4().hex[:10]
 
-    bom_path = UPLOAD_DIR / f"standard_bom_{token}_{Path(bom_file.filename).name}"
+    bom_paths: list[Path] = []
+    for idx, bom_file in enumerate(bom_uploads, start=1):
+        filename = str(getattr(bom_file, "filename", "") or f"bom_{idx}.xlsx")
+        saved_bom = UPLOAD_DIR / f"standard_bom_{token}_{idx}_{Path(filename).name}"
+        saved_bom.write_bytes(await bom_file.read())
+        bom_paths.append(saved_bom)
+
     template_path = UPLOAD_DIR / f"raw_material_template_{token}_{Path(template_file.filename).name}"
     output_path = OUTPUT_DIR / f"raw_material_activity_data_bulk_{token}.xlsx"
     working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{token}.xlsx"
     step1_path = None
 
-    bom_path.write_bytes(await bom_file.read())
     template_path.write_bytes(await template_file.read())
     if step1_file is not None and getattr(step1_file, "filename", None):
         step1_path = UPLOAD_DIR / f"step1_for_rollup_{token}_{Path(step1_file.filename).name}"
@@ -1593,19 +1633,23 @@ async def process_bom_expansion(
 
     try:
         summary = generate_raw_material_bulk_file(
-            bom_path=bom_path,
+            bom_path=bom_paths,
             raw_material_template_path=template_path,
             output_path=output_path,
             mapping=mapping,
         )
         bom_structure_summary = export_bom_structure_file(
-            bom_path=bom_path,
+            bom_path=bom_paths,
             output_path=LATEST_BOM_STRUCTURE_PATH,
             mapping=mapping,
         )
         summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
         summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
         summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
+        summary["bom_files"] = int(bom_structure_summary.get("bom_files", summary.get("bom_files", len(bom_paths))))
+        summary["bom_rows_before_dedup"] = int(bom_structure_summary.get("bom_rows_before_dedup", summary.get("bom_rows_before_dedup", 0)))
+        summary["bom_rows_after_dedup"] = int(bom_structure_summary.get("bom_rows_after_dedup", summary.get("bom_rows_after_dedup", 0)))
+        summary["bom_duplicate_rows_removed"] = int(bom_structure_summary.get("bom_duplicate_rows_removed", summary.get("bom_duplicate_rows_removed", 0)))
 
         if step1_path is not None:
             rollup_summary = generate_working_hour_rollup_file(
@@ -1640,4 +1684,3 @@ async def process_bom_expansion(
         "summary": summary,
         "download_url": f"/download/{output_path.name}",
     }
-

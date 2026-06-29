@@ -231,6 +231,10 @@
         "en": "Upload Standard BOM",
         "zh": "上傳標準 BOM"
     },
+    "uploadStandardBomFiles": {
+        "en": "Upload Standard BOM Files",
+        "zh": "上傳標準 BOM 檔案"
+    },
     "uploadStep1OutputForRollup": {
         "en": "Upload Step 1 Output File for Working Hour Roll-up",
         "zh": "上傳 Step 1 輸出檔（用於工時 Roll-up）"
@@ -600,6 +604,13 @@
     "Version 1.0 Decision Flow": "版本 1.0 判斷流程",
     "Required SAP Fields": "必要 SAP 欄位",
     "Upload Standard BOM": "上傳標準 BOM",
+    "Duplicates Removed": "移除重複筆數",
+    "BOM Rows After Dedup": "去重後 BOM 筆數",
+    "BOM Rows Before Dedup": "去重前 BOM 筆數",
+    "BOM Files": "BOM 檔案數",
+    "Reading and merging BOM file(s)...": "讀取並合併 BOM 檔案...",
+    "Reading standard BOM file(s) and validating raw material bulk template.": "讀取標準 BOM 檔案並檢查原物料 Bulk 範本。",
+    "Upload Standard BOM Files": "上傳標準 BOM 檔案",
     "Upload Raw Material Bulk Template": "上傳原物料 Bulk 範本",
     "Process BOM Expansion": "執行 BOM 展開",
     "Download Raw Material Bulk": "下載原物料 Bulk",
