@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
 import shutil
+import tempfile
+import zipfile
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -13,6 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
+BOM_FORMATTER_VERSION = "CMP_V14_3_TEMPLATE_HEADER_DRIVEN_RAW_MATERIAL_BULK"
 
 
 DEFAULT_MAPPING = {
@@ -72,6 +76,79 @@ def _safe_number(value: Any) -> float:
         return 0.0
 
 
+
+_XML_NUMERIC_CHAR_REF_RE = re.compile(rb"&#(?:x([0-9A-Fa-f]+)|([0-9]+));")
+_XML_INVALID_ASCII_CONTROL_RE = re.compile(rb"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
+def _is_valid_xml_char_number(codepoint: int) -> bool:
+    """Return True if the code point is valid in XML 1.0."""
+    return (
+        codepoint in (0x09, 0x0A, 0x0D)
+        or 0x20 <= codepoint <= 0xD7FF
+        or 0xE000 <= codepoint <= 0xFFFD
+        or 0x10000 <= codepoint <= 0x10FFFF
+    )
+
+
+def _clean_invalid_xml_bytes(data: bytes) -> bytes:
+    """Remove invalid XML 1.0 character references/control bytes from XLSX XML parts.
+
+    Some SAP-exported Excel files contain strings such as ``&#11;`` or
+    ``&#x0B;`` inside sharedStrings.xml. openpyxl rejects those XML files with
+    "reference to invalid character number". Removing only invalid XML
+    characters keeps the workbook readable without changing normal BOM values.
+    """
+
+    def replace_numeric_ref(match: re.Match[bytes]) -> bytes:
+        raw_hex, raw_dec = match.groups()
+        try:
+            codepoint = int(raw_hex, 16) if raw_hex is not None else int(raw_dec, 10)
+        except Exception:
+            return b""
+        return match.group(0) if _is_valid_xml_char_number(codepoint) else b""
+
+    data = _XML_NUMERIC_CHAR_REF_RE.sub(replace_numeric_ref, data)
+    data = _XML_INVALID_ASCII_CONTROL_RE.sub(b"", data)
+    return data
+
+
+def _repair_xlsx_invalid_xml(source_path: str | Path, repaired_path: str | Path) -> Path:
+    """Create a temporary XLSX copy with invalid XML characters removed."""
+    source_path = Path(source_path)
+    repaired_path = Path(repaired_path)
+    with zipfile.ZipFile(source_path, "r") as zin, zipfile.ZipFile(repaired_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename.lower().endswith((".xml", ".rels")):
+                data = _clean_invalid_xml_bytes(data)
+            zout.writestr(item, data)
+    return repaired_path
+
+
+def _read_excel_first_sheet(path: str | Path) -> pd.DataFrame:
+    """Read the first sheet from a sanitized XLSX copy.
+
+    SAP/exported BOM workbooks can contain invalid XML numeric character
+    references such as ``&#11;`` in sharedStrings.xml. openpyxl fails before
+    pandas can build the DataFrame. Therefore we always sanitize XML parts into
+    a temporary workbook first, then read that repaired workbook.
+    """
+    path = Path(path)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        repaired_path = Path(tmp_dir) / f"repaired_{path.name}"
+        try:
+            _repair_xlsx_invalid_xml(path, repaired_path)
+            return pd.read_excel(repaired_path, sheet_name=0, dtype=object)
+        except Exception as repaired_exc:
+            # Fall back to direct read only if the repair/copy itself was the issue.
+            # If direct read also fails, return the clearer repaired-read error.
+            try:
+                return pd.read_excel(path, sheet_name=0, dtype=object)
+            except Exception:
+                raise ValueError(f"Excel XML 修復後仍無法讀取：{repaired_exc}") from repaired_exc
+
+
 def _date_from_value(value: Any) -> date:
     if pd.isna(value) or value in [None, ""]:
         return date(datetime.now().year, 1, 1)
@@ -95,9 +172,110 @@ def _clear_target_cells(ws, start_row: int, columns: list[int]) -> None:
         for col_idx in columns:
             ws.cell(row_idx, col_idx).value = None
 
+def _normalize_template_header(value: Any) -> str:
+    """Normalize a bulk-template header for resilient column matching."""
+    text = str(value or "").strip().lower()
+    text = text.replace("\n", " ").replace("\r", " ")
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text)
+
+
+def _find_template_columns(ws, aliases: list[str], header_rows: int = DATA_START_ROW - 1) -> list[int]:
+    """Find worksheet columns by exact header text in the uploaded bulk template.
+
+    V14.2 rule: Module 2 output follows the user's uploaded template instead
+    of a historical fixed column order. Matching is exact after normalization to
+    avoid accidental matches such as Raw Material Name -> Raw Material Code.
+    """
+    alias_keys = [_normalize_template_header(a) for a in aliases if str(a or "").strip()]
+    if not alias_keys:
+        return []
+
+    found: list[int] = []
+    max_header_row = max(1, int(header_rows or 1))
+    row_order = list(range(1, max_header_row + 1))
+    if 2 in row_order:
+        row_order = [2] + [r for r in row_order if r != 2]
+
+    for row in row_order:
+        for col in range(1, ws.max_column + 1):
+            header_key = _normalize_template_header(ws.cell(row, col).value)
+            if header_key and header_key in alias_keys and col not in found:
+                found.append(col)
+    return found
+
+
+def _find_template_column(ws, aliases: list[str], fallback_col: int | None = None) -> int:
+    cols = _find_template_columns(ws, aliases)
+    if cols:
+        return int(cols[0])
+    if fallback_col is not None:
+        return int(fallback_col)
+    raise ValueError(f"Bulk template 缺少必要欄位：{', '.join(aliases)}")
+
+
+def _write_template_value(ws, row_idx: int, col_idx: int | None, value: Any) -> None:
+    if col_idx:
+        ws.cell(row_idx, int(col_idx)).value = value
+
+
+def _clear_template_columns(ws, start_row: int, columns: list[int]) -> None:
+    unique_columns = sorted({int(c) for c in columns if c})
+    if unique_columns:
+        _clear_target_cells(ws, start_row, unique_columns)
+
+RAW_MATERIAL_NAME_ALIASES = ["raw_material_name", "Raw Material Name", "原物料名稱", "原料名稱"]
+RAW_MATERIAL_CODE_ALIASES = ["raw_material_code", "Raw Material Code", "Raw Material ID", "Raw Material Number", "原物料代碼", "原料代碼"]
+RAW_MATERIAL_DESC_ALIASES = ["raw_material_description", "Raw Material Description (Optional)", "Raw Material Description", "Description", "原物料描述", "品名"]
+DOC_START_DATE_ALIASES = ["doc_start_date", "Doc. Start Date", "Document Start Date", "開始日期"]
+DOC_END_DATE_ALIASES = ["doc_end_date", "Doc. End Date", "Document End Date", "結束日期"]
+DOCUMENT_TYPE_ALIASES = ["document_type", "Document Type", "文件類型"]
+DOCUMENT_NUMBER_ALIASES = ["document_number", "Document Number (optional)", "Document Number", "文件號碼"]
+USAGE_ALIASES = ["usage", "Usage", "用量"]
+ACTIVITY_DATA_UNIT_ALIASES = ["activity_data_unit", "Activity Data Unit", "活動數據單位", "單位"]
+DATA_SOURCE_ALIASES = ["data_source", "Data Source", "資料來源"]
+DATA_SOURCE_OTHER_ALIASES = ["data_source_other", "Data Source Other", "其他資料來源"]
+TRANSPORT_ORIGIN_ALIASES = ["transportation_origin", "Transportation Origin", "運輸起點"]
+TRANSPORT_DESTINATION_ALIASES = ["transportation_destination", "Transportation Destination", "運輸終點"]
+SUPPLIER_NAME_ALIASES = ["supplier_name", "Supplier Name (optional)", "Supplier Name", "供應商名稱"]
+PRODUCT_LINK_ALIASES = ["allocated_target_product_service", "Allocated Target Product/Service", "Target Product", "Product Code", "Product Name", "產品代碼", "產品名稱"]
+COMMENT_ALIASES = ["comment", "Comment (optional)", "Comment", "備註"]
+MATERIAL_GROUP_ALIASES = ["material_group", "Material Group", "Material group", "物料群組"]
+
+
+def _sheet_has_dropdown_label(wb, dropdown_column_name: str, label: str) -> bool:
+    """Check whether a visible dropdown label exists in the template.
+
+    The user's bulk template has visible input columns and hidden key/helper
+    columns. For Document Type, the visible value is "Bill of Materials (BOM)"
+    while the helper formula converts it to key "BOM". Writing the key into
+    the visible column causes the helper formula to fail.
+    """
+    if "Dropdown Values" not in wb.sheetnames:
+        return False
+    ws = wb["Dropdown Values"]
+    target_header = _normalize_template_header(dropdown_column_name)
+    target_label = str(label or "").strip()
+    if not target_header or not target_label:
+        return False
+
+    candidate_cols: list[int] = []
+    for col in range(1, ws.max_column + 1):
+        if _normalize_template_header(ws.cell(1, col).value) == target_header:
+            candidate_cols.append(col)
+    for col in candidate_cols:
+        for row in range(2, min(ws.max_row, 20000) + 1):
+            if str(ws.cell(row, col).value or "").strip() == target_label:
+                return True
+    return False
+
+
+def _document_type_for_template(wb) -> str:
+    """Return the visible Document Type value expected by this template."""
+    preferred_label = "Bill of Materials (BOM)"
+    return preferred_label if _sheet_has_dropdown_label(wb, "Document Type", preferred_label) else "BOM"
 
 def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None) -> tuple[pd.DataFrame, dict[str, str]]:
-    df = pd.read_excel(bom_path, sheet_name=0, dtype=object)
+    df = _read_excel_first_sheet(bom_path)
     m = _resolve_mapping(mapping)
 
     parent_col = _find_column(df, m["parent_col"])
@@ -300,8 +478,34 @@ def generate_raw_material_bulk_file(
     activity_ws = wb[ACTIVITY_SHEET_NAME]
     raw_ws = wb[RAW_MATERIAL_SHEET_NAME]
 
-    _clear_target_cells(activity_ws, DATA_START_ROW, columns=[1, 2, 3, 4, 6, 7, 11, 16])
-    _clear_target_cells(raw_ws, DATA_START_ROW, columns=[1, 2, 6])
+    activity_cols = {
+        "raw_name": _find_template_column(activity_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+        "raw_code": _find_template_column(activity_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+        "start_date": _find_template_column(activity_ws, DOC_START_DATE_ALIASES, 3),
+        "end_date": _find_template_column(activity_ws, DOC_END_DATE_ALIASES, 4),
+        "document_type": _find_template_column(activity_ws, DOCUMENT_TYPE_ALIASES, 5),
+        "document_number": _find_template_column(activity_ws, DOCUMENT_NUMBER_ALIASES, 6),
+        "usage": _find_template_column(activity_ws, USAGE_ALIASES, 7),
+        "unit": _find_template_column(activity_ws, ACTIVITY_DATA_UNIT_ALIASES, 8),
+        "data_source": _find_template_column(activity_ws, DATA_SOURCE_ALIASES, 12),
+        "data_source_other": _find_template_column(activity_ws, DATA_SOURCE_OTHER_ALIASES, 13),
+        "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 15),
+        "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 16),
+        "supplier_name": _find_template_column(activity_ws, SUPPLIER_NAME_ALIASES, 14),
+        "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
+        "comment": _find_template_column(activity_ws, COMMENT_ALIASES, 18),
+        "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
+    }
+    raw_cols = {
+        "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+        "raw_code": _find_template_column(raw_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+        "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
+    }
+
+    document_type_value = _document_type_for_template(wb)
+
+    _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
+    _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()))
 
     row_idx = DATA_START_ROW
     for _, r in exploded.iterrows():
@@ -309,17 +513,29 @@ def generate_raw_material_bulk_file(
         if not isinstance(valid_from, date):
             valid_from = _date_from_value(valid_from)
 
-        activity_ws.cell(row_idx, 1).value = r["raw_material"]
-        activity_ws.cell(row_idx, 2).value = valid_from
-        activity_ws.cell(row_idx, 3).value = _year_end(valid_from)
-        activity_ws.cell(row_idx, 4).value = "BOM"
-        activity_ws.cell(row_idx, 6).value = float(r["usage"]) if not pd.isna(r["usage"]) else 0
-        activity_ws.cell(row_idx, 7).value = r["unit"]
-        activity_ws.cell(row_idx, 11).value = "SAP"
-        activity_ws.cell(row_idx, 16).value = r["target_product"]
+        raw_material = r["raw_material"]
+        target_product = r["target_product"]
+        usage_value = float(r["usage"]) if not pd.isna(r["usage"]) else 0
 
-        activity_ws.cell(row_idx, 2).number_format = "yyyy/mm/dd"
-        activity_ws.cell(row_idx, 3).number_format = "yyyy/mm/dd"
+        _write_template_value(activity_ws, row_idx, activity_cols["raw_name"], raw_material)
+        _write_template_value(activity_ws, row_idx, activity_cols["raw_code"], raw_material)
+        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], valid_from)
+        _write_template_value(activity_ws, row_idx, activity_cols["end_date"], _year_end(valid_from))
+        _write_template_value(activity_ws, row_idx, activity_cols["document_type"], document_type_value)
+        _write_template_value(activity_ws, row_idx, activity_cols["document_number"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["usage"], usage_value)
+        _write_template_value(activity_ws, row_idx, activity_cols["unit"], r["unit"])
+        _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
+        _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["target_product"], target_product)
+        _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
+
+        activity_ws.cell(row_idx, activity_cols["start_date"]).number_format = "yyyy/mm/dd"
+        activity_ws.cell(row_idx, activity_cols["end_date"]).number_format = "yyyy/mm/dd"
         row_idx += 1
 
     raw_unique = (
@@ -331,10 +547,16 @@ def generate_raw_material_bulk_file(
 
     row_idx = DATA_START_ROW
     for _, r in raw_unique.iterrows():
-        raw_ws.cell(row_idx, 1).value = r["raw_material"]
-        raw_ws.cell(row_idx, 2).value = r["raw_material"]
-        raw_ws.cell(row_idx, 6).value = r["description"]
+        raw_material = r["raw_material"]
+        description = r["description"]
+
+        _write_template_value(raw_ws, row_idx, raw_cols["raw_name"], raw_material)
+        _write_template_value(raw_ws, row_idx, raw_cols["raw_code"], raw_material)
+        _write_template_value(raw_ws, row_idx, raw_cols["description"], description)
         row_idx += 1
+
+    summary["activity_template_columns"] = activity_cols
+    summary["raw_material_template_columns"] = raw_cols
 
     wb.save(output_path)
 
