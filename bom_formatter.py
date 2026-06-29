@@ -530,7 +530,7 @@ def _write_raw_material_bulk_from_exploded(
         _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
         _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], r.get("transport_destination", ""))
         _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["target_product"], target_product)
         _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
@@ -694,6 +694,9 @@ def generate_raw_material_bulk_files_by_site_zip(
         work["_target_key"] = work["target_product"].apply(_normalize_material_key)
         work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
         work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+        # V14.6: Transportation Destination in Raw Material Bulk follows Step1 Production Site.
+        # Step1 Output is the product master-data source; Standard BOM only provides material structure and usage.
+        work["transport_destination"] = work["_production_site"]
 
         # V14.5: Raw Material Bulk Material Group follows Step1 classification result.
         # Standard BOM Material group is retained in BOM structure, but not used for
