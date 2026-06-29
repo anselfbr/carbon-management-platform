@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, export_bom_structure_file, generate_working_hour_rollup_file
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -36,7 +36,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V14_MULTI_BOM_XML_REPAIR =====")
+print("===== CMP MAIN VERSION: CMP_V14_4_BOM_BULK_BY_PRODUCTION_SITE =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -1512,7 +1512,8 @@ def download(filename: str):
     path = OUTPUT_DIR / filename
     if not path.exists():
         return JSONResponse({"ok": False, "message": "檔案不存在"}, status_code=404)
-    return FileResponse(path, filename=filename, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    media_type = "application/zip" if path.suffix.lower() == ".zip" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return FileResponse(path, filename=filename, media_type=media_type)
 
 
 @app.get("/download-rule-master")
@@ -1633,12 +1634,23 @@ async def process_bom_expansion(request: Request):
     }
 
     try:
-        summary = generate_raw_material_bulk_file(
-            bom_path=bom_paths,
-            raw_material_template_path=template_path,
-            output_path=output_path,
-            mapping=mapping,
-        )
+        if step1_path is not None:
+            summary = generate_raw_material_bulk_files_by_site_zip(
+                bom_path=bom_paths,
+                raw_material_template_path=template_path,
+                output_dir=OUTPUT_DIR,
+                token=token,
+                step1_output_path=step1_path,
+                mapping=mapping,
+            )
+            output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
+        else:
+            summary = generate_raw_material_bulk_file(
+                bom_path=bom_paths,
+                raw_material_template_path=template_path,
+                output_path=output_path,
+                mapping=mapping,
+            )
         bom_structure_summary = export_bom_structure_file(
             bom_path=bom_paths,
             output_path=LATEST_BOM_STRUCTURE_PATH,
@@ -1685,8 +1697,8 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V14_MULTI_BOM_XML_REPAIR",
+        "app_version": "CMP_V14_4_BOM_BULK_BY_PRODUCTION_SITE",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
-        "download_url": f"/download/{output_path.name}",
+        "download_url": summary.get("download_url", f"/download/{output_path.name}"),
     }

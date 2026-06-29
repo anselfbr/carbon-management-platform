@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V14_3_TEMPLATE_HEADER_DRIVEN_RAW_MATERIAL_BULK"
+BOM_FORMATTER_VERSION = "CMP_V14_4_RAW_MATERIAL_BULK_BY_PRODUCTION_SITE"
 
 
 DEFAULT_MAPPING = {
@@ -453,20 +453,22 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     return exploded, summary
 
 
-def generate_raw_material_bulk_file(
-    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+
+def _write_raw_material_bulk_from_exploded(
+    exploded: pd.DataFrame,
     raw_material_template_path: str | Path,
     output_path: str | Path,
-    mapping: dict[str, str | None] | None = None,
 ) -> Dict[str, Any]:
+    """Write Raw Material Bulk workbook from an already exploded BOM DataFrame.
+
+    This keeps Module 2 template-driven: data is written by header name, not
+    fixed Excel column positions. It is reused by the all-site export and the
+    Production Site split export.
+    """
     raw_material_template_path = Path(raw_material_template_path)
     output_path = Path(output_path)
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(raw_material_template_path, output_path)
-
-    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
-    exploded, summary = _explode_bom(bom_df)
 
     wb = load_workbook(output_path)
 
@@ -555,12 +557,36 @@ def generate_raw_material_bulk_file(
         _write_template_value(raw_ws, row_idx, raw_cols["description"], description)
         row_idx += 1
 
-    summary["activity_template_columns"] = activity_cols
-    summary["raw_material_template_columns"] = raw_cols
-
     wb.save(output_path)
 
-    summary["output_filename"] = output_path.name
+    return {
+        "output_filename": output_path.name,
+        "activity_template_columns": activity_cols,
+        "raw_material_template_columns": raw_cols,
+        "activity_rows": int(len(exploded)),
+        "raw_materials": int(exploded["raw_material"].nunique()) if not exploded.empty else 0,
+    }
+
+
+def generate_raw_material_bulk_file(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    raw_material_template_path: str | Path,
+    output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+) -> Dict[str, Any]:
+    """Generate one Raw Material Bulk workbook for all target products."""
+    output_path = Path(output_path)
+
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    exploded, summary = _explode_bom(bom_df)
+
+    write_summary = _write_raw_material_bulk_from_exploded(
+        exploded=exploded,
+        raw_material_template_path=raw_material_template_path,
+        output_path=output_path,
+    )
+    summary.update(write_summary)
+
     summary["used_columns"] = used_columns
     summary["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
     summary["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
@@ -568,6 +594,130 @@ def generate_raw_material_bulk_file(
     summary["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
     return summary
 
+
+def _sanitize_filename_part(value: Any, fallback: str = "Unassigned") -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = fallback
+    text = re.sub(r"[\\/:*?\"<>|]+", "_", text)
+    text = re.sub(r"\s+", "_", text)
+    return text[:80] or fallback
+
+
+def _read_step1_production_site_map(step1_output_path: str | Path) -> tuple[dict[str, str], Dict[str, Any]]:
+    """Read Step1 output and return Material Number -> Production Site mapping.
+
+    Module 2 already accepts a Step1 output file for working-hour roll-up. V14.4
+    reuses that same upload to split Raw Material Bulk files by Production Site.
+    """
+    step1_output_path = Path(step1_output_path)
+    try:
+        df = pd.read_excel(step1_output_path, sheet_name="Plant_Material年度產量", dtype=object)
+    except Exception:
+        df = pd.read_excel(step1_output_path, sheet_name=0, dtype=object)
+
+    material_col = _find_step1_column(df, ["Material Number", "Material", "Product Material Number"])
+    site_col = _find_step1_column(df, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
+
+    work = df.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_production_site"] = work[site_col].apply(_safe_text)
+
+    work = work[(work["_material_key"] != "") & (work["_production_site"] != "")].copy()
+
+    site_map: dict[str, str] = {}
+    duplicate_conflicts: list[str] = []
+    for material, group in work.groupby("_material_key", dropna=False):
+        sites = sorted({str(x).strip() for x in group["_production_site"] if str(x).strip()})
+        if not sites:
+            continue
+        site_map[str(material)] = sites[0]
+        if len(sites) > 1:
+            duplicate_conflicts.append(f"{material}: {', '.join(sites)}")
+
+    return site_map, {
+        "step1_rows": int(len(df)),
+        "step1_mapped_materials": int(len(site_map)),
+        "step1_site_conflicts": duplicate_conflicts,
+    }
+
+
+def generate_raw_material_bulk_files_by_site_zip(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    raw_material_template_path: str | Path,
+    output_dir: str | Path,
+    token: str,
+    step1_output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+) -> Dict[str, Any]:
+    """Generate one Raw Material Bulk workbook per Production Site and ZIP them.
+
+    Split source:
+    - BOM explosion gives Target Product -> Raw Material usage.
+    - Step1 output gives Material Number / Target Product -> Production Site.
+    - Rows whose target product is not found in Step1 are exported under
+      "Unassigned" so they are visible instead of silently dropped.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    exploded, base_summary = _explode_bom(bom_df)
+
+    site_map, step1_summary = _read_step1_production_site_map(step1_output_path)
+
+    work = exploded.copy()
+    if work.empty:
+        work["_production_site"] = ""
+    else:
+        work["_target_key"] = work["target_product"].apply(_normalize_material_key)
+        work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
+        work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+
+    site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
+
+    generated_files: list[dict[str, Any]] = []
+    zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
+    zip_path = output_dir / zip_filename
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for site in site_values:
+            site_df = work[work["_production_site"] == site].copy()
+            site_df = site_df.drop(columns=["_target_key", "_production_site"], errors="ignore")
+            safe_site = _sanitize_filename_part(site)
+            file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
+
+            write_summary = _write_raw_material_bulk_from_exploded(
+                exploded=site_df,
+                raw_material_template_path=raw_material_template_path,
+                output_path=file_path,
+            )
+            zf.write(file_path, arcname=file_path.name)
+            generated_files.append({
+                "production_site": site,
+                "filename": file_path.name,
+                "activity_rows": int(write_summary.get("activity_rows", 0)),
+                "raw_materials": int(write_summary.get("raw_materials", 0)),
+            })
+
+    unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
+
+    summary = dict(base_summary)
+    summary.update({
+        "output_filename": zip_filename,
+        "download_url": f"/download/{zip_filename}",
+        "split_by_production_site": True,
+        "production_site_files": generated_files,
+        "production_site_count": int(len(site_values)),
+        "unassigned_rows": unassigned_rows,
+        "used_columns": used_columns,
+        "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
+        "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
+        "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
+        "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
+    })
+    summary.update(step1_summary)
+    return summary
 
 
 def _explode_bom_structure(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
