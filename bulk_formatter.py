@@ -436,6 +436,42 @@ def _serialize_worksheet_xml(root: ET.Element) -> bytes:
     return text.encode("utf-8")
 
 
+
+def _remove_calc_chain_parts(contents: dict[str, bytes]) -> dict[str, bytes]:
+    """Remove stale calcChain parts after XML cell updates.
+
+    Excel can safely rebuild calculation chains. Keeping a stale calcChain after
+    changing worksheet XML may trigger recovery-log messages even when worksheet
+    XML is valid.
+    """
+    contents = dict(contents)
+    contents.pop("xl/calcChain.xml", None)
+
+    rels_name = "xl/_rels/workbook.xml.rels"
+    if rels_name in contents:
+        try:
+            root = ET.fromstring(contents[rels_name])
+            for rel in list(root):
+                if rel.attrib.get("Type", "").endswith("/calcChain"):
+                    root.remove(rel)
+            contents[rels_name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        except ET.ParseError:
+            pass
+
+    ct_name = "[Content_Types].xml"
+    if ct_name in contents:
+        try:
+            root = ET.fromstring(contents[ct_name])
+            for child in list(root):
+                if child.attrib.get("PartName") == "/xl/calcChain.xml":
+                    root.remove(child)
+            contents[ct_name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+        except ET.ParseError:
+            pass
+
+    return contents
+
+
 def _write_bulk_template_xml(output_path: Path, rows: list[Dict[str, Any]], activity_labor_hours_col: int | None, activity_labor_hours_unit_col: int | None) -> None:
     sheet_paths = _find_sheet_xml_paths(output_path, [ACTIVITY_SHEET_NAME, PRODUCTS_SHEET_NAME])
     activity_xml = sheet_paths[ACTIVITY_SHEET_NAME]
@@ -491,14 +527,23 @@ def _write_bulk_template_xml(output_path: Path, rows: list[Dict[str, Any]], acti
         if activity_labor_hours_unit_col and item.get("labor_hours") is not None:
             _set_inline_string(acell(activity_labor_hours_unit_col), "小時")
 
-        # Preserve the official external workbook reference syntax in Product Sheet formulas.
-        _set_formula(pcell(1), f"'[1]{ACTIVITY_SHEET_NAME}'!A{row_idx}")
+        # Product Sheet column A is formula-driven in the official template.
+        # Do NOT rewrite that formula here: Excel/third-party validators can treat
+        # manually injected external-reference formulas as corrupted and remove them.
+        # If the official template already has an A-column formula for this row, keep it.
+        # Only when the template has no formula for this row do we fall back to a plain
+        # product-name value, which is safer than generating a new external formula.
+        product_name_cell = pcell(1)
+        has_existing_formula = any(child.tag.split("}")[-1] == "f" for child in list(product_name_cell))
+        if not has_existing_formula:
+            _set_inline_string(product_name_cell, item.get("product_name", ""))
         _set_inline_string(pcell(3), item.get("product_description", ""))
         _set_inline_string(pcell(4), "Cradle-to-Gate")
         _set_inline_string(pcell(6), "PC")
 
     contents[activity_xml] = _serialize_worksheet_xml(activity_root)
     contents[products_xml] = _serialize_worksheet_xml(products_root)
+    contents = _remove_calc_chain_parts(contents)
 
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
     with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
