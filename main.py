@@ -54,9 +54,6 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # 3. Strict Site 未命中則排除；非 Strict Site 未命中才寫 WIP
 # =========================================================
 
-NB_CUSTOMERS = {}
-DT_CUSTOMERS = {}
-
 GENERIC_WORDS = {
     "FG", "ASSY", "ASSEMBLY", "MODULE", "MOD", "BL", "BLANK", "NEW", "EURO",
     "NOEURO", "NO", "PCBA", "KB", "KEYBOARD", "TOUCH", "PAD", "CH",
@@ -169,30 +166,29 @@ def normalize_labor_mode(value: object) -> str:
 
 
 RULE_COLUMNS = [
-    "Priority", "Rule Type", "Key", "Product Type", "Customer",
-    "Customer Code Logic", "Is_WIP", "Enabled", "Product Line", "Production Site",
+    "Priority", "Rule Type", "Key", "Product Type", "Product Line",
+    "Production Site", "Is_WIP", "Enabled", "Prefix Length",
 ]
 
 DEFAULT_RULE_MASTER = (
-    "Priority,Rule Type,Key,Product Type,Customer,Customer Code Logic,Is_WIP,Enabled,Product Line,Production Site\n"
-    "1,Material Number Prefix,851-,WIP,,,Y,Y,,\n"
-    "2,Material Number Prefix,852-,WIP,,,Y,Y,,\n"
-    "10,Series Prefix,SN,NB,,NB_3RD_CHAR,N,Y,,\n"
-    "11,Series Prefix,FU,NB,,NB_3RD_CHAR,N,Y,,\n"
-    "12,Series Prefix,SP,TP,,NB_3RD_CHAR,N,Y,,\n"
-    "13,Series Prefix,SM,DT Mouse,,DT_3_4_CHAR,N,Y,,\n"
-    "14,Series Prefix,SA,DT Accessory,,DT_3_4_CHAR,N,Y,,\n"
-    "15,Description Contains,RECEIVER,DT Dongle,,,N,Y,,\n"
-    "16,Series Prefix,SK,DT Keyboard,,DT_3_4_CHAR,N,Y,,\n"
-    "17,Series Prefix,SB,DT Keyboard+Mouse,,DT_3_4_CHAR,N,Y,,\n"
-    "18,Series Prefix,ST,DT Tablet Keyboard,,DT_3_4_CHAR,N,Y,,\n"
-    "19,Description Contains,TOUCH PAD MODULE,TP,,,N,Y,,\n"
-    "20,Description Contains,TOUCHPAD MODULE,TP,,,N,Y,,\n"
-    "21,Series Prefix,SCMC,WIP,,,Y,Y,,\n"
-    "90,Description Contains,ASSY,WIP,,,Y,Y,,\n"
-    "999,Default,*,WIP,,,Y,Y,,\n"
+    "Priority,Rule Type,Key,Product Type,Product Line,Production Site,Is_WIP,Enabled,Prefix Length\n"
+    "1,Material Number Prefix,851-,WIP,,,Y,Y,\n"
+    "2,Material Number Prefix,852-,WIP,,,Y,Y,\n"
+    "10,Series Prefix,SN,NB,,,,Y,\n"
+    "11,Series Prefix,FU,NB,,,,Y,\n"
+    "12,Series Prefix,SP,TP,,,,Y,\n"
+    "13,Series Prefix,SM,DT Mouse,DT,,,Y,\n"
+    "14,Series Prefix,SA,DT Accessory,DT,,,Y,\n"
+    "15,Description Contains,RECEIVER,DT Dongle,DT,,,Y,\n"
+    "16,Series Prefix,SK,DT Keyboard,DT,,,Y,\n"
+    "17,Series Prefix,SB,DT Keyboard+Mouse,DT,,,Y,\n"
+    "18,Series Prefix,ST,DT Tablet Keyboard,DT,,,Y,\n"
+    "19,Description Contains,TOUCH PAD MODULE,TP,,,,Y,\n"
+    "20,Description Contains,TOUCHPAD MODULE,TP,,,,Y,\n"
+    "21,Series Prefix,SCMC,WIP,,,Y,Y,\n"
+    "90,Description Contains,ASSY,WIP,,,Y,Y,\n"
+    "999,Default,*,WIP,,,Y,Y,\n"
 )
-
 
 def normalize_rule_set(value: object) -> str:
     text = str(value or DEFAULT_RULE_SET).strip().upper()
@@ -215,7 +211,7 @@ def ensure_master_files() -> None:
     if not rule_path.exists():
         rule_path.write_text(DEFAULT_RULE_MASTER, encoding="utf-8-sig")
     if not series_path.exists():
-        series_path.write_text("Plant,Product series,產品類型,客戶代碼,客戶名稱\n", encoding="utf-8-sig")
+        series_path.write_text("Plant,Product series,產品類型\n", encoding="utf-8-sig")
 
     for rule_set_key in RULE_SET_MAP:
         rule_dir = get_rule_set_dir(rule_set_key)
@@ -233,7 +229,7 @@ def ensure_master_files() -> None:
             if series_path.exists():
                 bu_series_path.write_bytes(series_path.read_bytes())
             else:
-                bu_series_path.write_text("Plant,Product series,產品類型,客戶代碼,客戶名稱\n", encoding="utf-8-sig")
+                bu_series_path.write_text("Plant,Product series,產品類型\n", encoding="utf-8-sig")
 
 
 ensure_master_files()
@@ -286,13 +282,13 @@ def load_rule_master(rule_set: object = DEFAULT_RULE_SET) -> pd.DataFrame:
 def load_product_series_master(rule_set: object = DEFAULT_RULE_SET) -> pd.DataFrame:
     path = get_rule_set_dir(rule_set) / "product_series_master.csv"
     df = read_csv_flexible(path)
-    for col in ["Plant", "Product series", "產品類型", "客戶代碼", "客戶名稱"]:
+    for col in ["Plant", "Product series", "產品類型"]:
         if col not in df.columns:
             df[col] = ""
         df[col] = df[col].astype(str).str.strip()
     df["Plant"] = df["Plant"].str.replace(r"\.0$", "", regex=True)
     df["Product series"] = df["Product series"].str.upper().str.replace(r"\s+", "", regex=True)
-    return df[["Plant", "Product series", "產品類型", "客戶代碼", "客戶名稱"]].copy()
+    return df[["Plant", "Product series", "產品類型"]].copy()
 
 
 def build_masters(rule_set: object = DEFAULT_RULE_SET) -> dict:
@@ -483,14 +479,6 @@ def parse_product_series(description: object, masters: Optional[dict] = None) ->
     return "", "未找到符合產品系列格式的英數碼"
 
 
-def get_customer(series: str, logic: str, customer_override: str = "") -> tuple[str, str]:
-    """Customer classification is intentionally disabled.
-
-    Customer/business mapping is no longer maintained in Python.
-    Output columns are kept only for backward compatibility.
-    """
-    return "", ""
-
 
 def normalize_rule_type(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip()).lower()
@@ -671,7 +659,7 @@ def get_site_material_prefix_whitelist(masters: dict, current_production_site: o
     of the maintained prefixes before normal classification is allowed to continue.
     This is generic and BU-neutral: each BU/site controls its own whitelist in Rule Master.
 
-    Optional Customer Code Logic values:
+    Optional Prefix Length values:
     - PREFIX2, FIRST2, 2 => compare first 2 characters.
     - PREFIX3, FIRST3, 3 => compare first 3 characters.
     - FULL, EXACT => compare the full Key length.
@@ -703,7 +691,7 @@ def get_site_material_prefix_whitelist(masters: dict, current_production_site: o
         if not key or key in ["*", "DEFAULT"]:
             continue
 
-        logic = str(row.get("Customer Code Logic", "") or "").strip().upper()
+        logic = str(row.get("Prefix Length", "") or "").strip().upper()
         if logic in ["PREFIX3", "FIRST3", "3"]:
             prefix_len = 3
         elif logic in ["PREFIX4", "FIRST4", "4"]:
@@ -750,8 +738,6 @@ def enforce_site_material_prefix_whitelist(material_number: object, masters: dic
         "產品類型": "",
         "Product Line": "",
         "Production Site": str(current_production_site or "").strip(),
-        "客戶代碼": "",
-        "客戶名稱": "",
         "判斷來源": "Rule Master",
         "規則判定結果": "Excluded",
         "命中規則": "Material Number prefix not in Production Site whitelist: "
@@ -782,9 +768,6 @@ def classify_by_rule_master(material_number: object, description: object, series
             continue
 
         product_type = str(row.get("Product Type", "") or "").strip()
-        customer_override = str(row.get("Customer", "") or "").strip()
-        logic = str(row.get("Customer Code Logic", "") or "").strip()
-        code, customer = get_customer(series_u, logic, customer_override)
         is_wip = str(row.get("Is_WIP", "") or "").upper().strip()
         if not is_wip:
             is_wip = "Y" if product_type.upper() == "WIP" else "N"
@@ -807,8 +790,6 @@ def classify_by_rule_master(material_number: object, description: object, series
             "產品類型": product_type,
             "Product Line": product_line,
             "Production Site": production_site,
-            "客戶代碼": code,
-            "客戶名稱": customer,
             "判斷來源": "Rule Master",
             "規則判定結果": "符合" if product_type else "待補產品分類",
             "命中規則": f"{rule_type}={key}",
@@ -831,18 +812,14 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
         return {}
 
     product_type = str(row.get("產品類型", "") or "").strip()
-    code = str(row.get("客戶代碼", "") or "").strip()
-    customer = str(row.get("客戶名稱", "") or "").strip()
     # Rule Master only mode:
-    # Product Series Master may classify Product Type/customer only.
+    # Product Series Master may classify Product Type only.
     # Product Line / Production Site are not inferred here.
     product_line = ""
     return {
         "產品類型": product_type,
         "Product Line": product_line,
         "Production Site": "",
-        "客戶代碼": code,
-        "客戶名稱": customer,
         "判斷來源": "Product Series Master",
         "規則判定結果": "符合" if product_type else "待補產品分類",
         "命中規則": f"Product series={series_u}",
@@ -869,8 +846,6 @@ def classify(material_number: object, description: object, series: str, plant: o
             "產品類型": "",
             "Product Line": "",
             "Production Site": strict_site,
-            "客戶代碼": "",
-            "客戶名稱": "",
             "判斷來源": "Rule Master",
             "規則判定結果": "Excluded",
             "命中規則": f"No rule matched → Excluded by strict Production Site ({strict_site})" + (f" | {plant_rule_hit}" if plant_rule_hit else ""),
@@ -882,8 +857,6 @@ def classify(material_number: object, description: object, series: str, plant: o
         "產品類型": "WIP",
         "Product Line": "",
         "Production Site": "",
-        "客戶代碼": "",
-        "客戶名稱": "",
         "判斷來源": "Default WIP",
         "規則判定結果": "WIP",
         "命中規則": "No rule matched → WIP",
@@ -1214,8 +1187,6 @@ def process_files(
     out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
     out["Product Line"] = classified.apply(lambda x: x.get("Product Line", ""))
     out["Production Site"] = classified.apply(lambda x: x.get("Production Site", ""))
-    out["客戶代碼"] = classified.apply(lambda x: x.get("客戶代碼", ""))
-    out["客戶名稱"] = classified.apply(lambda x: x.get("客戶名稱", ""))
     out["判斷來源"] = classified.apply(lambda x: x.get("判斷來源", ""))
     out["規則判定結果"] = classified.apply(lambda x: x.get("規則判定結果", ""))
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
@@ -1325,7 +1296,7 @@ def process_files(
 
     group_cols = [
         "Year", "Plant", "Production Site", "Product Line", "Material Number", "Material description", "Product series",
-        "產品類型", "客戶代碼", "客戶名稱", "判斷來源", "Is_WIP"
+        "產品類型", "判斷來源", "Is_WIP"
     ]
     annual = (
         out.groupby(group_cols, dropna=False, as_index=False)
@@ -1366,12 +1337,6 @@ def process_files(
         .sort_values(["Plant", "產品類型"])
     )
 
-    customer_summary = (
-        out.groupby(["Year", "Plant", "客戶名稱"], dropna=False, as_index=False)["Delivered quantity"]
-        .sum()
-        .rename(columns={"Delivered quantity": "年度生產量"})
-        .sort_values(["Plant", "客戶名稱"])
-    )
 
     source_summary = (
         out.groupby(["判斷來源", "規則判定結果", "命中規則"], dropna=False, as_index=False)["Delivered quantity"]
@@ -1458,13 +1423,6 @@ def process_files(
         out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual_export.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
         type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
-        customer_summary.to_excel(writer, index=False, sheet_name="Plant_客戶年度產量")
-        source_summary.to_excel(writer, index=False, sheet_name="判斷來源摘要")
-        file_summary.to_excel(writer, index=False, sheet_name="來源檔案摘要")
-        labor_source_summary.to_excel(writer, index=False, sheet_name="工時來源檔案摘要")
-        labor_match_summary.to_excel(writer, index=False, sheet_name="工時對應狀態摘要")
-        labor_match_diagnostics.to_excel(writer, index=False, sheet_name="工時對應診斷")
-        wip.to_excel(writer, index=False, sheet_name="WIP清單")
         for sheet in writer.book.worksheets:
             sheet.freeze_panes = "A2"
             for col in sheet.columns:
@@ -1507,10 +1465,8 @@ def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
             rename_map[c] = "Key"
         elif key in ["product type", "產品分類", "產品類型"]:
             rename_map[c] = "Product Type"
-        elif key in ["customer", "客戶", "客戶名稱"]:
-            rename_map[c] = "Customer"
-        elif key in ["customer code logic", "客戶代碼邏輯"]:
-            rename_map[c] = "Customer Code Logic"
+        elif key in ["prefix length", "prefix_len", "match length", "match_length", "前綴長度", "比對長度"]:
+            rename_map[c] = "Prefix Length"
         elif key in ["is_wip", "is wip", "wip", "半品"]:
             rename_map[c] = "Is_WIP"
         elif key in ["product line", "產品線", "歸屬類型", "production site type"]:
