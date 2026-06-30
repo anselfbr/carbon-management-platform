@@ -36,7 +36,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V14_5_STRICT_SITE_EXCLUDE_FALLBACK_WIP =====")
+print("===== CMP MAIN VERSION: CMP_V14_6_PLANT_AWARE_STRICT_SITE =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -625,20 +625,42 @@ def get_strict_production_sites(masters: dict) -> set[str]:
     return strict_sites
 
 
-def should_exclude_unmatched_by_strict_site(plant: object, masters: dict) -> tuple[bool, str, str]:
+def should_exclude_unmatched_by_strict_site(plant: object, masters: dict, current_production_site: object = "") -> tuple[bool, str, str]:
     """Return whether an unmatched row should be excluded by strict-site rule."""
     strict_sites = get_strict_production_sites(masters)
     if not strict_sites:
         return False, "", ""
 
-    production_site, plant_rule_hit = resolve_plant_production_site_from_rule_master(plant, masters)
+    production_site = str(current_production_site or "").strip()
+    plant_rule_hit = ""
+    if not production_site:
+        production_site, plant_rule_hit = resolve_plant_production_site_from_rule_master(plant, masters)
+
     site_key = _normalize_production_site_key(production_site)
     if site_key and site_key in strict_sites:
         return True, production_site, plant_rule_hit
     return False, production_site, plant_rule_hit
 
 
-def classify_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> dict:
+def _rule_site_is_compatible(rule_site: object, current_production_site: object) -> bool:
+    """Return whether a classification rule may apply to the current plant's Production Site.
+
+    Blank Production Site on a classification rule means the rule is generic and may be used
+    by multiple sites. When a rule has a Production Site value, it may only apply to rows
+    whose Plant has been resolved to the same Production Site. This prevents a site-specific
+    DT/NB/TP rule from assigning the wrong site to another plant while still allowing shared
+    generic product-line rules such as DT Mouse/DT Keyboard.
+    """
+    rule_site_key = _normalize_production_site_key(rule_site)
+    if not rule_site_key:
+        return True
+    current_site_key = _normalize_production_site_key(current_production_site)
+    if not current_site_key:
+        return True
+    return rule_site_key == current_site_key
+
+
+def classify_by_rule_master(material_number: object, description: object, series: str, masters: dict, current_production_site: object = "") -> dict:
     material_number_u = str(material_number or "").upper().strip()
     description_u = str(description or "").upper().strip()
     series_u = str(series or "").upper().strip()
@@ -668,6 +690,8 @@ def classify_by_rule_master(material_number: object, description: object, series
         # Do not auto-fill Product Line from Product Type.
         product_line = str(row.get("Product Line", "") or "").strip()
         production_site = str(row.get("Production Site", "") or "").strip()
+        if not _rule_site_is_compatible(production_site, current_production_site):
+            continue
 
         return {
             "產品類型": product_type,
@@ -716,8 +740,8 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
     }
 
 
-def classify(material_number: object, description: object, series: str, plant: object, masters: dict) -> dict:
-    result = classify_by_rule_master(material_number, description, series, masters)
+def classify(material_number: object, description: object, series: str, plant: object, masters: dict, current_production_site: object = "") -> dict:
+    result = classify_by_rule_master(material_number, description, series, masters, current_production_site)
     if result.get("產品類型"):
         return result
 
@@ -725,7 +749,7 @@ def classify(material_number: object, description: object, series: str, plant: o
     if result.get("產品類型"):
         return result
 
-    exclude, strict_site, plant_rule_hit = should_exclude_unmatched_by_strict_site(plant, masters)
+    exclude, strict_site, plant_rule_hit = should_exclude_unmatched_by_strict_site(plant, masters, current_production_site)
     if exclude:
         return {
             "產品類型": "",
@@ -1090,8 +1114,23 @@ def process_files(
     out["Product series"] = parsed.apply(lambda x: x[0])
     out["解析說明"] = parsed.apply(lambda x: x[1])
 
+    # Resolve Plant -> Production Site before classification.
+    # This makes Rule Master classification plant-aware:
+    # - site-specific rules only apply to the same Production Site
+    # - blank-site rules remain generic and can be used by both 越南海防廠-IPS and 廣州石碣廠-IPS
+    initial_plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
+    out["_Plant Production Site"] = initial_plant_site_rules.apply(lambda x: x[0])
+    out["_Plant Production Site Rule"] = initial_plant_site_rules.apply(lambda x: x[1])
+
     classified = out.apply(
-        lambda r: classify(r["Material Number"], r["Material description"], r["Product series"], r["Plant"], masters),
+        lambda r: classify(
+            r["Material Number"],
+            r["Material description"],
+            r["Product series"],
+            r["Plant"],
+            masters,
+            r.get("_Plant Production Site", ""),
+        ),
         axis=1,
     )
     out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
@@ -1103,6 +1142,15 @@ def process_files(
     out["規則判定結果"] = classified.apply(lambda x: x.get("規則判定結果", ""))
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
     out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
+
+    # If a generic product classification rule is used, keep its Product Type/Product Line
+    # and fill Production Site from Plant Exact/Prefix rules. This prevents shared DT rules
+    # from forcing all outputs to 越南海防廠-IPS when 石碣廠 uses the same product types.
+    blank_site_mask = out["Production Site"].astype(str).str.strip().eq("")
+    plant_site_available_mask = out["_Plant Production Site"].astype(str).str.strip().ne("")
+    fill_site_mask = blank_site_mask & plant_site_available_mask
+    if fill_site_mask.any():
+        out.loc[fill_site_mask, "Production Site"] = out.loc[fill_site_mask, "_Plant Production Site"].to_numpy()
 
     strict_site_excluded_rows = int(classified.apply(lambda x: bool(x.get("_exclude", False))).sum())
     if strict_site_excluded_rows:
@@ -1181,6 +1229,8 @@ def process_files(
             out.loc[plant_site_mask, "判斷來源"].astype(str).str.strip().ne(""),
             "Rule Master"
         )
+
+    out = out.drop(columns=["_Plant Production Site", "_Plant Production Site Rule"], errors="ignore")
 
     group_cols = [
         "Year", "Plant", "Production Site", "Product Line", "Material Number", "Material description", "Product series",
@@ -1779,7 +1829,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V14_5_STRICT_SITE_EXCLUDE_FALLBACK_WIP",
+        "app_version": "CMP_V14_6_PLANT_AWARE_STRICT_SITE",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
