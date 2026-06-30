@@ -36,7 +36,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V14_7_VN_IPS_PREFIX_WHITELIST =====")
+print("===== CMP MAIN VERSION: CMP_V14_8_VN_IPS_90_USE_NORMAL_CLASSIFICATION =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -747,6 +747,12 @@ def classify_by_rule_master(material_number: object, description: object, series
         is_wip = str(row.get("Is_WIP", "") or "").upper().strip()
         if not is_wip:
             is_wip = "Y" if product_type.upper() == "WIP" else "N"
+
+        # Rules with blank Product Type are markers/metadata, not final classification.
+        # Example: 越南海防廠-IPS prefix 90 is only a finished-product whitelist;
+        # it must continue through the normal Rule Master / Product Series Master flow.
+        if not product_type:
+            continue
 
         # Rule Master only mode:
         # Product Line and Production Site must come from rule_master.csv.
@@ -1907,7 +1913,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V14_7_VN_IPS_PREFIX_WHITELIST",
+        "app_version": "CMP_V14_8_VN_IPS_90_USE_NORMAL_CLASSIFICATION",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
