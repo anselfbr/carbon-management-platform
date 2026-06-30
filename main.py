@@ -36,7 +36,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V14_4_BOM_BULK_BY_PRODUCTION_SITE =====")
+print("===== CMP MAIN VERSION: CMP_V14_5_STRICT_SITE_EXCLUDE_FALLBACK_WIP =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -578,6 +578,66 @@ def resolve_plant_production_site_from_rule_master(plant: object, masters: dict)
     return "", ""
 
 
+
+
+def _normalize_production_site_key(value: object) -> str:
+    """Normalize Production Site text for strict-site comparison."""
+    return re.sub(r"\s+", "", str(value or "").strip().upper())
+
+
+def get_strict_production_sites(masters: dict) -> set[str]:
+    """Read strict Production Site rules from rule_master.csv.
+
+    Rule purpose:
+    - Shared sites such as 越南海防廠-IPS may contain products from other BUs.
+    - If no normal classification rule/Product Series Master rule matches, rows from
+      these sites must be excluded instead of falling back to Default WIP.
+
+    Supported Rule Type values:
+    - Production Site Strict Rule Match
+    - Production Site Strict
+    - Strict Production Site
+    - Default Exclude
+    - Exclude If No Match
+
+    Site value can be maintained in either Key or Production Site.
+    """
+    strict_sites: set[str] = set()
+    rules: pd.DataFrame = masters.get("rules", pd.DataFrame())
+    for _, row in rules.iterrows():
+        rt = normalize_rule_type(row.get("Rule Type", ""))
+        if rt not in [
+            "production site strict rule match",
+            "production site strict",
+            "strict production site",
+            "default exclude",
+            "exclude if no match",
+            "廠區嚴格規則",
+            "生產廠區嚴格規則",
+            "未命中排除",
+        ]:
+            continue
+
+        for col in ["Production Site", "Key"]:
+            site = str(row.get(col, "") or "").strip()
+            if site and site not in ["*", "DEFAULT"]:
+                strict_sites.add(_normalize_production_site_key(site))
+    return strict_sites
+
+
+def should_exclude_unmatched_by_strict_site(plant: object, masters: dict) -> tuple[bool, str, str]:
+    """Return whether an unmatched row should be excluded by strict-site rule."""
+    strict_sites = get_strict_production_sites(masters)
+    if not strict_sites:
+        return False, "", ""
+
+    production_site, plant_rule_hit = resolve_plant_production_site_from_rule_master(plant, masters)
+    site_key = _normalize_production_site_key(production_site)
+    if site_key and site_key in strict_sites:
+        return True, production_site, plant_rule_hit
+    return False, production_site, plant_rule_hit
+
+
 def classify_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> dict:
     material_number_u = str(material_number or "").upper().strip()
     description_u = str(description or "").upper().strip()
@@ -665,6 +725,21 @@ def classify(material_number: object, description: object, series: str, plant: o
     if result.get("產品類型"):
         return result
 
+    exclude, strict_site, plant_rule_hit = should_exclude_unmatched_by_strict_site(plant, masters)
+    if exclude:
+        return {
+            "產品類型": "",
+            "Product Line": "",
+            "Production Site": strict_site,
+            "客戶代碼": "",
+            "客戶名稱": "",
+            "判斷來源": "Rule Master",
+            "規則判定結果": "Excluded",
+            "命中規則": f"No rule matched → Excluded by strict Production Site ({strict_site})" + (f" | {plant_rule_hit}" if plant_rule_hit else ""),
+            "Is_WIP": "N",
+            "_exclude": True,
+        }
+
     return {
         "產品類型": "WIP",
         "Product Line": "",
@@ -675,6 +750,7 @@ def classify(material_number: object, description: object, series: str, plant: o
         "規則判定結果": "WIP",
         "命中規則": "No rule matched → WIP",
         "Is_WIP": "Y",
+        "_exclude": False,
     }
 
 
@@ -1028,6 +1104,11 @@ def process_files(
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
     out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
 
+    strict_site_excluded_rows = int(classified.apply(lambda x: bool(x.get("_exclude", False))).sum())
+    if strict_site_excluded_rows:
+        keep_mask = ~classified.apply(lambda x: bool(x.get("_exclude", False)))
+        out = out.loc[keep_mask].copy().reset_index(drop=True)
+
     # Rule Master only mode:
     # Missing Product Line / Production Site may be filled only from explicit rule_master.csv rows.
     missing_line_mask = out["Product Line"].astype(str).str.strip().eq("")
@@ -1262,6 +1343,7 @@ def process_files(
         "total_qty": float(out["Delivered quantity"].sum()),
         "total_hours": float(out["Selected Hours"].sum()) if "Selected Hours" in out.columns else 0.0,
         "wip_rows": int(len(wip)),
+        "strict_site_excluded_rows": int(strict_site_excluded_rows),
         "output_filename": output_path.name,
         "year": year or "ALL",
     }
@@ -1697,7 +1779,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V14_4_BOM_BULK_BY_PRODUCTION_SITE",
+        "app_version": "CMP_V14_5_STRICT_SITE_EXCLUDE_FALLBACK_WIP",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),

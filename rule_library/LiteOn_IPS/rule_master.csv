@@ -26,7 +26,7 @@
 24,Series Prefix,SA,DT Accessory,DT,,,DT_3_4_CHAR,N,Y
 25,Series Prefix,SD,DT Dongle,DT,,,DT_3_4_CHAR,N,Y
 26,Series Prefix,SK,DT Keyboard,DT,,,DT_3_4_CHAR,N,Y
-26,Material Number Prefix,902-,DT Keyboard,DT,,,DT_3_4_CHAR,N,Y
+26,Material Number Prefix,902,DT Keyboard,DT,,,DT_3_4_CHAR,N,Y
 27,Series Prefix,SB,DT Keyboard+Mouse,DT,,,DT_3_4_CHAR,N,Y
 27,Material Number Prefix,904-,DT Keyboard+Mouse,DT,,,DT_3_4_CHAR,N,Y
 28,Series Prefix,ST,DT Tablet Keyboard,DT,,,DT_3_4_CHAR,N,Y
@@ -36,3 +36,4 @@
 32,Series Prefix,SCMC,WIP,TP,常州廠(A9)-IPS,,,Y,Y
 90,Description Contains,ASSY,WIP,,,,,Y,Y
 999,Default,*,WIP,,,,,Y,Y
+998,Production Site Strict Rule Match,越南海防廠-IPS,,,越南海防廠-IPS,,,,Y
