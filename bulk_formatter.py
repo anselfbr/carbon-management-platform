@@ -396,6 +396,39 @@ def _clear_columns_from_row(root: ET.Element, start_row: int, columns: set[int],
                 _clear_cell(cell, keep_formula=col_idx in preserve_formula_cols)
 
 
+
+def _serialize_worksheet_xml(root: ET.Element) -> bytes:
+    """Serialise worksheet XML while keeping Excel-required namespace declarations.
+
+    ElementTree only writes namespace declarations that are used in element or
+    attribute names. Official Microsoft templates may keep prefixes such as r,
+    xr2 and xr3 only inside mc:Ignorable. If those declarations disappear, Excel
+    reports sheet XML corruption at line 2.
+    """
+    data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    text = data.decode("utf-8")
+    root_end = text.find(">")
+    if root_end == -1:
+        return data
+    root_tag = text[:root_end]
+    required = {
+        "r": _XLSX_REL_NS,
+        "x14ac": _XLSX_X14AC_NS,
+        "xr": _XLSX_XR_NS,
+        "xr2": _XLSX_XR2_NS,
+        "xr3": _XLSX_XR3_NS,
+    }
+    additions = []
+    for prefix, uri in required.items():
+        if f"xmlns:{prefix}=" not in root_tag:
+            additions.append(f' xmlns:{prefix}="{uri}"')
+    if additions:
+        text = text[:root_end] + "".join(additions) + text[root_end:]
+    # Match Excel's usual XML declaration format closely.
+    text = text.replace("<?xml version='1.0' encoding='utf-8'?>", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', 1)
+    return text.encode("utf-8")
+
+
 def _write_bulk_template_xml(output_path: Path, rows: list[Dict[str, Any]], activity_labor_hours_col: int | None, activity_labor_hours_unit_col: int | None) -> None:
     sheet_paths = _find_sheet_xml_paths(output_path, [ACTIVITY_SHEET_NAME, PRODUCTS_SHEET_NAME])
     activity_xml = sheet_paths[ACTIVITY_SHEET_NAME]
@@ -457,8 +490,8 @@ def _write_bulk_template_xml(output_path: Path, rows: list[Dict[str, Any]], acti
         _set_inline_string(pcell(4), "Cradle-to-Gate")
         _set_inline_string(pcell(6), "PC")
 
-    contents[activity_xml] = ET.tostring(activity_root, encoding="utf-8", xml_declaration=True)
-    contents[products_xml] = ET.tostring(products_root, encoding="utf-8", xml_declaration=True)
+    contents[activity_xml] = _serialize_worksheet_xml(activity_root)
+    contents[products_xml] = _serialize_worksheet_xml(products_root)
 
     tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
     with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
