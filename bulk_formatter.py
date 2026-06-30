@@ -232,8 +232,22 @@ def _build_semi_hour_per_product(step1_df: pd.DataFrame, material_col: str, qty_
 _XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _XLSX_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 _PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_XLSX_MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+_XLSX_X14AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
+_XLSX_XR_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
+_XLSX_XR2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2"
+_XLSX_XR3_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3"
+
+# Keep Office namespace prefixes stable when serialising worksheet XML.
+# If ElementTree rewrites these prefixes to ns1/ns2 while mc:Ignorable still
+# contains x14ac/xr/xr2/xr3, Excel reports worksheet XML errors.
 ET.register_namespace("", _XLSX_MAIN_NS)
 ET.register_namespace("r", _XLSX_REL_NS)
+ET.register_namespace("mc", _XLSX_MC_NS)
+ET.register_namespace("x14ac", _XLSX_X14AC_NS)
+ET.register_namespace("xr", _XLSX_XR_NS)
+ET.register_namespace("xr2", _XLSX_XR2_NS)
+ET.register_namespace("xr3", _XLSX_XR3_NS)
 
 
 def _col_to_letter(col_idx: int) -> str:
