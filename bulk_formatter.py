@@ -400,17 +400,23 @@ def _clear_columns_from_row(root: ET.Element, start_row: int, columns: set[int],
 def _serialize_worksheet_xml(root: ET.Element) -> bytes:
     """Serialise worksheet XML while keeping Excel-required namespace declarations.
 
-    ElementTree only writes namespace declarations that are used in element or
-    attribute names. Official Microsoft templates may keep prefixes such as r,
-    xr2 and xr3 only inside mc:Ignorable. If those declarations disappear, Excel
-    reports sheet XML corruption at line 2.
+    Important bug fix:
+    ElementTree writes an XML declaration before the worksheet root. We must add
+    missing namespace declarations to the <worksheet ...> start tag, not to the
+    XML declaration. Adding xmlns:* before the declaration's closing ?> corrupts
+    sheet1.xml / sheet2.xml and Excel reports: line 1, column 38, expected '>'.
     """
     data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
     text = data.decode("utf-8")
-    root_end = text.find(">")
-    if root_end == -1:
+
+    worksheet_start = text.find("<worksheet")
+    if worksheet_start == -1:
         return data
-    root_tag = text[:root_end]
+    worksheet_end = text.find(">", worksheet_start)
+    if worksheet_end == -1:
+        return data
+
+    worksheet_tag = text[worksheet_start:worksheet_end]
     required = {
         "r": _XLSX_REL_NS,
         "x14ac": _XLSX_X14AC_NS,
@@ -420,10 +426,11 @@ def _serialize_worksheet_xml(root: ET.Element) -> bytes:
     }
     additions = []
     for prefix, uri in required.items():
-        if f"xmlns:{prefix}=" not in root_tag:
+        if f"xmlns:{prefix}=" not in worksheet_tag:
             additions.append(f' xmlns:{prefix}="{uri}"')
     if additions:
-        text = text[:root_end] + "".join(additions) + text[root_end:]
+        text = text[:worksheet_end] + "".join(additions) + text[worksheet_end:]
+
     # Match Excel's usual XML declaration format closely.
     text = text.replace("<?xml version='1.0' encoding='utf-8'?>", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', 1)
     return text.encode("utf-8")
