@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V14_9_EXCLUDE_ZERO_USAGE_RAW_MATERIAL"
+BOM_FORMATTER_VERSION = "CMP_V14_10_EXCLUDE_ZERO_USAGE_AND_ZERO_TOTAL_HOURS"
 
 
 DEFAULT_MAPPING = {
@@ -486,6 +486,113 @@ def _exclude_zero_usage_rows(exploded: pd.DataFrame) -> tuple[pd.DataFrame, int]
     return work, excluded_rows
 
 
+
+def _exclude_zero_total_working_hour_target_rows(
+    exploded: pd.DataFrame,
+    total_hour_by_material: dict[str, float] | None,
+) -> tuple[pd.DataFrame, int]:
+    """Exclude raw material rows whose target product has zero total working hours.
+
+    Rule: if a Target Product is found in the Step1/BOM working-hour roll-up map
+    and its Total Annual Working Hour equals 0, all raw material activity rows
+    under that Target Product are excluded from raw_material_activity_data_bulk.
+    Products not found in the map are kept to avoid silently dropping rows when
+    Step1 data is incomplete.
+    """
+    if exploded is None or exploded.empty or "target_product" not in exploded.columns:
+        return exploded.copy() if isinstance(exploded, pd.DataFrame) else pd.DataFrame(), 0
+    if not total_hour_by_material:
+        return exploded.copy(), 0
+
+    work = exploded.copy()
+    target_keys = work["target_product"].apply(_normalize_material_key)
+    known_zero_targets = {
+        str(k).strip().upper()
+        for k, v in total_hour_by_material.items()
+        if str(k or "").strip() and float(v or 0.0) == 0.0
+    }
+    drop_mask = target_keys.isin(known_zero_targets)
+    excluded_rows = int(drop_mask.sum())
+    if excluded_rows:
+        work = work.loc[~drop_mask].copy().reset_index(drop=True)
+    return work, excluded_rows
+
+
+def _calculate_total_working_hour_by_target(
+    step1_output_path: str | Path,
+    bom_df: pd.DataFrame,
+) -> tuple[dict[str, float], Dict[str, Any]]:
+    """Calculate Target Product total annual working hours including semi-finished roll-up.
+
+    Total Annual Working Hour = direct annual working hour of the target product
+    + annual working-hour contribution from semi-finished components in the BOM.
+    This mirrors generate_working_hour_rollup_file but returns a lightweight map
+    for filtering Raw Material Bulk rows.
+    """
+    step1_output_path = Path(step1_output_path)
+    try:
+        step1_df = pd.read_excel(step1_output_path, sheet_name=STEP1_SOURCE_SHEET_NAME, dtype=object)
+    except Exception:
+        step1_df = pd.read_excel(step1_output_path, sheet_name=0, dtype=object)
+
+    material_col = _find_step1_column(step1_df, ["Material Number", "Material", "Product Material Number"])
+    qty_col = _find_step1_optional_column(step1_df, ["年度生產量", "Annual Quantity", "Delivered quantity"])
+    hour_col = _find_step1_optional_column(step1_df, ["年度總工時", "Total working hours", "Selected Hours", "Total Hours", "Working Hours"])
+    if not hour_col:
+        return {}, {
+            "working_hour_filter_applied": False,
+            "working_hour_filter_reason": "Step1 Output 找不到年度總工時欄位，未套用 Total Annual Working Hour = 0 過濾。",
+            "zero_total_working_hour_targets": 0,
+        }
+
+    work = step1_df.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_annual_qty"] = work[qty_col].apply(_safe_number) if qty_col else 0.0
+    work["_direct_hour"] = work[hour_col].apply(_safe_number)
+    work = work[work["_material_key"] != ""].copy()
+
+    material_totals = work.groupby(["_material_key"], dropna=False, as_index=False).agg({"_annual_qty": "sum", "_direct_hour": "sum"})
+    qty_by_material: dict[str, float] = {}
+    direct_by_material: dict[str, float] = {}
+    hour_per_pc_by_material: dict[str, float] = {}
+    for _, r in material_totals.iterrows():
+        material = str(r["_material_key"] or "").strip().upper()
+        qty = float(r["_annual_qty"] or 0.0)
+        hours = float(r["_direct_hour"] or 0.0)
+        qty_by_material[material] = qty
+        direct_by_material[material] = hours
+        hour_per_pc_by_material[material] = hours / qty if qty else 0.0
+
+    structure, _structure_summary = _explode_bom_structure(bom_df)
+    semi_by_target: dict[str, float] = {}
+    if not structure.empty:
+        b = structure.copy()
+        b["_target_key"] = b["Target Product"].apply(_normalize_material_key)
+        b["_component_key"] = b["Component"].apply(_normalize_material_key)
+        b["_accumulated_qty"] = b["Accumulated Quantity"].apply(_safe_number)
+        b = b[b["Is Semi-finished"].astype(str).str.strip().str.upper().isin(["Y", "YES", "TRUE", "1"])].copy()
+        for _, edge in b.iterrows():
+            target = str(edge["_target_key"] or "").strip().upper()
+            semi = str(edge["_component_key"] or "").strip().upper()
+            target_qty = float(qty_by_material.get(target, 0.0) or 0.0)
+            acc_qty = float(edge["_accumulated_qty"] or 0.0)
+            semi_hr_pc = float(hour_per_pc_by_material.get(semi, 0.0) or 0.0)
+            contribution = target_qty * acc_qty * semi_hr_pc
+            if contribution:
+                semi_by_target[target] = semi_by_target.get(target, 0.0) + contribution
+
+    total_by_target: dict[str, float] = {}
+    for material in sorted(set(direct_by_material) | set(semi_by_target)):
+        total_by_target[material] = float(direct_by_material.get(material, 0.0) or 0.0) + float(semi_by_target.get(material, 0.0) or 0.0)
+
+    zero_targets = [m for m, h in total_by_target.items() if float(h or 0.0) == 0.0]
+    return total_by_target, {
+        "working_hour_filter_applied": True,
+        "working_hour_filter_rule": "Exclude all Raw Material Activity rows when Target Product Total Annual Working Hour, including semi-finished roll-up, equals 0.",
+        "working_hour_mapped_targets": int(len(total_by_target)),
+        "zero_total_working_hour_targets": int(len(zero_targets)),
+    }
+
 def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     parent_set = set(df["_parent"].dropna().astype(str))
     component_set = set(df["_component"].dropna().astype(str))
@@ -798,9 +905,21 @@ def generate_raw_material_bulk_files_by_site_zip(
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+
+    total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(
+        step1_output_path=step1_output_path,
+        bom_df=bom_df,
+    )
+    exploded, zero_total_working_hour_rows_excluded = _exclude_zero_total_working_hour_target_rows(
+        exploded=exploded,
+        total_hour_by_material=total_hour_by_target,
+    )
+
     base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
     base_summary["activity_rows"] = int(len(exploded))
     base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+    base_summary.update(working_hour_summary)
 
     site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
 
