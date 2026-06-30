@@ -36,7 +36,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V14_8_VN_IPS_90_USE_NORMAL_CLASSIFICATION =====")
+print("===== CMP MAIN VERSION: CMP_V15_0_RULE_MASTER_DRIVEN_NO_CUSTOMER =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -53,23 +53,6 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # 2. 若 rule_master 未命中，再查 product_series_master.csv
 # 3. Strict Site 未命中則排除；非 Strict Site 未命中才寫 WIP
 # =========================================================
-
-NB_CUSTOMERS = {
-    "1": "HP", "2": "Dell", "3": "Lenovo", "4": "Others", "5": "ASUS",
-    "6": "Microsoft", "7": "Acer", "8": "LG", "9": "Focal/歌泰",
-    "0": "Incubation", "A": "Framework", "M": "MSI",
-}
-
-DT_CUSTOMERS = {
-    "00": "Google", "12": "Cooler Master", "20": "Old Pickup", "21": "HP",
-    "27": "Goldtouch", "33": "Microsoft", "34": "TUL", "36": "TG",
-    "38": "Logitech", "39": "Logitech", "54": "Fujitsu", "55": "Japan Others",
-    "60": "Roccat", "62": "Corsair", "65": "SteelSeries", "66": "Distribution",
-    "67": "Razer", "68": "LG", "69": "HyperX", "70": "Samsung",
-    "71": "Glorious", "72": "Onward", "80": "UI", "81": "Dell",
-    "83": "Massdrop", "86": "Nytec", "88": "Lenovo", "89": "Taiwan Others",
-    "90": "LITEON", "93": "ASUS", "95": "Cherry", "96": "Acer", "98": "Acer Gadget",
-}
 
 GENERIC_WORDS = {
     "FG", "ASSY", "ASSEMBLY", "MODULE", "MOD", "BL", "BLANK", "NEW", "EURO",
@@ -112,8 +95,6 @@ LABOR_ALIASES = {
 }
 
 VALID_LABOR_MODES = {"labor_hr", "foh", "both"}
-
-FINISHED_PRODUCT_PREFIXES = ["SG-"]
 
 def normalize_order_key(value: object) -> str:
     """Normalize SAP order number for matching quantity orders with working-hour orders.
@@ -189,22 +170,6 @@ RULE_COLUMNS = [
 
 DEFAULT_RULE_MASTER = (
     "Priority,Rule Type,Key,Product Type,Customer,Customer Code Logic,Is_WIP,Enabled,Product Line,Production Site\n"
-    "1,Material Number Prefix,851-,WIP,,,Y,Y,,\n"
-    "2,Material Number Prefix,852-,WIP,,,Y,Y,,\n"
-    "10,Series Prefix,SN,NB,,NB_3RD_CHAR,N,Y,,\n"
-    "11,Series Prefix,FU,NB,,NB_3RD_CHAR,N,Y,,\n"
-    "12,Series Prefix,SP,TP,,NB_3RD_CHAR,N,Y,,\n"
-    "13,Series Prefix,SM,DT Mouse,,DT_3_4_CHAR,N,Y,,\n"
-    "14,Series Prefix,SA,DT Accessory,,DT_3_4_CHAR,N,Y,,\n"
-    "15,Description Contains,RECEIVER,DT Dongle,,,N,Y,,\n"
-    "16,Series Prefix,SK,DT Keyboard,,DT_3_4_CHAR,N,Y,,\n"
-    "17,Series Prefix,SB,DT Keyboard+Mouse,,DT_3_4_CHAR,N,Y,,\n"
-    "18,Series Prefix,ST,DT Tablet Keyboard,,DT_3_4_CHAR,N,Y,,\n"
-    "19,Description Contains,TOUCH PAD MODULE,TP,,,N,Y,,\n"
-    "20,Description Contains,TOUCHPAD MODULE,TP,,,N,Y,,\n"
-    "21,Series Prefix,SCMC,WIP,,,Y,Y,,\n"
-    "90,Description Contains,ASSY,WIP,,,Y,Y,,\n"
-    "999,Default,*,WIP,,,Y,Y,,\n"
 )
 
 
@@ -355,10 +320,6 @@ def get_series_prefixes(masters: Optional[dict] = None) -> list[str]:
     except Exception:
         prefixes = []
 
-    # fallback：避免 rule_master 空白時完全抓不到
-    if not prefixes:
-        prefixes = ["SN", "SP", "SM", "SK", "SB", "ST", "SA", "FU"]
-
     return sorted(set(prefixes), key=len, reverse=True)
 
 
@@ -463,25 +424,27 @@ def parse_product_series(description: object, masters: Optional[dict] = None) ->
 
     raw_text = str(description).upper()
     prefixes = get_series_prefixes(masters)
-    prefix_pattern = "|".join(prefixes)
-    pattern = re.compile(rf"({prefix_pattern})[A-Z0-9]{{3,40}}")
 
-    # 第一階段：保留標點符號作為重要邊界，先分段判斷。
-    # 這可以避免 SN5372BL,110K 被抓成 SN5372BL110K。
     segments = [seg for seg in re.split(r"[,;_]+", raw_text) if str(seg).strip()]
-    for idx, segment in enumerate(segments, start=1):
-        candidate = _series_candidate_from_text(segment, pattern)
+    if prefixes:
+        prefix_pattern = "|".join(prefixes)
+        pattern = re.compile(rf"({prefix_pattern})[A-Z0-9]{{3,40}}")
+
+        # 第一階段：保留標點符號作為重要邊界，先分段判斷。
+        segments = [seg for seg in re.split(r"[,;_]+", raw_text) if str(seg).strip()]
+        for idx, segment in enumerate(segments, start=1):
+            candidate = _series_candidate_from_text(segment, pattern)
+            if candidate:
+                if idx == 1:
+                    return candidate, "標點切段解析產品系列"
+                return candidate, f"標點切段解析產品系列：取第{idx}段"
+
+        # 第二階段：若資料完全沒有標點，改用整段搜尋。
+        candidate = _series_candidate_from_text(raw_text, pattern)
         if candidate:
-            if idx == 1:
-                return candidate, "標點切段解析產品系列"
-            return candidate, f"標點切段解析產品系列：取第{idx}段"
+            return candidate, "全文 Regex Prefix Search 解析產品系列"
 
-    # 第二階段：若資料完全沒有標點，改用整段搜尋。
-    candidate = _series_candidate_from_text(raw_text, pattern)
-    if candidate:
-        return candidate, "全文 Regex Prefix Search 解析產品系列"
-
-    # fallback：若 rule_master 沒有涵蓋 prefix，仍保留舊邏輯，但同樣套用截斷
+    # fallback：若 rule_master 沒有 Series Prefix，使用通用英數碼格式解析
     parts = raw_text.replace("_", ",").replace(";", ",").split(",")
     for idx, part in enumerate(parts, start=1):
         compact = re.sub(r"\s+", "", part)
@@ -498,16 +461,12 @@ def parse_product_series(description: object, masters: Optional[dict] = None) ->
 
 
 def get_customer(series: str, logic: str, customer_override: str = "") -> tuple[str, str]:
-    if customer_override:
-        return "", customer_override
-    series = str(series or "").upper()
-    logic = str(logic or "").upper().strip()
-    if logic == "NB_3RD_CHAR" and len(series) >= 3:
-        code = series[2]
-        return code, NB_CUSTOMERS.get(code, "")
-    if logic == "DT_3_4_CHAR" and len(series) >= 4:
-        code = series[2:4]
-        return code, DT_CUSTOMERS.get(code, "")
+    """Customer classification is intentionally disabled.
+
+    Customer/business mapping is no longer maintained in Python.
+    The platform keeps customer output columns for backward compatibility,
+    but values are always blank.
+    """
     return "", ""
 
 
@@ -589,9 +548,9 @@ def get_strict_production_sites(masters: dict) -> set[str]:
     """Read strict Production Site rules from rule_master.csv.
 
     Rule purpose:
-    - Shared sites such as 越南海防廠-IPS may contain products from other BUs.
+    - Shared production sites may contain products from other BUs.
     - If no normal classification rule/Product Series Master rule matches, rows from
-      these sites must be excluded instead of falling back to Default WIP.
+      these sites can be excluded by Rule Master instead of using Default.
 
     Supported Rule Type values:
     - Production Site Strict Rule Match
@@ -661,66 +620,61 @@ def _rule_site_is_compatible(rule_site: object, current_production_site: object)
 
 
 
-def _is_vietnam_haiphong_ips_site(production_site: object) -> bool:
-    """Return True for 越南海防廠-IPS after normalized comparison."""
-    return _normalize_production_site_key(production_site) == _normalize_production_site_key("越南海防廠-IPS")
 
+def classify_default_by_rule_master(plant: object, masters: dict, current_production_site: object = "") -> dict:
+    """Apply Default / Default Exclude rules from rule_master.csv.
 
-def _material_number_prefix2(value: object) -> str:
-    """Return the first two alphanumeric characters of a material number."""
-    text = str(value or "").upper().strip()
-    text = re.sub(r"\s+", "", text)
-    return text[:2]
-
-
-def classify_vietnam_haiphong_ips_by_material_prefix(material_number: object, current_production_site: object = "") -> dict:
-    """Vietnam Haiphong IPS special whitelist.
-
-    For 越南海防廠-IPS:
-    - Material Number first two characters 40/41/50/51 are WIP.
-      Product Line and Product Series must remain blank.
-    - Material Number first two characters 90 is a finished-product whitelist and
-      must continue to normal Product Series/Product Line classification.
-    - Other prefixes are excluded to avoid importing other BU finished products
-      from the shared site.
+    Default rules are evaluated after Rule Master classification, Product Series Master,
+    and Strict Site exclusion. This replaces the old hardcoded fallback.
     """
-    if not _is_vietnam_haiphong_ips_site(current_production_site):
-        return {}
+    rules: pd.DataFrame = masters["rules"]
+    plant_u = str(plant or "").upper().strip().replace(".0", "")
+    for _, row in rules.iterrows():
+        rule_type = str(row.get("Rule Type", "") or "").strip()
+        rt = normalize_rule_type(rule_type)
+        if rt not in ["default", "預設", "default exclude", "exclude if no match", "未命中排除"]:
+            continue
 
-    prefix2 = _material_number_prefix2(material_number)
-    if prefix2 in {"40", "41", "50", "51"}:
-        return {
-            "產品類型": "WIP",
-            "Product Line": "",
-            "Production Site": str(current_production_site or "").strip(),
-            "客戶代碼": "",
-            "客戶名稱": "",
-            "判斷來源": "Rule Master",
-            "規則判定結果": "WIP",
-            "命中規則": f"越南海防廠-IPS Material Number Prefix2={prefix2} → WIP",
-            "Is_WIP": "Y",
-            "_exclude": False,
-            "_vn_wip_prefix": True,
-        }
+        rule_site = str(row.get("Production Site", "") or "").strip()
+        if not _rule_site_is_compatible(rule_site, current_production_site):
+            continue
 
-    if prefix2 == "90":
-        return {
-            "_vn_finished_prefix_allowed": True,
-        }
+        product_type = str(row.get("Product Type", "") or "").strip()
+        product_line = str(row.get("Product Line", "") or "").strip()
+        production_site = str(row.get("Production Site", "") or "").strip()
+        is_wip = str(row.get("Is_WIP", "") or "").strip().upper()
+        if not is_wip:
+            is_wip = "Y" if product_type.upper() == "WIP" else "N"
 
-    return {
-        "產品類型": "",
-        "Product Line": "",
-        "Production Site": str(current_production_site or "").strip(),
-        "客戶代碼": "",
-        "客戶名稱": "",
-        "判斷來源": "Rule Master",
-        "規則判定結果": "Excluded",
-        "命中規則": f"越南海防廠-IPS Material Number Prefix2={prefix2 or '(blank)'} not in whitelist → Excluded",
-        "Is_WIP": "N",
-        "_exclude": True,
-        "_vn_prefix_excluded": True,
-    }
+        if rt in ["default exclude", "exclude if no match", "未命中排除"] or product_type.upper() == "EXCLUDE":
+            return {
+                "產品類型": "",
+                "Product Line": "",
+                "Production Site": production_site or str(current_production_site or "").strip(),
+                "客戶代碼": "",
+                "客戶名稱": "",
+                "判斷來源": "Rule Master",
+                "規則判定結果": "Excluded",
+                "命中規則": f"{rule_type}=*",
+                "Is_WIP": "N",
+                "_exclude": True,
+            }
+
+        if product_type:
+            return {
+                "產品類型": product_type,
+                "Product Line": product_line,
+                "Production Site": production_site,
+                "客戶代碼": "",
+                "客戶名稱": "",
+                "判斷來源": "Rule Master",
+                "規則判定結果": "符合",
+                "命中規則": f"{rule_type}=*",
+                "Is_WIP": "Y" if is_wip in ["Y", "YES", "TRUE", "1"] else "N",
+                "_exclude": False,
+            }
+
+    return {}
 
 
 def classify_by_rule_master(material_number: object, description: object, series: str, masters: dict, current_production_site: object = "") -> dict:
@@ -733,7 +687,7 @@ def classify_by_rule_master(material_number: object, description: object, series
         rule_type = str(row.get("Rule Type", "") or "").strip()
         key = str(row.get("Key", "") or "").strip()
 
-        # Default 規則只作為文件與下載範本保留；實際 Default WIP 放在 Product Series Master 之後。
+        # Default 規則只作為文件與下載範本保留；實際 Default 放在 Product Series Master 之後。
         if normalize_rule_type(rule_type) in ["default", "預設"]:
             continue
 
@@ -741,16 +695,14 @@ def classify_by_rule_master(material_number: object, description: object, series
             continue
 
         product_type = str(row.get("Product Type", "") or "").strip()
-        customer_override = str(row.get("Customer", "") or "").strip()
-        logic = str(row.get("Customer Code Logic", "") or "").strip()
-        code, customer = get_customer(series_u, logic, customer_override)
+        code, customer = "", ""
         is_wip = str(row.get("Is_WIP", "") or "").upper().strip()
         if not is_wip:
             is_wip = "Y" if product_type.upper() == "WIP" else "N"
 
         # Rules with blank Product Type are markers/metadata, not final classification.
-        # Example: 越南海防廠-IPS prefix 90 is only a finished-product whitelist;
-        # it must continue through the normal Rule Master / Product Series Master flow.
+        # Blank Product Type rows can be used as marker/metadata rows;
+        # they must continue through the normal Rule Master / Product Series Master flow.
         if not product_type:
             continue
 
@@ -790,8 +742,8 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
         return {}
 
     product_type = str(row.get("產品類型", "") or "").strip()
-    code = str(row.get("客戶代碼", "") or "").strip()
-    customer = str(row.get("客戶名稱", "") or "").strip()
+    code = ""
+    customer = ""
     # Rule Master only mode:
     # Product Series Master may classify Product Type/customer only.
     # Product Line / Production Site are not inferred here.
@@ -810,10 +762,6 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
 
 
 def classify(material_number: object, description: object, series: str, plant: object, masters: dict, current_production_site: object = "") -> dict:
-    vn_prefix_result = classify_vietnam_haiphong_ips_by_material_prefix(material_number, current_production_site)
-    if vn_prefix_result.get("_exclude") or vn_prefix_result.get("產品類型"):
-        return vn_prefix_result
-
     result = classify_by_rule_master(material_number, description, series, masters, current_production_site)
     if result.get("產品類型"):
         return result
@@ -837,16 +785,20 @@ def classify(material_number: object, description: object, series: str, plant: o
             "_exclude": True,
         }
 
+    result = classify_default_by_rule_master(plant, masters, current_production_site)
+    if result.get("產品類型") or result.get("_exclude"):
+        return result
+
     return {
-        "產品類型": "WIP",
+        "產品類型": "",
         "Product Line": "",
-        "Production Site": "",
+        "Production Site": str(current_production_site or "").strip(),
         "客戶代碼": "",
         "客戶名稱": "",
-        "判斷來源": "Default WIP",
-        "規則判定結果": "WIP",
-        "命中規則": "No rule matched → WIP",
-        "Is_WIP": "Y",
+        "判斷來源": "No Default Rule",
+        "規則判定結果": "Unclassified",
+        "命中規則": "No rule matched and no Default rule configured",
+        "Is_WIP": "N",
         "_exclude": False,
     }
 
@@ -855,56 +807,19 @@ def classify(material_number: object, description: object, series: str, plant: o
 
 
 def is_finished_product_whitelist(material_number: object) -> bool:
-    """Finished product whitelist.
-
-    Prefixes such as SG- mean:
-    - This is a finished product number.
-    - Do not let ASSY / SFG / MODULE / PCBA override it to WIP.
-    - Product Type / Product Line / Production Site must still be decided by Product Series rules.
-    """
-    material_number_u = str(material_number or "").upper().strip()
-    return any(material_number_u.startswith(prefix) for prefix in FINISHED_PRODUCT_PREFIXES)
+    """Deprecated no-op. Finished product handling is controlled by rule_master.csv."""
+    return False
 
 
 def is_wip_by_rule_master(material_number: object, description: object, series: str, masters: dict) -> bool:
-    """Detect WIP independently from Product Line / Production Site attribution.
-
-    Product Line may be inferred from SN/FU/SP/SCMC rules, but Product Type must remain WIP
-    when any WIP rule matches, e.g. 850-/851-/852-/H50-, SFG, ASSY, SCMC.
-    Default WIP is excluded here because it is only a fallback when no rule matches.
-    """
-    material_number_u = str(material_number or "").upper().strip()
-    if is_finished_product_whitelist(material_number_u):
-        return False
-    description_u = str(description or "").upper().strip()
-    series_u = str(series or "").upper().strip()
-
-    rules: pd.DataFrame = masters["rules"]
-    for _, row in rules.iterrows():
-        rule_type = str(row.get("Rule Type", "") or "").strip()
-        key = str(row.get("Key", "") or "").strip()
-
-        if normalize_rule_type(rule_type) in ["default", "預設"]:
-            continue
-
-        product_type = str(row.get("Product Type", "") or "").strip().upper()
-        is_wip = str(row.get("Is_WIP", "") or "").strip().upper()
-
-        if product_type != "WIP" and is_wip not in ["Y", "YES", "TRUE", "1"]:
-            continue
-
-        if rule_matches(rule_type, key, material_number_u, description_u, series_u):
-            return True
-
+    """Deprecated no-op. Rule Master priority is now the single source of truth."""
     return False
-
 
 
 def infer_product_type_line_site_from_series_rules(description: object, series: str, masters: dict) -> tuple[str, str, str]:
     """Infer finished-product classification from rule_master.csv only.
 
-    SG- only means non-WIP. Product Type / Product Line / Production Site
-    must still come from matched rule_master.csv fields.
+    Product Type / Product Line / Production Site come from matched rule_master.csv fields.
     No fallback from Product Type to Product Line, and no fallback from Product Line to Production Site.
     """
     description_u = str(description or "").upper().strip()
@@ -1190,7 +1105,7 @@ def process_files(
     # Resolve Plant -> Production Site before classification.
     # This makes Rule Master classification plant-aware:
     # - site-specific rules only apply to the same Production Site
-    # - blank-site rules remain generic and can be used by both 越南海防廠-IPS and 廣州石碣廠-IPS
+    # - blank-site rules remain generic and can be used by multiple production sites
     initial_plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
     out["_Plant Production Site"] = initial_plant_site_rules.apply(lambda x: x[0])
     out["_Plant Production Site Rule"] = initial_plant_site_rules.apply(lambda x: x[1])
@@ -1215,19 +1130,9 @@ def process_files(
     out["規則判定結果"] = classified.apply(lambda x: x.get("規則判定結果", ""))
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
     out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
-    out["_VN WIP Prefix"] = classified.apply(lambda x: bool(x.get("_vn_wip_prefix", False)))
-
-    # Vietnam Haiphong IPS rule:
-    # 40/41/50/51 are WIP and must not carry Product Line or Product Series.
-    vn_wip_prefix_mask = out["_VN WIP Prefix"].astype(bool)
-    if vn_wip_prefix_mask.any():
-        out.loc[vn_wip_prefix_mask, "Product series"] = ""
-        out.loc[vn_wip_prefix_mask, "Product Line"] = ""
-        out.loc[vn_wip_prefix_mask, "解析說明"] = "越南海防廠-IPS：料號前兩碼為40/41/50/51，判定WIP，不解析Product Series"
-
     # If a generic product classification rule is used, keep its Product Type/Product Line
     # and fill Production Site from Plant Exact/Prefix rules. This prevents shared DT rules
-    # from forcing all outputs to 越南海防廠-IPS when 石碣廠 uses the same product types.
+    # from forcing all outputs to one production site when another site uses the same product types.
     blank_site_mask = out["Production Site"].astype(str).str.strip().eq("")
     plant_site_available_mask = out["_Plant Production Site"].astype(str).str.strip().ne("")
     fill_site_mask = blank_site_mask & plant_site_available_mask
@@ -1242,8 +1147,6 @@ def process_files(
     # Rule Master only mode:
     # Missing Product Line / Production Site may be filled only from explicit rule_master.csv rows.
     missing_line_mask = out["Product Line"].astype(str).str.strip().eq("")
-    if "_VN WIP Prefix" in out.columns:
-        missing_line_mask = missing_line_mask & ~out["_VN WIP Prefix"].astype(bool)
     if missing_line_mask.any():
         inferred = out.loc[missing_line_mask].apply(
             lambda r: infer_product_line_site_from_rules(r["Material description"], r["Product series"], masters),
@@ -1257,9 +1160,7 @@ def process_files(
         axis=1,
     )
 
-    # Final safety guard:
-    # Product Line / Production Site can be inferred from series rules, but Product Type must remain WIP
-    # if WIP rules such as 850-/851-/852-/H50-/SFG/ASSY/SCMC match.
+    # Deprecated safety guard is kept as a no-op; Rule Master priority is the single source of truth.
     wip_rule_mask = out.apply(
         lambda r: is_wip_by_rule_master(r["Material Number"], r["Material description"], r["Product series"], masters),
         axis=1,
@@ -1268,35 +1169,6 @@ def process_files(
         out.loc[wip_rule_mask, "產品類型"] = "WIP"
         out.loc[wip_rule_mask, "Is_WIP"] = "Y"
         out.loc[wip_rule_mask, "規則判定結果"] = "WIP"
-
-    # Finished-product whitelist:
-    # SG- means non-WIP only. Product Type / Product Line / Production Site still comes from Product Series.
-    finished_product_mask = out["Material Number"].apply(is_finished_product_whitelist)
-    if finished_product_mask.any():
-        inferred_finished = out.loc[finished_product_mask].apply(
-            lambda r: infer_product_type_line_site_from_series_rules(
-                r["Material description"], r["Product series"], masters
-            ),
-            axis=1,
-        )
-        inferred_product_type = inferred_finished.apply(lambda x: x[0]).to_numpy()
-        inferred_product_line = inferred_finished.apply(lambda x: x[1]).to_numpy()
-        inferred_production_site = inferred_finished.apply(lambda x: x[2]).to_numpy()
-
-        idx = out.index[finished_product_mask]
-        for pos, row_idx in enumerate(idx):
-            if inferred_product_type[pos]:
-                out.at[row_idx, "產品類型"] = inferred_product_type[pos]
-            if inferred_product_line[pos]:
-                out.at[row_idx, "Product Line"] = inferred_product_line[pos]
-            if inferred_production_site[pos]:
-                out.at[row_idx, "Production Site"] = inferred_production_site[pos]
-            out.at[row_idx, "Is_WIP"] = "N"
-
-        out.loc[finished_product_mask, "Production Site"] = out.loc[finished_product_mask].apply(
-            lambda r: resolve_production_site(r["Product Line"], r["Production Site"]),
-            axis=1,
-        )
 
     # Plant Rule Master override:
     # Production Site may be controlled directly by Plant Exact / Plant Prefix rules in rule_master.csv.
@@ -1314,7 +1186,7 @@ def process_files(
             "Rule Master"
         )
 
-    out = out.drop(columns=["_Plant Production Site", "_Plant Production Site Rule", "_VN WIP Prefix"], errors="ignore")
+    out = out.drop(columns=["_Plant Production Site", "_Plant Production Site Rule"], errors="ignore")
 
     group_cols = [
         "Year", "Plant", "Production Site", "Product Line", "Material Number", "Material description", "Product series",
@@ -1913,7 +1785,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V14_8_VN_IPS_90_USE_NORMAL_CLASSIFICATION",
+        "app_version": "CMP_V15_0_RULE_MASTER_DRIVEN_NO_CUSTOMER",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
