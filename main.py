@@ -36,7 +36,7 @@ DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V14_6_PLANT_AWARE_STRICT_SITE =====")
+print("===== CMP MAIN VERSION: CMP_V14_7_VN_IPS_PREFIX_WHITELIST =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -51,7 +51,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 #    - Plant Exact / Plant Prefix
 #    - Default
 # 2. 若 rule_master 未命中，再查 product_series_master.csv
-# 3. 若都未命中，寫 WIP
+# 3. Strict Site 未命中則排除；非 Strict Site 未命中才寫 WIP
 # =========================================================
 
 NB_CUSTOMERS = {
@@ -660,6 +660,69 @@ def _rule_site_is_compatible(rule_site: object, current_production_site: object)
     return rule_site_key == current_site_key
 
 
+
+def _is_vietnam_haiphong_ips_site(production_site: object) -> bool:
+    """Return True for 越南海防廠-IPS after normalized comparison."""
+    return _normalize_production_site_key(production_site) == _normalize_production_site_key("越南海防廠-IPS")
+
+
+def _material_number_prefix2(value: object) -> str:
+    """Return the first two alphanumeric characters of a material number."""
+    text = str(value or "").upper().strip()
+    text = re.sub(r"\s+", "", text)
+    return text[:2]
+
+
+def classify_vietnam_haiphong_ips_by_material_prefix(material_number: object, current_production_site: object = "") -> dict:
+    """Vietnam Haiphong IPS special whitelist.
+
+    For 越南海防廠-IPS:
+    - Material Number first two characters 40/41/50/51 are WIP.
+      Product Line and Product Series must remain blank.
+    - Material Number first two characters 90 is a finished-product whitelist and
+      must continue to normal Product Series/Product Line classification.
+    - Other prefixes are excluded to avoid importing other BU finished products
+      from the shared site.
+    """
+    if not _is_vietnam_haiphong_ips_site(current_production_site):
+        return {}
+
+    prefix2 = _material_number_prefix2(material_number)
+    if prefix2 in {"40", "41", "50", "51"}:
+        return {
+            "產品類型": "WIP",
+            "Product Line": "",
+            "Production Site": str(current_production_site or "").strip(),
+            "客戶代碼": "",
+            "客戶名稱": "",
+            "判斷來源": "Rule Master",
+            "規則判定結果": "WIP",
+            "命中規則": f"越南海防廠-IPS Material Number Prefix2={prefix2} → WIP",
+            "Is_WIP": "Y",
+            "_exclude": False,
+            "_vn_wip_prefix": True,
+        }
+
+    if prefix2 == "90":
+        return {
+            "_vn_finished_prefix_allowed": True,
+        }
+
+    return {
+        "產品類型": "",
+        "Product Line": "",
+        "Production Site": str(current_production_site or "").strip(),
+        "客戶代碼": "",
+        "客戶名稱": "",
+        "判斷來源": "Rule Master",
+        "規則判定結果": "Excluded",
+        "命中規則": f"越南海防廠-IPS Material Number Prefix2={prefix2 or '(blank)'} not in whitelist → Excluded",
+        "Is_WIP": "N",
+        "_exclude": True,
+        "_vn_prefix_excluded": True,
+    }
+
+
 def classify_by_rule_master(material_number: object, description: object, series: str, masters: dict, current_production_site: object = "") -> dict:
     material_number_u = str(material_number or "").upper().strip()
     description_u = str(description or "").upper().strip()
@@ -741,6 +804,10 @@ def classify_by_series_master(plant: object, series: str, masters: dict) -> dict
 
 
 def classify(material_number: object, description: object, series: str, plant: object, masters: dict, current_production_site: object = "") -> dict:
+    vn_prefix_result = classify_vietnam_haiphong_ips_by_material_prefix(material_number, current_production_site)
+    if vn_prefix_result.get("_exclude") or vn_prefix_result.get("產品類型"):
+        return vn_prefix_result
+
     result = classify_by_rule_master(material_number, description, series, masters, current_production_site)
     if result.get("產品類型"):
         return result
@@ -1142,6 +1209,15 @@ def process_files(
     out["規則判定結果"] = classified.apply(lambda x: x.get("規則判定結果", ""))
     out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
     out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
+    out["_VN WIP Prefix"] = classified.apply(lambda x: bool(x.get("_vn_wip_prefix", False)))
+
+    # Vietnam Haiphong IPS rule:
+    # 40/41/50/51 are WIP and must not carry Product Line or Product Series.
+    vn_wip_prefix_mask = out["_VN WIP Prefix"].astype(bool)
+    if vn_wip_prefix_mask.any():
+        out.loc[vn_wip_prefix_mask, "Product series"] = ""
+        out.loc[vn_wip_prefix_mask, "Product Line"] = ""
+        out.loc[vn_wip_prefix_mask, "解析說明"] = "越南海防廠-IPS：料號前兩碼為40/41/50/51，判定WIP，不解析Product Series"
 
     # If a generic product classification rule is used, keep its Product Type/Product Line
     # and fill Production Site from Plant Exact/Prefix rules. This prevents shared DT rules
@@ -1160,6 +1236,8 @@ def process_files(
     # Rule Master only mode:
     # Missing Product Line / Production Site may be filled only from explicit rule_master.csv rows.
     missing_line_mask = out["Product Line"].astype(str).str.strip().eq("")
+    if "_VN WIP Prefix" in out.columns:
+        missing_line_mask = missing_line_mask & ~out["_VN WIP Prefix"].astype(bool)
     if missing_line_mask.any():
         inferred = out.loc[missing_line_mask].apply(
             lambda r: infer_product_line_site_from_rules(r["Material description"], r["Product series"], masters),
@@ -1230,7 +1308,7 @@ def process_files(
             "Rule Master"
         )
 
-    out = out.drop(columns=["_Plant Production Site", "_Plant Production Site Rule"], errors="ignore")
+    out = out.drop(columns=["_Plant Production Site", "_Plant Production Site Rule", "_VN WIP Prefix"], errors="ignore")
 
     group_cols = [
         "Year", "Plant", "Production Site", "Product Line", "Material Number", "Material description", "Product series",
@@ -1829,7 +1907,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V14_6_PLANT_AWARE_STRICT_SITE",
+        "app_version": "CMP_V14_7_VN_IPS_PREFIX_WHITELIST",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
