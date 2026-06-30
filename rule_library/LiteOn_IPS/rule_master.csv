@@ -16,6 +16,7 @@
 10,Material Number Prefix,40402-,WIP,,,,,Y,Y
 11,Material Number Prefix,41002-,WIP,,,,,Y,Y
 12,Description Contains,SFG,WIP,,,,,Y,Y
+20,Description Contains,CZ A2,NB,NB,常州廠(A2)-IPS,,NB_3RD_CHAR,N,Y
 20,Series Prefix,SN,NB,NB,常州廠(A2)-IPS,,NB_3RD_CHAR,N,Y
 21,Series Prefix,FU,NB,NB,常州廠(A2)-IPS,,NB_3RD_CHAR,N,Y
 22,Series Prefix,SP,TP,TP,常州廠(A9)-IPS,,NB_3RD_CHAR,N,Y
