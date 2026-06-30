@@ -1,5 +1,5 @@
 ﻿Priority,Rule Type,Key,Product Type,Customer,Customer Code Logic,Is_WIP,Enabled,Product Line,Production Site
-1,Plant Exact,LA30,,,,N,Y,,高雄廠-AE
-1,Material Number Prefix,94,成品,,,N,Y,,
+1,Plant Exact,LA10,,,,,Y,,高雄廠-AE
+1,Material Number Prefix,94,成品,,,N,Y,,高雄廠-AE
 90,Description Contains,ASSY,WIP,,,Y,Y,,
 999,Default,*,WIP,,,Y,Y,,
