@@ -3,9 +3,6 @@ from __future__ import annotations
 import shutil
 import tempfile
 import re
-import zipfile
-import xml.etree.ElementTree as ET
-from copy import copy, deepcopy
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict
@@ -218,410 +215,6 @@ def _build_semi_hour_per_product(step1_df: pd.DataFrame, material_col: str, qty_
     return {target: per_pc * float(qty_by_material.get(target, 0) or 0) for target, per_pc in semi_per_pc_by_target.items() if float(qty_by_material.get(target, 0) or 0)}
 
 
-
-# ---------------------------------------------------------------------------
-# XLSX XML writer helpers
-# ---------------------------------------------------------------------------
-# Some third-party bulk uploaders validate the original workbook structure and
-# external workbook references in the official template. Saving with openpyxl can
-# rewrite formulas such as '[1]Input Sheet Activity Data'!A3 into ordinary local
-# references. The helpers below update only worksheet XML cell contents inside a
-# copied template, so workbook relationships, external links, hidden sheets,
-# defined names and the original formula reference syntax remain intact.
-
-_XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-_XLSX_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-_XLSX_MC_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
-_XLSX_X14AC_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac"
-_XLSX_XR_NS = "http://schemas.microsoft.com/office/spreadsheetml/2014/revision"
-_XLSX_XR2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2015/revision2"
-_XLSX_XR3_NS = "http://schemas.microsoft.com/office/spreadsheetml/2016/revision3"
-
-# Keep Office namespace prefixes stable when serialising worksheet XML.
-# If ElementTree rewrites these prefixes to ns1/ns2 while mc:Ignorable still
-# contains x14ac/xr/xr2/xr3, Excel reports worksheet XML errors.
-ET.register_namespace("", _XLSX_MAIN_NS)
-ET.register_namespace("r", _XLSX_REL_NS)
-ET.register_namespace("mc", _XLSX_MC_NS)
-ET.register_namespace("x14ac", _XLSX_X14AC_NS)
-ET.register_namespace("xr", _XLSX_XR_NS)
-ET.register_namespace("xr2", _XLSX_XR2_NS)
-ET.register_namespace("xr3", _XLSX_XR3_NS)
-
-
-def _col_to_letter(col_idx: int) -> str:
-    text = ""
-    while col_idx:
-        col_idx, rem = divmod(col_idx - 1, 26)
-        text = chr(65 + rem) + text
-    return text
-
-
-def _cell_ref(row_idx: int, col_idx: int) -> str:
-    return f"{_col_to_letter(col_idx)}{row_idx}"
-
-
-def _split_cell_ref(ref: str) -> tuple[int, int]:
-    m = re.match(r"^([A-Z]+)(\d+)$", ref or "")
-    if not m:
-        return 0, 0
-    col_text, row_text = m.groups()
-    col = 0
-    for ch in col_text:
-        col = col * 26 + (ord(ch) - 64)
-    return int(row_text), col
-
-
-def _excel_date_serial(d: date) -> int:
-    # Excel 1900 date system serial. 1899-12-30 matches openpyxl/Excel behavior.
-    return (d - date(1899, 12, 30)).days
-
-
-def _find_sheet_xml_paths(xlsx_path: Path, sheet_names: list[str]) -> dict[str, str]:
-    ns = {"m": _XLSX_MAIN_NS, "r": _XLSX_REL_NS, "pr": _PACKAGE_REL_NS}
-    with zipfile.ZipFile(xlsx_path, "r") as z:
-        wb_root = ET.fromstring(z.read("xl/workbook.xml"))
-        rels_root = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
-    rid_to_target = {}
-    for rel in rels_root.findall("pr:Relationship", ns):
-        rid = rel.attrib.get("Id")
-        target = rel.attrib.get("Target", "")
-        rel_type = rel.attrib.get("Type", "")
-        if rid and rel_type.endswith("/worksheet"):
-            target = target.lstrip("/")
-            if not target.startswith("xl/"):
-                target = "xl/" + target
-            rid_to_target[rid] = target
-    result = {}
-    for sheet in wb_root.findall("m:sheets/m:sheet", ns):
-        name = sheet.attrib.get("name")
-        rid = sheet.attrib.get(f"{{{_XLSX_REL_NS}}}id")
-        if name in sheet_names and rid in rid_to_target:
-            result[name] = rid_to_target[rid]
-    missing = [name for name in sheet_names if name not in result]
-    if missing:
-        raise ValueError(f"找不到 bulk template 分頁：{', '.join(missing)}")
-    return result
-
-
-def _row_sort_key(row_el: ET.Element) -> int:
-    try:
-        return int(row_el.attrib.get("r", "0"))
-    except ValueError:
-        return 0
-
-
-def _cell_sort_key(cell_el: ET.Element) -> tuple[int, int]:
-    return _split_cell_ref(cell_el.attrib.get("r", ""))
-
-
-def _get_or_create_row(sheet_data: ET.Element, row_idx: int) -> ET.Element:
-    ns_tag = f"{{{_XLSX_MAIN_NS}}}row"
-    for row_el in sheet_data.findall(ns_tag):
-        if int(row_el.attrib.get("r", "0")) == row_idx:
-            return row_el
-    row_el = ET.Element(ns_tag, {"r": str(row_idx)})
-    sheet_data.append(row_el)
-    sheet_data[:] = sorted(list(sheet_data), key=_row_sort_key)
-    return row_el
-
-
-def _get_cell_style_template(row_el: ET.Element, col_idx: int) -> dict[str, str]:
-    ref = _cell_ref(int(row_el.attrib.get("r", "0")), col_idx)
-    for cell in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
-        if cell.attrib.get("r") == ref:
-            return {k: v for k, v in cell.attrib.items() if k in {"s", "cm", "vm", "ph"}}
-    return {}
-
-
-def _get_or_create_cell(row_el: ET.Element, row_idx: int, col_idx: int, style_template: dict[str, str] | None = None) -> ET.Element:
-    ref = _cell_ref(row_idx, col_idx)
-    ns_tag = f"{{{_XLSX_MAIN_NS}}}c"
-    for cell in row_el.findall(ns_tag):
-        if cell.attrib.get("r") == ref:
-            return cell
-    attrib = {"r": ref}
-    if style_template:
-        attrib.update(style_template)
-    cell = ET.Element(ns_tag, attrib)
-    row_el.append(cell)
-    row_el[:] = sorted(list(row_el), key=_cell_sort_key)
-    return cell
-
-
-
-def _get_existing_cell(row_el: ET.Element, row_idx: int, col_idx: int) -> ET.Element | None:
-    ref = _cell_ref(row_idx, col_idx)
-    for cell in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
-        if cell.attrib.get("r") == ref:
-            return cell
-    return None
-
-
-def _clone_template_cell_to_row(
-    sheet_data: ET.Element,
-    template_row: ET.Element,
-    row_idx: int,
-    col_idx: int,
-    fallback_style: dict[str, str] | None = None,
-) -> ET.Element:
-    """Clone an official-template cell to a target row and keep dropdown/formula tokens.
-
-    Some third-party validators do not parse plain text written by automation for
-    dropdown backed fields. They expect the same cell payload as the official
-    template creates when the user selects from the dropdown. Therefore, for
-    controlled-list columns such as Product Type, System Boundary and Declared
-    Unit, copy the template cell XML instead of writing a new inline string.
-    """
-    target_row = _get_or_create_row(sheet_data, row_idx)
-    existing = _get_existing_cell(target_row, row_idx, col_idx)
-    if existing is not None:
-        return existing
-
-    template_cell = _get_existing_cell(template_row, int(template_row.attrib.get("r", "0")), col_idx)
-    if template_cell is not None:
-        cell = deepcopy(template_cell)
-        old_ref = cell.attrib.get("r", "")
-        cell.attrib["r"] = _cell_ref(row_idx, col_idx)
-        # Adjust simple row references in formulas, e.g. A3 -> A17, while leaving
-        # external workbook/sheet prefixes intact.
-        for child in cell.iter():
-            if child.tag.split("}")[-1] == "f" and child.text:
-                old_row, old_col = _split_cell_ref(old_ref)
-                if old_row and old_col == col_idx:
-                    child.text = re.sub(rf"(?<![A-Z]){_col_to_letter(col_idx)}{old_row}(?!\\d)", _cell_ref(row_idx, col_idx), child.text)
-        target_row.append(cell)
-        target_row[:] = sorted(list(target_row), key=_cell_sort_key)
-        return cell
-
-    attrib = {"r": _cell_ref(row_idx, col_idx)}
-    if fallback_style:
-        attrib.update(fallback_style)
-    cell = ET.Element(f"{{{_XLSX_MAIN_NS}}}c", attrib)
-    target_row.append(cell)
-    target_row[:] = sorted(list(target_row), key=_cell_sort_key)
-    return cell
-
-def _clear_cell(cell: ET.Element, keep_formula: bool = False) -> None:
-    for child in list(cell):
-        local = child.tag.split("}")[-1]
-        if keep_formula and local == "f":
-            continue
-        cell.remove(child)
-    if not keep_formula:
-        cell.attrib.pop("t", None)
-
-
-def _set_inline_string(cell: ET.Element, value: Any) -> None:
-    _clear_cell(cell)
-    cell.attrib["t"] = "inlineStr"
-    is_el = ET.SubElement(cell, f"{{{_XLSX_MAIN_NS}}}is")
-    t_el = ET.SubElement(is_el, f"{{{_XLSX_MAIN_NS}}}t")
-    text = "" if value is None else str(value)
-    if text.startswith(" ") or text.endswith(" "):
-        t_el.attrib["{http://www.w3.org/XML/1998/namespace}space"] = "preserve"
-    t_el.text = text
-
-
-def _set_number(cell: ET.Element, value: Any) -> None:
-    _clear_cell(cell)
-    cell.attrib.pop("t", None)
-    v_el = ET.SubElement(cell, f"{{{_XLSX_MAIN_NS}}}v")
-    v_el.text = str(value)
-
-
-def _set_formula(cell: ET.Element, formula_without_equal: str) -> None:
-    _clear_cell(cell)
-    f_el = ET.SubElement(cell, f"{{{_XLSX_MAIN_NS}}}f")
-    f_el.text = formula_without_equal
-
-
-def _clear_columns_from_row(root: ET.Element, start_row: int, columns: set[int], preserve_formula_cols: set[int] | None = None) -> None:
-    preserve_formula_cols = preserve_formula_cols or set()
-    for row_el in root.findall(f".//{{{_XLSX_MAIN_NS}}}sheetData/{{{_XLSX_MAIN_NS}}}row"):
-        row_idx = int(row_el.attrib.get("r", "0"))
-        if row_idx < start_row:
-            continue
-        for cell in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
-            _, col_idx = _split_cell_ref(cell.attrib.get("r", ""))
-            if col_idx in columns:
-                _clear_cell(cell, keep_formula=col_idx in preserve_formula_cols)
-
-
-
-def _serialize_worksheet_xml(root: ET.Element) -> bytes:
-    """Serialise worksheet XML while keeping Excel-required namespace declarations.
-
-    Important bug fix:
-    ElementTree writes an XML declaration before the worksheet root. We must add
-    missing namespace declarations to the <worksheet ...> start tag, not to the
-    XML declaration. Adding xmlns:* before the declaration's closing ?> corrupts
-    sheet1.xml / sheet2.xml and Excel reports: line 1, column 38, expected '>'.
-    """
-    data = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-    text = data.decode("utf-8")
-
-    worksheet_start = text.find("<worksheet")
-    if worksheet_start == -1:
-        return data
-    worksheet_end = text.find(">", worksheet_start)
-    if worksheet_end == -1:
-        return data
-
-    worksheet_tag = text[worksheet_start:worksheet_end]
-    required = {
-        "r": _XLSX_REL_NS,
-        "x14ac": _XLSX_X14AC_NS,
-        "xr": _XLSX_XR_NS,
-        "xr2": _XLSX_XR2_NS,
-        "xr3": _XLSX_XR3_NS,
-    }
-    additions = []
-    for prefix, uri in required.items():
-        if f"xmlns:{prefix}=" not in worksheet_tag:
-            additions.append(f' xmlns:{prefix}="{uri}"')
-    if additions:
-        text = text[:worksheet_end] + "".join(additions) + text[worksheet_end:]
-
-    # Match Excel's usual XML declaration format closely.
-    text = text.replace("<?xml version='1.0' encoding='utf-8'?>", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>', 1)
-    return text.encode("utf-8")
-
-
-
-def _remove_calc_chain_parts(contents: dict[str, bytes]) -> dict[str, bytes]:
-    """Remove stale calcChain parts after XML cell updates.
-
-    Excel can safely rebuild calculation chains. Keeping a stale calcChain after
-    changing worksheet XML may trigger recovery-log messages even when worksheet
-    XML is valid.
-    """
-    contents = dict(contents)
-    contents.pop("xl/calcChain.xml", None)
-
-    rels_name = "xl/_rels/workbook.xml.rels"
-    if rels_name in contents:
-        try:
-            root = ET.fromstring(contents[rels_name])
-            for rel in list(root):
-                if rel.attrib.get("Type", "").endswith("/calcChain"):
-                    root.remove(rel)
-            contents[rels_name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-        except ET.ParseError:
-            pass
-
-    ct_name = "[Content_Types].xml"
-    if ct_name in contents:
-        try:
-            root = ET.fromstring(contents[ct_name])
-            for child in list(root):
-                if child.attrib.get("PartName") == "/xl/calcChain.xml":
-                    root.remove(child)
-            contents[ct_name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-        except ET.ParseError:
-            pass
-
-    return contents
-
-
-def _write_bulk_template_xml(output_path: Path, rows: list[Dict[str, Any]], activity_labor_hours_col: int | None, activity_labor_hours_unit_col: int | None) -> None:
-    sheet_paths = _find_sheet_xml_paths(output_path, [ACTIVITY_SHEET_NAME, PRODUCTS_SHEET_NAME])
-    activity_xml = sheet_paths[ACTIVITY_SHEET_NAME]
-    products_xml = sheet_paths[PRODUCTS_SHEET_NAME]
-
-    with zipfile.ZipFile(output_path, "r") as zin:
-        contents = {name: zin.read(name) for name in zin.namelist()}
-
-    activity_root = ET.fromstring(contents[activity_xml])
-    products_root = ET.fromstring(contents[products_xml])
-    activity_sheet_data = activity_root.find(f"{{{_XLSX_MAIN_NS}}}sheetData")
-    products_sheet_data = products_root.find(f"{{{_XLSX_MAIN_NS}}}sheetData")
-    if activity_sheet_data is None or products_sheet_data is None:
-        raise ValueError("Bulk template worksheet XML 結構異常，找不到 sheetData。")
-
-    # Writable free-text/number columns only. Controlled dropdown-backed fields
-    # are intentionally not cleared/written as plain text:
-    #   Activity col 4 = Product Type
-    #   Products col 4 = System Boundary
-    #   Products col 6 = Declared Unit
-    # These cells are cloned from the official template row to preserve the exact
-    # value/formula token that the third-party parser expects.
-    activity_product_type_col = 4
-    product_system_boundary_col = 4
-    product_declared_unit_col = 6
-    activity_clear_cols = {1, 2, 3, 5, 6, 7, 8}
-    if activity_labor_hours_col:
-        activity_clear_cols.add(activity_labor_hours_col)
-    if activity_labor_hours_unit_col:
-        activity_clear_cols.add(activity_labor_hours_unit_col)
-    _clear_columns_from_row(activity_root, DATA_START_ROW, activity_clear_cols)
-    # Keep Product Sheet A-column formulas/external references and controlled
-    # dropdown-backed columns. Only clear the writable Product Description column.
-    _clear_columns_from_row(products_root, DATA_START_ROW, {3})
-
-    # Reuse styles from row 3 cells when a target cell has to be created.
-    activity_row3 = _get_or_create_row(activity_sheet_data, DATA_START_ROW)
-    products_row3 = _get_or_create_row(products_sheet_data, DATA_START_ROW)
-    activity_styles = {c: _get_cell_style_template(activity_row3, c) for c in activity_clear_cols}
-    products_styles = {c: _get_cell_style_template(products_row3, c) for c in {1, 3, 4, 6}}
-
-    for offset, item in enumerate(rows):
-        row_idx = DATA_START_ROW + offset
-        arow = _get_or_create_row(activity_sheet_data, row_idx)
-        prow = _get_or_create_row(products_sheet_data, row_idx)
-
-        def acell(col: int) -> ET.Element:
-            return _get_or_create_cell(arow, row_idx, col, activity_styles.get(col))
-
-        def pcell(col: int) -> ET.Element:
-            return _get_or_create_cell(prow, row_idx, col, products_styles.get(col))
-
-        year = int(item.get("year") or date.today().year)
-        _set_inline_string(acell(1), item.get("product_name", ""))
-        _set_number(acell(2), _excel_date_serial(date(year, 1, 1)))
-        _set_number(acell(3), _excel_date_serial(date(year, 12, 31)))
-        # Controlled dropdown-backed Product Type: clone official template cell
-        # rather than writing plain text. This avoids third-party validateResults
-        # returning productType code 62009 / not parsed.
-        _clone_template_cell_to_row(activity_sheet_data, activity_row3, row_idx, activity_product_type_col, activity_styles.get(activity_product_type_col))
-        _set_inline_string(acell(5), item.get("production_site", ""))
-        _set_number(acell(6), item.get("qty", 0))
-        _set_inline_string(acell(7), "SAP")
-        _clear_cell(acell(8))
-        if activity_labor_hours_col and item.get("labor_hours") is not None:
-            _set_number(acell(activity_labor_hours_col), item.get("labor_hours", 0))
-        if activity_labor_hours_unit_col and item.get("labor_hours") is not None:
-            _set_inline_string(acell(activity_labor_hours_unit_col), "小時")
-
-        # Product Sheet column A is formula-driven in the official template.
-        # Do NOT rewrite that formula here: Excel/third-party validators can treat
-        # manually injected external-reference formulas as corrupted and remove them.
-        # If the official template already has an A-column formula for this row, keep it.
-        # Only when the template has no formula for this row do we fall back to a plain
-        # product-name value, which is safer than generating a new external formula.
-        product_name_cell = pcell(1)
-        has_existing_formula = any(child.tag.split("}")[-1] == "f" for child in list(product_name_cell))
-        if not has_existing_formula:
-            _set_inline_string(product_name_cell, item.get("product_name", ""))
-        _set_inline_string(pcell(3), item.get("product_description", ""))
-        # Controlled dropdown-backed fields: copy the official template cell XML
-        # so new products are parsed with systemBoundary / declaredUnit, not the
-        # empty *Description fields returned when plain text is injected.
-        _clone_template_cell_to_row(products_sheet_data, products_row3, row_idx, product_system_boundary_col, products_styles.get(product_system_boundary_col))
-        _clone_template_cell_to_row(products_sheet_data, products_row3, row_idx, product_declared_unit_col, products_styles.get(product_declared_unit_col))
-
-    contents[activity_xml] = _serialize_worksheet_xml(activity_root)
-    contents[products_xml] = _serialize_worksheet_xml(products_root)
-    contents = _remove_calc_chain_parts(contents)
-
-    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
-    with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-        for name, data in contents.items():
-            zout.writestr(name, data)
-    tmp_path.replace(output_path)
-
-
 def _clear_target_cells(ws, start_row: int, columns: list[int]) -> None:
     """
     只清除指定欄位的儲存格內容，不重建 sheet、不刪除列欄、不改格式。
@@ -642,30 +235,33 @@ def generate_product_activity_bulk_file(
     working_hour_rollup_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """
-    XML-safe Step 2 generator.
+    方案 1：直接複製原始 Bulk Template，再只覆蓋指定分頁的指定儲存格內容。
 
-    The output file is created by copying the official Bulk Template and then
-    updating only cell values in the two input sheets at the worksheet-XML level.
-    This avoids openpyxl save-side effects that can remove the official template's
-    external reference prefix, for example:
-        '[1]Input Sheet Activity Data'!A3
-        '[1]Dropdown Values'!...
+    不重新建立 Workbook。
+    不新增 / 刪除分頁。
+    不破壞原始 template 的樣式、欄寬、資料驗證、隱藏分頁與公式。
+    原本 bulk template 的下拉選單會保留；前提是 template 的 Data Validation
+    原本就涵蓋寫入的列數範圍。
     """
 
     step1_output_path = Path(step1_output_path)
     bulk_template_path = Path(bulk_template_path)
     output_path = Path(output_path)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Copy the official template first. Do not save it through openpyxl.
+    # 重要：先完整複製原始 template，再在複製檔上寫入資料
     shutil.copy2(bulk_template_path, output_path)
 
     df = pd.read_excel(step1_output_path, sheet_name=SOURCE_SHEET_NAME, dtype=object)
 
+    # Production Site is optional in old Step1 outputs.
+    # If present, Step2 writes it into Activity Data and can split files by site.
     production_site_col = _find_optional_column(
         df,
         ["Production Site", "production site", "生產廠區", "廠區", "廠別"],
     )
+
     year_col = _find_column(df, ["Year"])
     material_col = _find_column(df, ["Material Number"])
     material_desc_col = _find_optional_column(df, ["Material description", "Material Description", "產品描述", "品名"])
@@ -702,14 +298,20 @@ def generate_product_activity_bulk_file(
         except ValueError:
             pass
 
-    # Read-only inspection of template headers only. The copied workbook is never
-    # saved by openpyxl, so original XML relationships remain untouched.
-    wb_header = load_workbook(output_path, read_only=True, data_only=False)
-    if ACTIVITY_SHEET_NAME not in wb_header.sheetnames:
+    # 直接開啟複製後的檔案，只寫入兩個指定分頁
+    wb = load_workbook(output_path)
+
+    if ACTIVITY_SHEET_NAME not in wb.sheetnames:
         raise ValueError(f"找不到 bulk template 分頁：{ACTIVITY_SHEET_NAME}")
-    if PRODUCTS_SHEET_NAME not in wb_header.sheetnames:
+
+    if PRODUCTS_SHEET_NAME not in wb.sheetnames:
         raise ValueError(f"找不到 bulk template 分頁：{PRODUCTS_SHEET_NAME}")
-    activity_ws = wb_header[ACTIVITY_SHEET_NAME]
+
+    activity_ws = wb[ACTIVITY_SHEET_NAME]
+    products_ws = wb[PRODUCTS_SHEET_NAME]
+
+    # Optional working-hour target columns in bulk template.
+    # Row 1 system key and row 2 display header are both searched.
     activity_labor_hours_col = _find_excel_column(
         activity_ws,
         [
@@ -727,73 +329,58 @@ def generate_product_activity_bulk_file(
             "工時單位", "生產工時單位", "Hours Unit", "Hour Unit"
         ],
     )
-    wb_header.close()
 
+    # 只清除要寫入的欄位內容，不碰格式/驗證/公式
+    # Activity Data: A:H + optional working-hour columns
+    activity_clear_cols = [1, 2, 3, 4, 5, 6, 7, 8]
+    for col_idx in [activity_labor_hours_col, activity_labor_hours_unit_col]:
+        if col_idx and col_idx not in activity_clear_cols:
+            activity_clear_cols.append(col_idx)
+    _clear_target_cells(activity_ws, DATA_START_ROW, columns=activity_clear_cols)
+    # Products: A, C, D, F
+    # C 欄 Product Description 新增由 Step1 Output 的 Material Description 帶入
+    _clear_target_cells(products_ws, DATA_START_ROW, columns=[1, 3, 4, 6])
+
+    activity_row = DATA_START_ROW
+    products_row = DATA_START_ROW
     excluded_wip_rows = 0
     skipped_blank_rows = 0
     excluded_zero_labor_hour_rows = 0
-    consolidated_rows: dict[str, Dict[str, Any]] = {}
-    source_valid_rows = 0
-    duplicated_product_rows_merged = 0
 
     for _, row in df.iterrows():
-        raw_product_name = row.get(material_col)
-        if pd.isna(raw_product_name) or str(raw_product_name).strip() == "":
+        product_name = row.get(material_col)
+        if pd.isna(product_name) or str(product_name).strip() == "":
             skipped_blank_rows += 1
             continue
 
         product_type = row.get(product_type_col)
         is_wip = row.get(is_wip_col) if is_wip_col else None
+
+        # 依目前規則：WIP 不寫入 bulk file
         if _is_wip(product_type, is_wip):
             excluded_wip_rows += 1
             continue
 
-        product_name = str(raw_product_name).strip()
-        product_key = _normalize_material(product_name)
-        if not product_key:
-            skipped_blank_rows += 1
-            continue
-
         year = _as_year(row.get(year_col))
-        qty = _safe_number(row.get(qty_col))
+        qty = row.get(qty_col)
+
+        product_name = str(product_name).strip()
         product_description = _safe_text(row.get(material_desc_col)) if material_desc_col else ""
+
         production_site = _safe_text(row.get(production_site_col)) if production_site_col else ""
+        if not production_site:
+            # Rule Master only mode: keep blank if Step1 did not provide Production Site.
+            production_site = ""
 
+        labor_hours = row.get(labor_hours_col) if labor_hours_col else None
         direct_labor_hours = 0.0
+        semi_labor_hours = 0.0
         if labor_hours_col:
-            raw_labor_hours = pd.to_numeric(row.get(labor_hours_col), errors="coerce")
-            direct_labor_hours = 0 if pd.isna(raw_labor_hours) else float(raw_labor_hours)
+            labor_hours = pd.to_numeric(labor_hours, errors="coerce")
+            direct_labor_hours = 0 if pd.isna(labor_hours) else float(labor_hours)
 
-        if product_key not in consolidated_rows:
-            consolidated_rows[product_key] = {
-                "product_name": product_name,
-                "year": year,
-                "qty": 0.0,
-                "product_description": product_description,
-                "production_site": production_site,
-                "direct_labor_hours": 0.0,
-                "source_row_count": 0,
-            }
-        else:
-            duplicated_product_rows_merged += 1
-
-        item = consolidated_rows[product_key]
-        item["qty"] = float(item.get("qty", 0) or 0) + qty
-        item["direct_labor_hours"] = float(item.get("direct_labor_hours", 0) or 0) + direct_labor_hours
-        item["source_row_count"] = int(item.get("source_row_count", 0) or 0) + 1
-        if not item.get("product_description") and product_description:
-            item["product_description"] = product_description
-        if not item.get("production_site") and production_site:
-            item["production_site"] = production_site
-        source_valid_rows += 1
-
-    rows_to_write: list[Dict[str, Any]] = []
-    for material_key, item in consolidated_rows.items():
-        direct_labor_hours = float(item.get("direct_labor_hours", 0) or 0)
-        labor_hours = None
-        if labor_hours_col:
             if working_hour_source == "include_semi":
-                production_site = str(item.get("production_site") or "").strip()
+                material_key = _normalize_material(product_name)
                 site_key = str(production_site or "").strip().upper()
                 if rollup_by_site_material or rollup_by_material:
                     if (site_key, material_key) in rollup_by_site_material:
@@ -807,40 +394,54 @@ def generate_product_activity_bulk_file(
                     labor_hours = direct_labor_hours + semi_labor_hours
             else:
                 labor_hours = direct_labor_hours
+
+            # 年度總工時等於 0 的產品不寫入 Bulk。
+            # 0.01、0.001 等任何非 0 小數仍需保留並寫入。
             if labor_hours == 0:
-                excluded_zero_labor_hour_rows += int(item.get("source_row_count", 1) or 1)
+                excluded_zero_labor_hour_rows += 1
                 continue
 
-        rows_to_write.append({
-            "product_name": str(item.get("product_name") or "").strip(),
-            "year": int(item.get("year") or date.today().year),
-            "qty": float(item.get("qty", 0) or 0),
-            "product_description": str(item.get("product_description") or "").strip(),
-            "production_site": str(item.get("production_site") or "").strip(),
-            "labor_hours": labor_hours,
-        })
+        # 分頁 1：Input Sheet Activity Data
+        activity_ws.cell(activity_row, 1).value = product_name
+        activity_ws.cell(activity_row, 2).value = date(year, 1, 1)
+        activity_ws.cell(activity_row, 3).value = date(year, 12, 31)
+        activity_ws.cell(activity_row, 4).value = "Target Product"
+        activity_ws.cell(activity_row, 5).value = production_site
+        activity_ws.cell(activity_row, 6).value = qty
+        activity_ws.cell(activity_row, 7).value = "SAP"
+        activity_ws.cell(activity_row, 8).value = None
 
-    _write_bulk_template_xml(output_path, rows_to_write, activity_labor_hours_col, activity_labor_hours_unit_col)
+        if activity_labor_hours_col and labor_hours_col:
+            activity_ws.cell(activity_row, activity_labor_hours_col).value = labor_hours
+
+        if activity_labor_hours_unit_col and labor_hours_col:
+            activity_ws.cell(activity_row, activity_labor_hours_unit_col).value = "小時"
+
+        activity_ws.cell(activity_row, 2).number_format = "yyyy/mm/dd"
+        activity_ws.cell(activity_row, 3).number_format = "yyyy/mm/dd"
+
+        # 分頁 2：Input Sheet Products
+        # A欄 Product Name 保留公式邏輯，直接引用分頁1的 A欄 Product Name。
+        # 這樣不會把原本 template 的設計改成純文字。
+        products_ws.cell(products_row, 1).value = f"='{ACTIVITY_SHEET_NAME}'!A{activity_row}"
+        products_ws.cell(products_row, 3).value = product_description
+        products_ws.cell(products_row, 4).value = "Cradle-to-Gate"
+        products_ws.cell(products_row, 6).value = "PC"
+
+        activity_row += 1
+        products_row += 1
+
+    wb.save(output_path)
 
     return {
         "source_rows": int(len(df)),
-        "activity_rows": int(len(rows_to_write)),
-        "product_rows": int(len(rows_to_write)),
+        "activity_rows": int(activity_row - DATA_START_ROW),
+        "product_rows": int(products_row - DATA_START_ROW),
         "excluded_wip_rows": int(excluded_wip_rows),
         "skipped_blank_rows": int(skipped_blank_rows),
         "excluded_zero_labor_hour_rows": int(excluded_zero_labor_hour_rows),
-        "step2_product_name_consolidation_enabled": True,
-        "valid_rows_before_consolidation": int(source_valid_rows),
-        "unique_product_names_after_consolidation": int(len(rows_to_write)),
-        "duplicated_product_rows_merged": int(duplicated_product_rows_merged),
         "output_filename": output_path.name,
         "template_copy_mode": True,
-        "template_xml_safe_write_mode": True,
-        "preserve_external_references": True,
-        "controlled_dropdown_cells_preserved": True,
-        "activity_product_type_from_template": True,
-        "product_system_boundary_from_template": True,
-        "product_declared_unit_from_template": True,
         "product_description_from_material_description": True,
         "labor_hours_from_step1": bool(labor_hours_col),
         "labor_hours_written_to_bulk": bool(labor_hours_col and activity_labor_hours_col),
@@ -851,6 +452,7 @@ def generate_product_activity_bulk_file(
         "working_hour_rollup_used": bool(rollup_by_site_material or rollup_by_material),
         "semi_finished_working_hour_products": int(len(semi_hour_by_material)) if isinstance(semi_hour_by_material, dict) else int(len(rollup_by_material)),
     }
+
 
 
 def generate_product_activity_bulk_files_by_site(
