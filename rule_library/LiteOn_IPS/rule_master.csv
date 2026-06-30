@@ -22,13 +22,13 @@
 21,Series Prefix,FU,NB,NB,常州廠(A2)-IPS,,NB_3RD_CHAR,N,Y
 22,Series Prefix,SP,TP,TP,常州廠(A9)-IPS,,NB_3RD_CHAR,N,Y
 23,Series Prefix,SM,DT Mouse,DT,,,DT_3_4_CHAR,N,Y
-23,Material Number Prefix,903-,DT Mouse,DT,,,DT_3_4_CHAR,N,Y
+23,Material Number Prefix,903,DT Mouse,DT,,,DT_3_4_CHAR,N,Y
 24,Series Prefix,SA,DT Accessory,DT,,,DT_3_4_CHAR,N,Y
 25,Series Prefix,SD,DT Dongle,DT,,,DT_3_4_CHAR,N,Y
 26,Series Prefix,SK,DT Keyboard,DT,,,DT_3_4_CHAR,N,Y
 26,Material Number Prefix,902,DT Keyboard,DT,,,DT_3_4_CHAR,N,Y
 27,Series Prefix,SB,DT Keyboard+Mouse,DT,,,DT_3_4_CHAR,N,Y
-27,Material Number Prefix,904-,DT Keyboard+Mouse,DT,,,DT_3_4_CHAR,N,Y
+27,Material Number Prefix,904,DT Keyboard+Mouse,DT,,,DT_3_4_CHAR,N,Y
 28,Series Prefix,ST,DT Tablet Keyboard,DT,,,DT_3_4_CHAR,N,Y
 29,Series Prefix,SSE,Smart Pen,DT,,,DT_3_4_CHAR,N,Y
 30,Description Contains,TOUCH PAD MODULE,TP,TP,常州廠(A9)-IPS,,,N,Y
