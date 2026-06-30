@@ -5,7 +5,7 @@ import tempfile
 import re
 import zipfile
 import xml.etree.ElementTree as ET
-from copy import copy
+from copy import copy, deepcopy
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict
@@ -350,6 +350,59 @@ def _get_or_create_cell(row_el: ET.Element, row_idx: int, col_idx: int, style_te
     return cell
 
 
+
+def _get_existing_cell(row_el: ET.Element, row_idx: int, col_idx: int) -> ET.Element | None:
+    ref = _cell_ref(row_idx, col_idx)
+    for cell in row_el.findall(f"{{{_XLSX_MAIN_NS}}}c"):
+        if cell.attrib.get("r") == ref:
+            return cell
+    return None
+
+
+def _clone_template_cell_to_row(
+    sheet_data: ET.Element,
+    template_row: ET.Element,
+    row_idx: int,
+    col_idx: int,
+    fallback_style: dict[str, str] | None = None,
+) -> ET.Element:
+    """Clone an official-template cell to a target row and keep dropdown/formula tokens.
+
+    Some third-party validators do not parse plain text written by automation for
+    dropdown backed fields. They expect the same cell payload as the official
+    template creates when the user selects from the dropdown. Therefore, for
+    controlled-list columns such as Product Type, System Boundary and Declared
+    Unit, copy the template cell XML instead of writing a new inline string.
+    """
+    target_row = _get_or_create_row(sheet_data, row_idx)
+    existing = _get_existing_cell(target_row, row_idx, col_idx)
+    if existing is not None:
+        return existing
+
+    template_cell = _get_existing_cell(template_row, int(template_row.attrib.get("r", "0")), col_idx)
+    if template_cell is not None:
+        cell = deepcopy(template_cell)
+        old_ref = cell.attrib.get("r", "")
+        cell.attrib["r"] = _cell_ref(row_idx, col_idx)
+        # Adjust simple row references in formulas, e.g. A3 -> A17, while leaving
+        # external workbook/sheet prefixes intact.
+        for child in cell.iter():
+            if child.tag.split("}")[-1] == "f" and child.text:
+                old_row, old_col = _split_cell_ref(old_ref)
+                if old_row and old_col == col_idx:
+                    child.text = re.sub(rf"(?<![A-Z]){_col_to_letter(col_idx)}{old_row}(?!\\d)", _cell_ref(row_idx, col_idx), child.text)
+        target_row.append(cell)
+        target_row[:] = sorted(list(target_row), key=_cell_sort_key)
+        return cell
+
+    attrib = {"r": _cell_ref(row_idx, col_idx)}
+    if fallback_style:
+        attrib.update(fallback_style)
+    cell = ET.Element(f"{{{_XLSX_MAIN_NS}}}c", attrib)
+    target_row.append(cell)
+    target_row[:] = sorted(list(target_row), key=_cell_sort_key)
+    return cell
+
 def _clear_cell(cell: ET.Element, keep_formula: bool = False) -> None:
     for child in list(cell):
         local = child.tag.split("}")[-1]
@@ -487,14 +540,25 @@ def _write_bulk_template_xml(output_path: Path, rows: list[Dict[str, Any]], acti
     if activity_sheet_data is None or products_sheet_data is None:
         raise ValueError("Bulk template worksheet XML 結構異常，找不到 sheetData。")
 
-    activity_clear_cols = {1, 2, 3, 4, 5, 6, 7, 8}
+    # Writable free-text/number columns only. Controlled dropdown-backed fields
+    # are intentionally not cleared/written as plain text:
+    #   Activity col 4 = Product Type
+    #   Products col 4 = System Boundary
+    #   Products col 6 = Declared Unit
+    # These cells are cloned from the official template row to preserve the exact
+    # value/formula token that the third-party parser expects.
+    activity_product_type_col = 4
+    product_system_boundary_col = 4
+    product_declared_unit_col = 6
+    activity_clear_cols = {1, 2, 3, 5, 6, 7, 8}
     if activity_labor_hours_col:
         activity_clear_cols.add(activity_labor_hours_col)
     if activity_labor_hours_unit_col:
         activity_clear_cols.add(activity_labor_hours_unit_col)
     _clear_columns_from_row(activity_root, DATA_START_ROW, activity_clear_cols)
-    # Keep Product Sheet A-column formulas/external references. Only clear writable descriptive columns.
-    _clear_columns_from_row(products_root, DATA_START_ROW, {3, 4, 6})
+    # Keep Product Sheet A-column formulas/external references and controlled
+    # dropdown-backed columns. Only clear the writable Product Description column.
+    _clear_columns_from_row(products_root, DATA_START_ROW, {3})
 
     # Reuse styles from row 3 cells when a target cell has to be created.
     activity_row3 = _get_or_create_row(activity_sheet_data, DATA_START_ROW)
@@ -517,7 +581,10 @@ def _write_bulk_template_xml(output_path: Path, rows: list[Dict[str, Any]], acti
         _set_inline_string(acell(1), item.get("product_name", ""))
         _set_number(acell(2), _excel_date_serial(date(year, 1, 1)))
         _set_number(acell(3), _excel_date_serial(date(year, 12, 31)))
-        _set_inline_string(acell(4), "Target Product")
+        # Controlled dropdown-backed Product Type: clone official template cell
+        # rather than writing plain text. This avoids third-party validateResults
+        # returning productType code 62009 / not parsed.
+        _clone_template_cell_to_row(activity_sheet_data, activity_row3, row_idx, activity_product_type_col, activity_styles.get(activity_product_type_col))
         _set_inline_string(acell(5), item.get("production_site", ""))
         _set_number(acell(6), item.get("qty", 0))
         _set_inline_string(acell(7), "SAP")
@@ -538,8 +605,11 @@ def _write_bulk_template_xml(output_path: Path, rows: list[Dict[str, Any]], acti
         if not has_existing_formula:
             _set_inline_string(product_name_cell, item.get("product_name", ""))
         _set_inline_string(pcell(3), item.get("product_description", ""))
-        _set_inline_string(pcell(4), "Cradle-to-Gate")
-        _set_inline_string(pcell(6), "PC")
+        # Controlled dropdown-backed fields: copy the official template cell XML
+        # so new products are parsed with systemBoundary / declaredUnit, not the
+        # empty *Description fields returned when plain text is injected.
+        _clone_template_cell_to_row(products_sheet_data, products_row3, row_idx, product_system_boundary_col, products_styles.get(product_system_boundary_col))
+        _clone_template_cell_to_row(products_sheet_data, products_row3, row_idx, product_declared_unit_col, products_styles.get(product_declared_unit_col))
 
     contents[activity_xml] = _serialize_worksheet_xml(activity_root)
     contents[products_xml] = _serialize_worksheet_xml(products_root)
@@ -767,6 +837,10 @@ def generate_product_activity_bulk_file(
         "template_copy_mode": True,
         "template_xml_safe_write_mode": True,
         "preserve_external_references": True,
+        "controlled_dropdown_cells_preserved": True,
+        "activity_product_type_from_template": True,
+        "product_system_boundary_from_template": True,
+        "product_declared_unit_from_template": True,
         "product_description_from_material_description": True,
         "labor_hours_from_step1": bool(labor_hours_col),
         "labor_hours_written_to_bulk": bool(labor_hours_col and activity_labor_hours_col),
