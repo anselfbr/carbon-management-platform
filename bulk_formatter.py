@@ -346,10 +346,18 @@ def generate_product_activity_bulk_file(
     excluded_wip_rows = 0
     skipped_blank_rows = 0
     excluded_zero_labor_hour_rows = 0
+    source_valid_rows = 0
+    duplicated_product_rows_merged = 0
+
+    # Step2 consolidation:
+    # Third-party bulk upload validates Product Name uniqueness. Therefore,
+    # before writing to the template, consolidate rows by finished product
+    # Material Number / Product Name. Quantity and working hours are summed.
+    consolidated_rows: dict[str, Dict[str, Any]] = {}
 
     for _, row in df.iterrows():
-        product_name = row.get(material_col)
-        if pd.isna(product_name) or str(product_name).strip() == "":
+        raw_product_name = row.get(material_col)
+        if pd.isna(raw_product_name) or str(raw_product_name).strip() == "":
             skipped_blank_rows += 1
             continue
 
@@ -361,26 +369,58 @@ def generate_product_activity_bulk_file(
             excluded_wip_rows += 1
             continue
 
+        product_name = str(raw_product_name).strip()
+        product_key = _normalize_material(product_name)
+        if not product_key:
+            skipped_blank_rows += 1
+            continue
+
         year = _as_year(row.get(year_col))
-        qty = row.get(qty_col)
-
-        product_name = str(product_name).strip()
+        qty = _safe_number(row.get(qty_col))
         product_description = _safe_text(row.get(material_desc_col)) if material_desc_col else ""
-
         production_site = _safe_text(row.get(production_site_col)) if production_site_col else ""
-        if not production_site:
-            # Rule Master only mode: keep blank if Step1 did not provide Production Site.
-            production_site = ""
 
-        labor_hours = row.get(labor_hours_col) if labor_hours_col else None
         direct_labor_hours = 0.0
-        semi_labor_hours = 0.0
         if labor_hours_col:
-            labor_hours = pd.to_numeric(labor_hours, errors="coerce")
-            direct_labor_hours = 0 if pd.isna(labor_hours) else float(labor_hours)
+            raw_labor_hours = pd.to_numeric(row.get(labor_hours_col), errors="coerce")
+            direct_labor_hours = 0 if pd.isna(raw_labor_hours) else float(raw_labor_hours)
 
+        if product_key not in consolidated_rows:
+            consolidated_rows[product_key] = {
+                "product_name": product_name,
+                "year": year,
+                "qty": 0.0,
+                "product_description": product_description,
+                "production_site": production_site,
+                "direct_labor_hours": 0.0,
+                "source_row_count": 0,
+            }
+        else:
+            duplicated_product_rows_merged += 1
+
+        item = consolidated_rows[product_key]
+        item["qty"] = float(item.get("qty", 0) or 0) + qty
+        item["direct_labor_hours"] = float(item.get("direct_labor_hours", 0) or 0) + direct_labor_hours
+        item["source_row_count"] = int(item.get("source_row_count", 0) or 0) + 1
+
+        # Keep the first non-empty descriptive fields.
+        if not item.get("product_description") and product_description:
+            item["product_description"] = product_description
+        if not item.get("production_site") and production_site:
+            item["production_site"] = production_site
+        if not item.get("year") and year:
+            item["year"] = year
+
+        source_valid_rows += 1
+
+    rows_to_write: list[Dict[str, Any]] = []
+    for material_key, item in consolidated_rows.items():
+        production_site = str(item.get("production_site") or "").strip()
+        direct_labor_hours = float(item.get("direct_labor_hours", 0) or 0)
+        labor_hours = None
+
+        if labor_hours_col:
             if working_hour_source == "include_semi":
-                material_key = _normalize_material(product_name)
                 site_key = str(production_site or "").strip().upper()
                 if rollup_by_site_material or rollup_by_material:
                     if (site_key, material_key) in rollup_by_site_material:
@@ -396,10 +436,27 @@ def generate_product_activity_bulk_file(
                 labor_hours = direct_labor_hours
 
             # 年度總工時等於 0 的產品不寫入 Bulk。
-            # 0.01、0.001 等任何非 0 小數仍需保留並寫入。
+            # 先合併再排除，避免同產品多筆有正負/空值時誤判。
             if labor_hours == 0:
-                excluded_zero_labor_hour_rows += 1
+                excluded_zero_labor_hour_rows += int(item.get("source_row_count", 1) or 1)
                 continue
+
+        rows_to_write.append({
+            "product_name": str(item.get("product_name") or "").strip(),
+            "year": int(item.get("year") or date.today().year),
+            "qty": float(item.get("qty", 0) or 0),
+            "product_description": str(item.get("product_description") or "").strip(),
+            "production_site": production_site,
+            "labor_hours": labor_hours,
+        })
+
+    for item in rows_to_write:
+        product_name = item["product_name"]
+        year = int(item["year"])
+        qty = item["qty"]
+        product_description = item["product_description"]
+        production_site = item["production_site"]
+        labor_hours = item["labor_hours"]
 
         # 分頁 1：Input Sheet Activity Data
         activity_ws.cell(activity_row, 1).value = product_name
@@ -440,6 +497,10 @@ def generate_product_activity_bulk_file(
         "excluded_wip_rows": int(excluded_wip_rows),
         "skipped_blank_rows": int(skipped_blank_rows),
         "excluded_zero_labor_hour_rows": int(excluded_zero_labor_hour_rows),
+        "step2_product_name_consolidation_enabled": True,
+        "valid_rows_before_consolidation": int(source_valid_rows),
+        "unique_product_names_after_consolidation": int(activity_row - DATA_START_ROW),
+        "duplicated_product_rows_merged": int(duplicated_product_rows_merged),
         "output_filename": output_path.name,
         "template_copy_mode": True,
         "product_description_from_material_description": True,
