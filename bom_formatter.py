@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V14_8_ALTITEM_USAGE_PROBABILITY"
+BOM_FORMATTER_VERSION = "CMP_V14_9_EXCLUDE_ZERO_USAGE_RAW_MATERIAL"
 
 
 DEFAULT_MAPPING = {
@@ -468,6 +468,24 @@ def _read_boms(
     used["bom_source_files"] = source_rows
     return merged, used
 
+def _exclude_zero_usage_rows(exploded: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Exclude true zero-usage raw material rows for Raw Material Bulk output.
+
+    Rule: rows whose final calculated usage equals exactly 0 are not exported
+    to raw_material_activity_data_bulk. Non-zero decimal usages are preserved.
+    """
+    if exploded is None or exploded.empty or "usage" not in exploded.columns:
+        return exploded.copy() if isinstance(exploded, pd.DataFrame) else pd.DataFrame(), 0
+
+    work = exploded.copy()
+    usage_numeric = pd.to_numeric(work["usage"], errors="coerce").fillna(0.0)
+    keep_mask = usage_numeric != 0
+    excluded_rows = int((~keep_mask).sum())
+    if excluded_rows:
+        work = work.loc[keep_mask].copy().reset_index(drop=True)
+    return work, excluded_rows
+
+
 def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     parent_set = set(df["_parent"].dropna().astype(str))
     component_set = set(df["_component"].dropna().astype(str))
@@ -565,7 +583,12 @@ def _write_raw_material_bulk_from_exploded(
     This keeps Module 2 template-driven: data is written by header name, not
     fixed Excel column positions. It is reused by the all-site export and the
     Production Site split export.
+
+    V14.9: true zero-usage raw material rows are excluded from Bulk output;
+    non-zero decimal usages are preserved.
     """
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+
     raw_material_template_path = Path(raw_material_template_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -666,6 +689,7 @@ def _write_raw_material_bulk_from_exploded(
         "raw_material_template_columns": raw_cols,
         "activity_rows": int(len(exploded)),
         "raw_materials": int(exploded["raw_material"].nunique()) if not exploded.empty else 0,
+        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
     }
 
 
@@ -680,6 +704,10 @@ def generate_raw_material_bulk_file(
 
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
     exploded, summary = _explode_bom(bom_df)
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    summary["activity_rows"] = int(len(exploded))
+    summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
 
     write_summary = _write_raw_material_bulk_from_exploded(
         exploded=exploded,
@@ -769,6 +797,10 @@ def generate_raw_material_bulk_files_by_site_zip(
 
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
     exploded, base_summary = _explode_bom(bom_df)
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    base_summary["activity_rows"] = int(len(exploded))
+    base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
 
     site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
 
