@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V14_7_STANDARD_BOM_MATERIAL_GROUP"
+BOM_FORMATTER_VERSION = "CMP_V14_8_ALTITEM_USAGE_PROBABILITY"
 
 
 DEFAULT_MAPPING = {
@@ -27,6 +27,8 @@ DEFAULT_MAPPING = {
     "description_col": "Component Description",
     "material_group_col": "Material group",
     "valid_from_col": "BOM Valid From",
+    "altitem_group_col": "Altitem group",
+    "usage_probability_col": "Usage probability%",
 }
 
 
@@ -75,6 +77,97 @@ def _safe_number(value: Any) -> float:
     except ValueError:
         return 0.0
 
+
+def _normalize_altitem_group(value: Any) -> str:
+    """Normalize SAP Altitem group values for grouping alternative materials.
+
+    Excel sometimes reads group values as 1.0 instead of 1.  Empty, zero,
+    and non-numeric values are treated as no alternative group.
+    """
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    if text.upper() in ["", "NAN", "NONE"]:
+        return ""
+    try:
+        number = float(text.replace(",", ""))
+    except ValueError:
+        return text
+    if number == 0:
+        return ""
+    if number.is_integer():
+        return str(int(number))
+    return str(number)
+
+
+def _usage_probability_ratio(value: Any) -> float | None:
+    """Convert Usage probability% to a multiplier.
+
+    Supports both SAP-style percent values (50 -> 0.5) and ratio values
+    already stored as decimals (0.5 -> 0.5). Blank/invalid values return
+    None so normal BOM quantity remains unchanged.
+    """
+    if pd.isna(value):
+        return None
+    text = str(value).strip().replace("%", "")
+    if text.upper() in ["", "NAN", "NONE"]:
+        return None
+    try:
+        number = float(text.replace(",", ""))
+    except ValueError:
+        return None
+    if number < 0:
+        return None
+    return number / 100.0 if number > 1 else number
+
+
+def _apply_altitem_usage_probability(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Apply alternative-item usage probability to CS03 quantity.
+
+    Rule: within the same parent material, rows with the same non-empty
+    Altitem group are alternative materials. For such duplicated groups,
+    effective quantity = CS03 Qty × Usage probability%.
+    """
+    work = df.copy()
+    if "_altitem_group" not in work.columns:
+        work["_altitem_group"] = ""
+    if "_usage_probability_ratio" not in work.columns:
+        work["_usage_probability_ratio"] = None
+
+    alt_mask = work["_altitem_group"].astype(str).str.strip() != ""
+    if not alt_mask.any():
+        work["_qty_original"] = work["_qty"]
+        work["_qty_adjusted_by_altitem"] = False
+        return work, {
+            "altitem_rows": 0,
+            "altitem_groups": 0,
+            "altitem_adjusted_rows": 0,
+            "altitem_probability_missing_rows": 0,
+        }
+
+    group_keys = ["_parent", "_altitem_group"]
+    group_sizes = work.groupby(group_keys, dropna=False)["_component"].transform("count")
+    duplicated_alt_group = alt_mask & (group_sizes > 1)
+    has_probability = work["_usage_probability_ratio"].apply(lambda x: x is not None)
+    apply_mask = duplicated_alt_group & has_probability
+
+    work["_qty_original"] = work["_qty"]
+    work.loc[apply_mask, "_qty"] = work.loc[apply_mask, "_qty"] * work.loc[apply_mask, "_usage_probability_ratio"].astype(float)
+    work["_qty_adjusted_by_altitem"] = apply_mask
+
+    alt_groups = (
+        work.loc[duplicated_alt_group, group_keys]
+        .drop_duplicates()
+        .shape[0]
+    )
+    missing_probability_rows = int((duplicated_alt_group & ~has_probability).sum())
+    return work, {
+        "altitem_rows": int(duplicated_alt_group.sum()),
+        "altitem_groups": int(alt_groups),
+        "altitem_adjusted_rows": int(apply_mask.sum()),
+        "altitem_probability_missing_rows": missing_probability_rows,
+        "altitem_rule": "Effective CS03 Qty = CS03 Qty × Usage probability% for duplicated Altitem group within the same Parent Node.",
+    }
 
 
 _XML_NUMERIC_CHAR_REF_RE = re.compile(rb"&#(?:x([0-9A-Fa-f]+)|([0-9]+));")
@@ -285,6 +378,8 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     description_col = _find_optional_column(df, m["description_col"])
     material_group_col = _find_optional_column(df, m["material_group_col"])
     valid_from_col = _find_optional_column(df, m["valid_from_col"])
+    altitem_group_col = _find_optional_column(df, m["altitem_group_col"])
+    usage_probability_col = _find_optional_column(df, m["usage_probability_col"])
 
     df = df.copy()
     df["_parent"] = df[parent_col].apply(_safe_text)
@@ -294,8 +389,11 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     df["_description"] = df[description_col].apply(_safe_text) if description_col else ""
     df["_material_group"] = df[material_group_col].apply(_safe_text) if material_group_col else ""
     df["_valid_from"] = df[valid_from_col].apply(_date_from_value) if valid_from_col else date(datetime.now().year, 1, 1)
+    df["_altitem_group"] = df[altitem_group_col].apply(_normalize_altitem_group) if altitem_group_col else ""
+    df["_usage_probability_ratio"] = df[usage_probability_col].apply(_usage_probability_ratio) if usage_probability_col else None
 
     df = df[(df["_parent"] != "") & (df["_component"] != "")].copy()
+    df, altitem_summary = _apply_altitem_usage_probability(df)
 
     used_columns = {
         "parent_col": parent_col,
@@ -305,6 +403,9 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
         "description_col": description_col or "",
         "material_group_col": material_group_col or "",
         "valid_from_col": valid_from_col or "",
+        "altitem_group_col": altitem_group_col or "",
+        "usage_probability_col": usage_probability_col or "",
+        **altitem_summary,
     }
     return df, used_columns
 
@@ -355,7 +456,7 @@ def _read_boms(
 
     merged = pd.concat(frames, ignore_index=True)
     before_dedup = int(len(merged))
-    dedup_subset = ["_parent", "_component", "_qty", "_uom", "_description", "_material_group", "_valid_from"]
+    dedup_subset = ["_parent", "_component", "_qty", "_uom", "_description", "_material_group", "_valid_from", "_altitem_group", "_usage_probability_ratio"]
     merged = merged.drop_duplicates(subset=dedup_subset, keep="first").reset_index(drop=True)
     after_dedup = int(len(merged))
 
