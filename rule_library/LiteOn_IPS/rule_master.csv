@@ -31,6 +31,7 @@
 11,Material Number Prefix,41002-,WIP,,,Y,Y,
 12,Description Contains,FG,WIP,,,N,N,
 12,Description Contains,SFG,WIP,,,Y,Y,
+13,Material Number Prefix,856,WIP,,,Y,Y,
 20,Description Contains,CZ A2,NB,NB,常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
 20,Series Prefix,SN,NB,NB,常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
 21,Series Prefix,FU,NB,NB,常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
@@ -49,7 +50,6 @@
 31.1,Description Contains,TOUCH PAD MODULE,TP,TP,常州廠(A9)-IPS,N,Y,
 31.2,Description Contains,TOUCHPAD MODULE,TP,TP,常州廠(A9)-IPS,N,Y,
 32,Series Prefix,SCMC,WIP,TP,常州廠(A9)-IPS,Y,Y,
-90,Description Contains,ASSY,WIP,,,Y,N,
 800.6,Material Number Prefix,SA-,DT Accessory,DT,越南海防廠-IPS,N,Y,3
 800.7,Material Number Prefix,SB-,DT Keyboard+Mouse,DT,越南海防廠-IPS,N,Y,3
 800.8,Material Number Prefix,SD-,DT Dongle,DT,越南海防廠-IPS,N,Y,3
