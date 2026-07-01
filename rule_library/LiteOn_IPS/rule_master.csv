@@ -49,7 +49,7 @@
 31.1,Description Contains,TOUCH PAD MODULE,TP,TP,常州廠(A9)-IPS,N,Y,
 31.2,Description Contains,TOUCHPAD MODULE,TP,TP,常州廠(A9)-IPS,N,Y,
 32,Series Prefix,SCMC,WIP,TP,常州廠(A9)-IPS,Y,Y,
-90,Description Contains,ASSY,WIP,,,Y,Y,
+90,Description Contains,ASSY,WIP,,,Y,N,
 997,Production Site Strict Rule Match,廣州石碣廠-IPS,,,廣州石碣廠-IPS,,Y,
 998,Production Site Strict Rule Match,越南海防廠-IPS,,,越南海防廠-IPS,,Y,
 999,Default,*,WIP,,,Y,Y,
