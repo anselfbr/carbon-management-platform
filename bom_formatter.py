@@ -1929,4 +1929,4 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V16_0_SUPPLIER_MASTER_CLEAN_PATCH"
+BOM_FORMATTER_VERSION = "CMP_V17_0_SUPPLIER_CORE_DATAFRAME_PATCH"
