@@ -255,6 +255,9 @@ def _date_from_value(value: Any) -> date:
     return parsed.date()
 
 
+def _year_start(d: date) -> date:
+    return date(d.year, 1, 1)
+
 def _year_end(d: date) -> date:
     return date(d.year, 12, 31)
 
@@ -752,7 +755,7 @@ def _write_raw_material_bulk_from_exploded(
 
         _write_template_value(activity_ws, row_idx, activity_cols["raw_name"], raw_material)
         _write_template_value(activity_ws, row_idx, activity_cols["raw_code"], raw_material)
-        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], valid_from)
+        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], _year_start(valid_from))
         _write_template_value(activity_ws, row_idx, activity_cols["end_date"], _year_end(valid_from))
         _write_template_value(activity_ws, row_idx, activity_cols["document_type"], document_type_value)
         _write_template_value(activity_ws, row_idx, activity_cols["document_number"], "")
@@ -1852,7 +1855,7 @@ def _write_raw_material_bulk_from_exploded(
         usage_value = float(r["usage"]) if not pd.isna(r["usage"]) else 0
         _write_template_value(activity_ws, row_idx, activity_cols["raw_name"], r["raw_material"])
         _write_template_value(activity_ws, row_idx, activity_cols["raw_code"], r["raw_material"])
-        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], valid_from)
+        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], _year_start(valid_from))
         _write_template_value(activity_ws, row_idx, activity_cols["end_date"], _year_end(valid_from))
         _write_template_value(activity_ws, row_idx, activity_cols["document_type"], document_type_value)
         _write_template_value(activity_ws, row_idx, activity_cols["document_number"], "")
