@@ -1742,6 +1742,11 @@ async def process_bom_expansion(request: Request):
     template_file = form.get("template_file")
     step1_file = form.get("step1_file")
 
+    supplier_uploads = []
+    for item in form.getlist("supplier_files") + form.getlist("supplier_file"):
+        if is_upload_file_like(item):
+            supplier_uploads.append(item)
+
     parent_col = str(form.get("parent_col") or "")
     component_col = str(form.get("component_col") or "")
     qty_col = str(form.get("qty_col") or "")
@@ -1783,6 +1788,14 @@ async def process_bom_expansion(request: Request):
                 status_code=400,
             )
 
+    for supplier_file in supplier_uploads:
+        filename = str(getattr(supplier_file, "filename", "") or "")
+        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse(
+                {"ok": False, "message": f"{filename} 不是 Supplier Excel 檔案"},
+                status_code=400,
+            )
+
     token = uuid.uuid4().hex[:10]
 
     bom_paths: list[Path] = []
@@ -1795,12 +1808,21 @@ async def process_bom_expansion(request: Request):
     template_path = UPLOAD_DIR / f"raw_material_template_{token}_{Path(template_file.filename).name}"
     output_path = OUTPUT_DIR / f"raw_material_activity_data_bulk_{token}.xlsx"
     working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{token}.xlsx"
+    supplier_bulk_template_path = BASE_DIR / "templates" / "supplier_bulk_create_template_v1.xlsx"
+    supplier_bulk_output_path = OUTPUT_DIR / f"supplier_bulk_create_{token}.xlsx"
     step1_path = None
+    supplier_paths: list[Path] = []
 
     template_path.write_bytes(await template_file.read())
     if step1_file is not None and getattr(step1_file, "filename", None):
         step1_path = UPLOAD_DIR / f"step1_for_rollup_{token}_{Path(step1_file.filename).name}"
         step1_path.write_bytes(await step1_file.read())
+
+    for idx, supplier_file in enumerate(supplier_uploads, start=1):
+        filename = str(getattr(supplier_file, "filename", "") or f"supplier_{idx}.xlsx")
+        supplier_path = UPLOAD_DIR / f"supplier_{token}_{idx}_{Path(filename).name}"
+        supplier_path.write_bytes(await supplier_file.read())
+        supplier_paths.append(supplier_path)
 
     mapping = {
         "parent_col": parent_col,
@@ -1821,6 +1843,9 @@ async def process_bom_expansion(request: Request):
                 token=token,
                 step1_output_path=step1_path,
                 mapping=mapping,
+                supplier_paths=supplier_paths,
+                supplier_bulk_template_path=supplier_bulk_template_path,
+                supplier_bulk_output_path=supplier_bulk_output_path,
             )
             output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
         else:
@@ -1829,6 +1854,9 @@ async def process_bom_expansion(request: Request):
                 raw_material_template_path=template_path,
                 output_path=output_path,
                 mapping=mapping,
+                supplier_paths=supplier_paths,
+                supplier_bulk_template_path=supplier_bulk_template_path,
+                supplier_bulk_output_path=supplier_bulk_output_path,
             )
         bom_structure_summary = export_bom_structure_file(
             bom_path=bom_paths,
@@ -1864,7 +1892,8 @@ async def process_bom_expansion(request: Request):
             summary["working_hour_rollup_download_url"] = ""
             summary["working_hour_rollup_rows"] = 0
 
-        summary["app_version"] = "CMP_V14_MULTI_BOM_XML_REPAIR"
+        summary["supplier_upload_files"] = len(supplier_paths)
+        summary["app_version"] = "CMP_V15_2_SUPPLIER_MASTER_BULK"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -1876,7 +1905,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V15_0_RULE_MASTER_ENGINE_SITE_PREFIX_WHITELIST",
+        "app_version": "CMP_V15_1_SUPPLIER_MAPPING",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),

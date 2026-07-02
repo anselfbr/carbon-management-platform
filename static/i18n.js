@@ -71,6 +71,14 @@
         "en": "Version 1.0",
         "zh": "版本 1.0"
     },
+    "uploadSupplierFiles": {
+        "en": "Upload Supplier Files",
+        "zh": "上傳供應商檔案"
+    },
+    "supplierFilesHint": {
+        "en": "Optional. Supports multiple Excel files. Uses Raw Material Code + Vendor number to write Supplier Name. Transportation Origin uses Supplier Address or Country + City + Street. Also exports supplier_bulk_create from the built-in template.",
+        "zh": "選填，可多檔上傳。系統會依原物料代碼與 Vendor number 寫入 Supplier Name；Transportation Origin 使用 Supplier Address，若無則使用 Country + City + Street，並由內建範本輸出 supplier_bulk_create。"
+    },
     "workOrderBatchPreparation": {
         "en": "Work order & batch preparation",
         "zh": "工單與批次資料準備"
@@ -242,6 +250,10 @@
     "downloadWorkingHourRollup": {
         "en": "Download Working Hour Roll-up",
         "zh": "下載工時 Roll-up"
+    },
+    "downloadSupplierBulk": {
+        "en": "Download Supplier Bulk Create",
+        "zh": "下載供應商建立 Bulk"
     },
     "processingBomExpansion": {
         "en": "Processing BOM Expansion...",
@@ -557,6 +569,10 @@
     "Product Data Preparation": "產品資料準備",
     "Rule Management": "規則管理",
     "BOM Expansion": "BOM 展開",
+    "Upload Supplier Files": "上傳供應商檔案",
+    "Optional. Supports multiple Excel files. Uses Raw Material Code + Vendor number to write Supplier Name. Transportation Origin uses Supplier Address or Country + City + Street. Also exports supplier_bulk_create from the built-in template.": "選填，可多檔上傳。系統會依原物料代碼與 Vendor number 寫入 Supplier Name；Transportation Origin 使用 Supplier Address，若無則使用 Country + City + Street，並由內建範本輸出 supplier_bulk_create。",
+  "Download Supplier Bulk Create": "下載供應商建立 Bulk",
+    "Matching supplier files and dropdown options...": "正在比對供應商檔案與下拉選項...",
     "Carbon Emission Factor Selection": "碳排放係數選擇",
     "PCF Calculation": "產品碳足跡計算",
     "Production Environment": "正式環境",
