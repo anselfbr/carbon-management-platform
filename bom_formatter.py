@@ -1545,11 +1545,13 @@ def generate_working_hour_rollup_file(
 # =========================================================
 
 SUPPLIER_BULK_SHEET_NAME = "Input Sheet"
+SUPPLIER_BULK_DROPDOWN_SHEET_NAME = "Dropdown Values"
 SUPPLIER_BULK_TEMPLATE_FILENAME = "supplier_bulk_create_template_v1.xlsx"
-SUPPLIER_BULK_NAME_ALIASES = ["Supplier Name", "supplier_name", "供應商名稱"]
+SUPPLIER_BULK_NAME_ALIASES = ["Supplier Name", "Supplier Name (optional)", "supplier_name", "供應商名稱"]
+SUPPLIER_BULK_DROPDOWN_NAME_ALIASES = ["Supplier Name (optional)", "Supplier Name", "supplier_name", "供應商名稱"]
 SUPPLIER_BULK_CODE_ALIASES = ["Supplier Code", "supplier_code", "Vendor", "Vendor Code", "供應商代碼"]
 SUPPLIER_BULK_COUNTRY_ALIASES = ["Country/Area", "Country", "Country Area", "country_area", "國家/地區", "國家"]
-SUPPLIER_BULK_ADDRESS_ALIASES = ["Supplier Address", "Supplier Address 1", "supplier_address", "供應商地址"]
+SUPPLIER_BULK_ADDRESS_ALIASES = ["Supplier Address", "Supplier Address (optional)", "Supplier Address 1", "supplier_address", "供應商地址"]
 SUPPLIER_BULK_UNIT_ALIASES = ["Unit Name", "unit_name", "Transportation Destination", "Production Site", "單位名稱", "廠區"]
 
 
@@ -1706,6 +1708,47 @@ def _supplier_name_from_dropdown(option: Any) -> str:
     return text
 
 
+def _extract_named_dropdown_values(wb, sheet_name: str, aliases: list[str]) -> list[str]:
+    """Extract list values from a named column in a Dropdown Values sheet.
+
+    Used for supplier_bulk_create: Supplier Name must be selected from
+    Dropdown Values / Supplier Name (optional), not guessed from vendor master
+    text. Header matching is tolerant for optional markers and spacing.
+    """
+    if sheet_name not in wb.sheetnames:
+        return []
+    ws = wb[sheet_name]
+    found_cols = _find_template_columns(ws, aliases)
+    col_idx = int(found_cols[0]) if found_cols else 0
+    values: list[str] = []
+    seen: set[str] = set()
+    if not col_idx:
+        return values
+    for row_idx in range(2, ws.max_row + 1):
+        text = _safe_text(ws.cell(row_idx, col_idx).value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        values.append(text)
+    return values
+
+
+def _get_first_non_empty(row: pd.Series, names: list[str]) -> str:
+    for name in names:
+        if name in row.index:
+            text = _safe_text(row.get(name))
+            if text:
+                return text
+    return ""
+
+
+def _infer_destination_from_supplier_option(option: Any) -> str:
+    text = _safe_text(option)
+    if "_" in text:
+        return text.split("_", 1)[0].strip()
+    return ""
+
+
 def _apply_supplier_mapping_to_exploded(
     exploded: pd.DataFrame,
     supplier_map: dict[str, list[dict[str, str]]],
@@ -1798,16 +1841,47 @@ def _write_supplier_bulk_create_file(
     }
     _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
 
+    supplier_bulk_dropdown_options = _extract_named_dropdown_values(
+        wb,
+        SUPPLIER_BULK_DROPDOWN_SHEET_NAME,
+        SUPPLIER_BULK_DROPDOWN_NAME_ALIASES,
+    )
+
     rows: list[dict[str, str]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
+    missing_supplier_name_dropdown = 0
     for _, row in expanded_with_suppliers.iterrows():
-        supplier_code = _normalize_vendor_code(row.get("supplier_code"))
+        supplier_code = _normalize_vendor_code(_get_first_non_empty(row, ["supplier_code", "Supplier Code", "vendor_code", "Vendor", "Vender"]))
         if not supplier_code:
             continue
-        supplier_name = _safe_text(row.get("supplier_master_name")) or _supplier_name_from_dropdown(row.get("supplier_name"))
-        country_area = _safe_text(row.get("supplier_country_area"))
-        supplier_address = _safe_text(row.get("supplier_address")) or _safe_text(row.get("transport_origin"))
-        unit_name = _safe_text(row.get("transport_destination"))
+
+        unit_name = _get_first_non_empty(row, [
+            "transport_destination",
+            "Transportation Destination",
+            "transportation_destination",
+            "production_site",
+            "Production Site",
+            "unit_name",
+            "Unit Name",
+        ])
+        if not unit_name:
+            unit_name = _infer_destination_from_supplier_option(row.get("supplier_name"))
+
+        supplier_name = _select_supplier_dropdown_value(
+            supplier_bulk_dropdown_options,
+            unit_name,
+            supplier_code,
+        )
+        if not supplier_name:
+            # Fallback for templates that do not include Dropdown Values / Supplier Name (optional).
+            # Keep raw_material_activity_data_bulk matched full dropdown value when available.
+            supplier_name = _safe_text(row.get("supplier_name"))
+        if not supplier_name:
+            missing_supplier_name_dropdown += 1
+            supplier_name = _safe_text(row.get("supplier_master_name"))
+
+        country_area = _get_first_non_empty(row, ["supplier_country_area", "Country/Area", "country_area", "Country"] )
+        supplier_address = _get_first_non_empty(row, ["supplier_address", "Supplier Address", "Supplier Address (optional)", "transport_origin", "Transportation Origin"] )
         key = (supplier_name, supplier_code, country_area, supplier_address, unit_name)
         if key in seen:
             continue
@@ -1835,6 +1909,8 @@ def _write_supplier_bulk_create_file(
         "supplier_bulk_filename": output_path.name,
         "supplier_bulk_download_url": f"/download/{output_path.name}",
         "supplier_bulk_template_columns": cols,
+        "supplier_bulk_dropdown_options": int(len(supplier_bulk_dropdown_options)),
+        "supplier_bulk_dropdown_missing_rows": int(missing_supplier_name_dropdown),
     }
 
 
@@ -2166,3 +2242,208 @@ def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ..
     }
 
 BOM_FORMATTER_VERSION = "CMP_V15_2_SUPPLIER_MASTER_BULK_INTERNAL_TEMPLATE"
+
+# =========================================================
+# V15.3 Hotfix
+# - Keep original Transportation Destination generation untouched.
+# - Read Supplier Name candidates from raw_materials_&_activity_data_template_v1 / Dropdown Values / Supplier Name (optional).
+# - Broaden header aliases for optional Transportation Destination/Origin labels.
+# =========================================================
+TRANSPORT_ORIGIN_ALIASES = list(dict.fromkeys(TRANSPORT_ORIGIN_ALIASES + [
+    "Transportation Origin (optional)", "Transport Origin", "Origin", "運輸起點(optional)",
+]))
+TRANSPORT_DESTINATION_ALIASES = list(dict.fromkeys(TRANSPORT_DESTINATION_ALIASES + [
+    "Transportation Destination (optional)", "Transport Destination", "Destination", "運輸終點(optional)",
+]))
+SUPPLIER_NAME_ALIASES = list(dict.fromkeys(SUPPLIER_NAME_ALIASES + [
+    "Supplier Name(optional)", "Supplier Name Optional", "Supplier Name（optional）",
+]))
+
+
+def _extract_supplier_dropdown_values(wb, ws=None, supplier_col: int | None = None) -> list[str]:
+    """Return Supplier Name candidates from the Raw Material Bulk template.
+
+    Requirement: Supplier Name options are stored in the uploaded
+    raw_materials_&_activity_data_template_v1 workbook, sheet "Dropdown Values",
+    column "Supplier Name (optional)". This is not treated as an Excel data
+    validation dependency; the visible list itself is the source of truth.
+    """
+    values: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = _safe_text(value)
+        if text and text not in seen:
+            seen.add(text)
+            values.append(text)
+
+    # Primary source: Dropdown Values / Supplier Name (optional)
+    if "Dropdown Values" in wb.sheetnames:
+        dropdown_ws = wb["Dropdown Values"]
+        candidate_cols = _find_template_columns(
+            dropdown_ws,
+            ["Supplier Name (optional)", "Supplier Name(optional)", "Supplier Name", "supplier_name", "供應商名稱"],
+            header_rows=5,
+        )
+        for col_idx in candidate_cols[:1]:
+            for row_idx in range(2, dropdown_ws.max_row + 1):
+                add(dropdown_ws.cell(row_idx, int(col_idx)).value)
+        if values:
+            return values
+
+    # Fallback: old template data-validation source, kept only for compatibility.
+    if ws is None or not supplier_col:
+        return values
+
+    def read_formula_list(formula: str) -> None:
+        ref = str(formula or "").strip()
+        if ref.startswith('"') and ref.endswith('"'):
+            for item in ref[1:-1].split(','):
+                add(item)
+            return
+        ref = ref.lstrip('=')
+        try:
+            if '!' in ref:
+                sheet_name, cell_range = ref.split('!', 1)
+                sheet_name = sheet_name.strip("'")
+            else:
+                dn = wb.defined_names.get(ref)
+                if dn is None:
+                    return
+                for title, coord in dn.destinations:
+                    sheet_name, cell_range = title, coord
+                    break
+                else:
+                    return
+            sheet = wb[sheet_name]
+            for row in sheet[cell_range.replace('$', '')]:
+                cells = row if isinstance(row, tuple) else (row,)
+                for cell in cells:
+                    add(cell.value)
+        except Exception:
+            return
+
+    for dv in getattr(ws, 'data_validations', []).dataValidation:
+        if getattr(dv, 'type', None) != 'list':
+            continue
+        applies = False
+        for cell_range in dv.sqref.ranges:
+            if cell_range.min_col <= int(supplier_col) <= cell_range.max_col and cell_range.max_row >= DATA_START_ROW:
+                applies = True
+                break
+        if applies:
+            read_formula_list(dv.formula1)
+    return values
+
+
+def _select_supplier_dropdown_value(options: list[str], destination: Any, vendor_code: Any) -> str:
+    dest = _safe_text(destination)
+    dest_compact = re.sub(r"\s+", "", dest).upper()
+    vendor = _normalize_vendor_code(vendor_code)
+    if not vendor:
+        return ""
+
+    candidates: list[str] = []
+    for option in options or []:
+        text = _safe_text(option)
+        compact = re.sub(r"\s+", "", text).upper()
+        has_vendor = vendor in compact
+        # Supplier values look like: 越南海防廠-IPS_供應商名稱 - 01W-191310
+        option_dest = text.split("_", 1)[0].strip() if "_" in text else ""
+        option_dest_compact = re.sub(r"\s+", "", option_dest).upper()
+        has_dest = bool(dest_compact) and (
+            dest_compact == option_dest_compact or dest_compact in compact or option_dest_compact in dest_compact
+        )
+        if has_vendor and has_dest:
+            candidates.append(text)
+
+    if candidates:
+        suffix_matches = [c for c in candidates if re.search(r"-\s*[^-]*" + re.escape(vendor) + r"\s*$", c, flags=re.I)]
+        return suffix_matches[0] if suffix_matches else candidates[0]
+    return ""
+
+
+def _apply_supplier_mapping_to_exploded(
+    exploded: pd.DataFrame,
+    supplier_map: dict[str, list[dict[str, str]]],
+    supplier_options: list[str],
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Expand raw-material rows by suppliers without changing original destination.
+
+    Transportation Destination must remain the value that Module 2 already
+    assigned from Step1 Production Site. Supplier logic may read it, but must not
+    blank or overwrite it.
+    """
+    work = exploded.copy()
+    for col in ["supplier_name", "transport_origin", "supplier_code", "supplier_master_name", "supplier_country_area", "supplier_address"]:
+        if col not in work.columns:
+            work[col] = ""
+
+    matched_source_rows = 0
+    expanded_rows = 0
+    dropdown_matched = 0
+    missing_dropdown = 0
+    output_rows: list[dict[str, Any]] = []
+
+    if work.empty or not supplier_map:
+        return work, {
+            "supplier_matched_rows": 0,
+            "supplier_expanded_rows": 0,
+            "supplier_dropdown_matched_rows": 0,
+            "supplier_dropdown_missing_rows": 0,
+        }
+
+    for _, row in work.iterrows():
+        original_row = row.to_dict()
+        raw_key = _normalize_material_key(row.get("raw_material"))
+        destination = _safe_text(row.get("transport_destination"))
+        suppliers = supplier_map.get(raw_key) or []
+        if not suppliers:
+            output_rows.append(original_row)
+            continue
+
+        matched_source_rows += 1
+        for info in suppliers:
+            new_row = dict(original_row)
+            # Preserve original Destination exactly; never replace with supplier data.
+            new_row["transport_destination"] = destination
+            supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
+            new_row["transport_origin"] = supplier_address
+            new_row["supplier_code"] = info.get("supplier_code", "") or info.get("vendor_code", "")
+            new_row["supplier_master_name"] = info.get("supplier_master_name", "")
+            new_row["supplier_country_area"] = info.get("country_area", "")
+            new_row["supplier_address"] = supplier_address
+            supplier_value = _select_supplier_dropdown_value(
+                supplier_options,
+                destination,
+                info.get("vendor_code", "") or info.get("supplier_code", ""),
+            )
+            if supplier_value:
+                dropdown_matched += 1
+                new_row["supplier_name"] = supplier_value
+                if not new_row["supplier_master_name"]:
+                    new_row["supplier_master_name"] = _supplier_name_from_dropdown(supplier_value)
+            else:
+                missing_dropdown += 1
+                new_row["supplier_name"] = ""
+            output_rows.append(new_row)
+            expanded_rows += 1
+
+    if output_rows:
+        ordered_columns = list(dict.fromkeys(list(work.columns) + [
+            "supplier_code", "supplier_master_name", "supplier_country_area", "supplier_address"
+        ]))
+        work = pd.DataFrame(output_rows)
+        for col in ordered_columns:
+            if col not in work.columns:
+                work[col] = ""
+        work = work[ordered_columns]
+
+    return work, {
+        "supplier_matched_rows": int(matched_source_rows),
+        "supplier_expanded_rows": int(expanded_rows),
+        "supplier_dropdown_matched_rows": int(dropdown_matched),
+        "supplier_dropdown_missing_rows": int(missing_dropdown),
+    }
+
+BOM_FORMATTER_VERSION = "CMP_V15_3_SUPPLIER_DESTINATION_HOTFIX"
