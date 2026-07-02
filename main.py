@@ -1790,7 +1790,7 @@ async def process_bom_expansion(request: Request):
 
     for supplier_file in supplier_uploads:
         filename = str(getattr(supplier_file, "filename", "") or "")
-        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        if filename and not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
             return JSONResponse(
                 {"ok": False, "message": f"{filename} 不是 Supplier Excel 檔案"},
                 status_code=400,
@@ -1893,7 +1893,7 @@ async def process_bom_expansion(request: Request):
             summary["working_hour_rollup_rows"] = 0
 
         summary["supplier_upload_files"] = len(supplier_paths)
-        summary["app_version"] = "CMP_V15_2_SUPPLIER_MASTER_BULK"
+        summary["app_version"] = "CMP_V16_0_SUPPLIER_MASTER_CLEAN_PATCH"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -1905,7 +1905,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V15_1_SUPPLIER_MAPPING",
+        "app_version": "CMP_V16_0_SUPPLIER_MASTER_CLEAN_PATCH",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),

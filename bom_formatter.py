@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V14_11_SUPPLIER_ORIGIN_MAPPING"
+BOM_FORMATTER_VERSION = "CMP_V14_10_EXCLUDE_ZERO_USAGE_AND_ZERO_TOTAL_HOURS"
 
 
 DEFAULT_MAPPING = {
@@ -330,242 +330,6 @@ DATA_SOURCE_OTHER_ALIASES = ["data_source_other", "Data Source Other", "其他�
 TRANSPORT_ORIGIN_ALIASES = ["transportation_origin", "Transportation Origin", "運輸起點"]
 TRANSPORT_DESTINATION_ALIASES = ["transportation_destination", "Transportation Destination", "運輸終點"]
 SUPPLIER_NAME_ALIASES = ["supplier_name", "Supplier Name (optional)", "Supplier Name", "供應商名稱"]
-
-
-SUPPLIER_MATERIAL_ALIASES = [
-    "Raw Material Code", "Raw Material Number", "Material", "Material Number", "Component", "Component Number",
-    "物料", "料號", "原物料代碼", "原料代碼", "元件料號"
-]
-SUPPLIER_VENDOR_ALIASES = [
-    "Vendor", "Vender", "Vendor Code", "Vendor Number", "Supplier Vendor", "供應商代碼", "供應商編號", "供應商", "廠商代碼"
-]
-SUPPLIER_ADDRESS_ALIASES = [
-    "Supplier Address", "Supplier Address 1", "Supplier Address1", "Supplier Address Line1",
-    "Supplier Address (English)", "Supplier Address (Local)", "Supplier Addr", "Supplier_Address",
-    "供應商地址", "廠商地址"
-]
-
-def _normalize_vendor_code(value: Any) -> str:
-    text = _safe_text(value).upper()
-    if text.endswith(".0"):
-        text = text[:-2]
-    text = re.sub(r"\s+", "", text)
-    return text
-
-def _find_any_dataframe_column(df: pd.DataFrame, aliases: list[str]) -> str | None:
-    normalized = {_normalize_template_header(c): c for c in df.columns}
-    for alias in aliases:
-        key = _normalize_template_header(alias)
-        if key in normalized:
-            return normalized[key]
-    return None
-
-def _find_supplier_address_column(df: pd.DataFrame) -> str | None:
-    """Find Supplier Address with tolerant/fuzzy header matching.
-
-    Accepts exact aliases and variants whose normalized header contains both
-    "supplier" and "address" (case-insensitive; spaces, underscores,
-    punctuation and brackets are ignored by _normalize_template_header).
-    """
-    exact = _find_any_dataframe_column(df, SUPPLIER_ADDRESS_ALIASES)
-    if exact:
-        return exact
-    for col in df.columns:
-        key = _normalize_template_header(col)
-        if "supplier" in key and "address" in key:
-            return col
-    return None
-
-def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ...] | None) -> tuple[dict[str, list[dict[str, str]]], Dict[str, Any]]:
-    """Read optional supplier files and return raw-material -> supplier records map.
-
-    Required fields are raw material code and vendor number. Transportation
-    Origin is populated from the supplier file column whose header matches
-    Supplier Address by tolerant/fuzzy matching. Multiple supplier rows for the
-    same raw material are preserved so one raw material can be expanded to
-    multiple output rows.
-    """
-    if not supplier_paths:
-        return {}, {"supplier_files": 0, "supplier_rows": 0, "supplier_mapped_materials": 0, "supplier_mapped_suppliers": 0}
-
-    records: dict[str, list[dict[str, str]]] = {}
-    seen: set[tuple[str, str, str]] = set()
-    total_rows = 0
-    skipped_files: list[str] = []
-
-    for path in supplier_paths:
-        path = Path(path)
-        try:
-            df = pd.read_excel(path, sheet_name=0, dtype=object)
-        except Exception as exc:
-            skipped_files.append(f"{path.name}: {exc}")
-            continue
-
-        material_col = _find_any_dataframe_column(df, SUPPLIER_MATERIAL_ALIASES)
-        vendor_col = _find_any_dataframe_column(df, SUPPLIER_VENDOR_ALIASES)
-        address_col = _find_supplier_address_column(df)
-
-        if not material_col or not vendor_col:
-            skipped_files.append(f"{path.name}: missing material/vendor column")
-            continue
-
-        total_rows += int(len(df))
-        for _, row in df.iterrows():
-            material_key = _normalize_material_key(row.get(material_col))
-            vendor_code = _normalize_vendor_code(row.get(vendor_col))
-            if not material_key or not vendor_code:
-                continue
-            supplier_record = {
-                "vendor_code": vendor_code,
-                "transport_origin": _safe_text(row.get(address_col)) if address_col else "",
-            }
-            dedupe_key = (material_key, supplier_record["vendor_code"], supplier_record["transport_origin"])
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            records.setdefault(material_key, []).append(supplier_record)
-
-    return records, {
-        "supplier_files": int(len(supplier_paths)),
-        "supplier_rows": int(total_rows),
-        "supplier_mapped_materials": int(len(records)),
-        "supplier_mapped_suppliers": int(sum(len(v) for v in records.values())),
-        "supplier_skipped_files": skipped_files,
-    }
-
-def _extract_supplier_dropdown_values(wb, ws, supplier_col: int) -> list[str]:
-    values: list[str] = []
-    seen: set[str] = set()
-
-    def add(value: Any) -> None:
-        text = _safe_text(value)
-        if text and text not in seen:
-            seen.add(text)
-            values.append(text)
-
-    def read_formula_list(formula: str) -> None:
-        ref = str(formula or "").strip()
-        if ref.startswith('"') and ref.endswith('"'):
-            for item in ref[1:-1].split(','):
-                add(item)
-            return
-        ref = ref.lstrip('=')
-        try:
-            if '!' in ref:
-                sheet_name, cell_range = ref.split('!', 1)
-                sheet_name = sheet_name.strip("'")
-            else:
-                # defined name support
-                dn = wb.defined_names.get(ref)
-                if dn is None:
-                    return
-                for title, coord in dn.destinations:
-                    sheet_name, cell_range = title, coord
-                    break
-                else:
-                    return
-            sheet = wb[sheet_name]
-            for row in sheet[cell_range.replace('$', '')]:
-                cells = row if isinstance(row, tuple) else (row,)
-                for cell in cells:
-                    add(cell.value)
-        except Exception:
-            return
-
-    for dv in getattr(ws, 'data_validations', []).dataValidation:
-        if getattr(dv, 'type', None) != 'list':
-            continue
-        applies = False
-        for cell_range in dv.sqref.ranges:
-            if cell_range.min_col <= supplier_col <= cell_range.max_col and cell_range.max_row >= DATA_START_ROW:
-                applies = True
-                break
-        if applies:
-            read_formula_list(dv.formula1)
-
-    return values
-
-def _select_supplier_dropdown_value(options: list[str], destination: Any, vendor_code: Any) -> str:
-    dest = _safe_text(destination)
-    vendor = _normalize_vendor_code(vendor_code)
-    if not vendor:
-        return ""
-
-    candidates = []
-    for option in options:
-        text = _safe_text(option)
-        compact = re.sub(r"\s+", "", text).upper()
-        has_vendor = vendor in compact
-        has_dest = bool(dest) and dest in text
-        if has_vendor and has_dest:
-            candidates.append(text)
-
-    if candidates:
-        # Prefer options ending with the vendor number pattern, e.g. " - 01W-191310".
-        suffix_matches = [c for c in candidates if re.search(r"-\s*" + re.escape(vendor) + r"\s*$", c, flags=re.I)]
-        return suffix_matches[0] if suffix_matches else candidates[0]
-    return ""
-
-def _apply_supplier_mapping_to_exploded(
-    exploded: pd.DataFrame,
-    supplier_map: dict[str, list[dict[str, str]]],
-    supplier_options: list[str],
-) -> tuple[pd.DataFrame, Dict[str, Any]]:
-    work = exploded.copy()
-    if "supplier_name" not in work.columns:
-        work["supplier_name"] = ""
-    if "transport_origin" not in work.columns:
-        work["transport_origin"] = ""
-
-    matched_source_rows = 0
-    expanded_rows = 0
-    dropdown_matched = 0
-    missing_dropdown = 0
-    output_rows: list[dict[str, Any]] = []
-
-    if work.empty or not supplier_map:
-        return work, {
-            "supplier_matched_rows": 0,
-            "supplier_expanded_rows": 0,
-            "supplier_dropdown_matched_rows": 0,
-            "supplier_dropdown_missing_rows": 0,
-        }
-
-    for _, row in work.iterrows():
-        raw_key = _normalize_material_key(row.get("raw_material"))
-        suppliers = supplier_map.get(raw_key) or []
-        if not suppliers:
-            output_rows.append(row.to_dict())
-            continue
-
-        matched_source_rows += 1
-        for info in suppliers:
-            new_row = row.to_dict()
-            new_row["transport_origin"] = info.get("transport_origin", "")
-            supplier_value = _select_supplier_dropdown_value(
-                supplier_options,
-                row.get("transport_destination", ""),
-                info.get("vendor_code", ""),
-            )
-            if supplier_value:
-                dropdown_matched += 1
-                new_row["supplier_name"] = supplier_value
-            else:
-                missing_dropdown += 1
-                new_row["supplier_name"] = ""
-            output_rows.append(new_row)
-            expanded_rows += 1
-
-    if output_rows:
-        work = pd.DataFrame(output_rows, columns=work.columns)
-
-    return work, {
-        "supplier_matched_rows": int(matched_source_rows),
-        "supplier_expanded_rows": int(expanded_rows),
-        "supplier_dropdown_matched_rows": int(dropdown_matched),
-        "supplier_dropdown_missing_rows": int(missing_dropdown),
-    }
-
 PRODUCT_LINK_ALIASES = ["allocated_target_product_service", "Allocated Target Product/Service", "Target Product", "Product Code", "Product Name", "產品代碼", "產品名稱"]
 COMMENT_ALIASES = ["comment", "Comment (optional)", "Comment", "備註"]
 MATERIAL_GROUP_ALIASES = ["material_group", "Material Group", "Material group", "物料群組"]
@@ -920,7 +684,6 @@ def _write_raw_material_bulk_from_exploded(
     exploded: pd.DataFrame,
     raw_material_template_path: str | Path,
     output_path: str | Path,
-    supplier_map: dict[str, dict[str, str]] | None = None,
 ) -> Dict[str, Any]:
     """Write Raw Material Bulk workbook from an already exploded BOM DataFrame.
 
@@ -973,12 +736,6 @@ def _write_raw_material_bulk_from_exploded(
     }
 
     document_type_value = _document_type_for_template(wb)
-    supplier_options = _extract_supplier_dropdown_values(wb, activity_ws, activity_cols["supplier_name"])
-    exploded, supplier_write_summary = _apply_supplier_mapping_to_exploded(
-        exploded=exploded,
-        supplier_map=supplier_map or {},
-        supplier_options=supplier_options,
-    )
 
     _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
     _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()))
@@ -1003,9 +760,9 @@ def _write_raw_material_bulk_from_exploded(
         _write_template_value(activity_ws, row_idx, activity_cols["unit"], r["unit"])
         _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
         _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], r.get("transport_origin", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], r.get("transport_destination", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], r.get("supplier_name", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["target_product"], target_product)
         _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
@@ -1033,17 +790,14 @@ def _write_raw_material_bulk_from_exploded(
 
     wb.save(output_path)
 
-    result = {
+    return {
         "output_filename": output_path.name,
         "activity_template_columns": activity_cols,
         "raw_material_template_columns": raw_cols,
         "activity_rows": int(len(exploded)),
         "raw_materials": int(exploded["raw_material"].nunique()) if not exploded.empty else 0,
         "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
-        "supplier_dropdown_options": int(len(supplier_options)),
     }
-    result.update(supplier_write_summary)
-    return result
 
 
 def generate_raw_material_bulk_file(
@@ -1051,13 +805,11 @@ def generate_raw_material_bulk_file(
     raw_material_template_path: str | Path,
     output_path: str | Path,
     mapping: dict[str, str | None] | None = None,
-    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
 ) -> Dict[str, Any]:
     """Generate one Raw Material Bulk workbook for all target products."""
     output_path = Path(output_path)
 
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
-    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
     exploded, summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
@@ -1068,10 +820,8 @@ def generate_raw_material_bulk_file(
         exploded=exploded,
         raw_material_template_path=raw_material_template_path,
         output_path=output_path,
-        supplier_map=supplier_map,
     )
     summary.update(write_summary)
-    summary.update(supplier_summary)
 
     summary["used_columns"] = used_columns
     summary["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
@@ -1140,7 +890,6 @@ def generate_raw_material_bulk_files_by_site_zip(
     token: str,
     step1_output_path: str | Path,
     mapping: dict[str, str | None] | None = None,
-    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
 ) -> Dict[str, Any]:
     """Generate one Raw Material Bulk workbook per Production Site and ZIP them.
 
@@ -1154,7 +903,6 @@ def generate_raw_material_bulk_files_by_site_zip(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
-    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
@@ -1194,10 +942,6 @@ def generate_raw_material_bulk_files_by_site_zip(
     site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
 
     generated_files: list[dict[str, Any]] = []
-    supplier_matched_total = 0
-    supplier_dropdown_matched_total = 0
-    supplier_dropdown_missing_total = 0
-    supplier_dropdown_options_total = 0
     zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
     zip_path = output_dir / zip_filename
 
@@ -1212,13 +956,7 @@ def generate_raw_material_bulk_files_by_site_zip(
                 exploded=site_df,
                 raw_material_template_path=raw_material_template_path,
                 output_path=file_path,
-                supplier_map=supplier_map,
             )
-            supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
-            supplier_dropdown_matched_total += int(write_summary.get("supplier_dropdown_matched_rows", 0))
-            supplier_dropdown_missing_total += int(write_summary.get("supplier_dropdown_missing_rows", 0))
-            supplier_dropdown_options_total = max(supplier_dropdown_options_total, int(write_summary.get("supplier_dropdown_options", 0)))
-
             zf.write(file_path, arcname=file_path.name)
             generated_files.append({
                 "production_site": site,
@@ -1242,13 +980,8 @@ def generate_raw_material_bulk_files_by_site_zip(
         "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
         "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
         "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
-        "supplier_matched_rows": int(supplier_matched_total),
-        "supplier_dropdown_matched_rows": int(supplier_dropdown_matched_total),
-        "supplier_dropdown_missing_rows": int(supplier_dropdown_missing_total),
-        "supplier_dropdown_options": int(supplier_dropdown_options_total),
     })
     summary.update(step1_summary)
-    summary.update(supplier_summary)
     return summary
 
 
@@ -1540,74 +1273,112 @@ def generate_working_hour_rollup_file(
     }
 
 # =========================================================
-# Module 2 Supplier Master + Supplier Bulk Export Override
-# V15.1 added after original definitions to preserve backward compatibility.
+# Module 2 Supplier Master + Supplier Bulk Export
+# Clean implementation based on official baseline.
 # =========================================================
 
 SUPPLIER_BULK_SHEET_NAME = "Input Sheet"
-SUPPLIER_BULK_DROPDOWN_SHEET_NAME = "Dropdown Values"
 SUPPLIER_BULK_TEMPLATE_FILENAME = "supplier_bulk_create_template_v1.xlsx"
-SUPPLIER_BULK_NAME_ALIASES = ["Supplier Name", "Supplier Name (optional)", "supplier_name", "供應商名稱"]
-SUPPLIER_BULK_DROPDOWN_NAME_ALIASES = ["Supplier Name (optional)", "Supplier Name", "supplier_name", "供應商名稱"]
-SUPPLIER_BULK_CODE_ALIASES = ["Supplier Code", "supplier_code", "Vendor", "Vendor Code", "供應商代碼"]
-SUPPLIER_BULK_COUNTRY_ALIASES = ["Country/Area", "Country", "Country Area", "country_area", "國家/地區", "國家"]
-SUPPLIER_BULK_ADDRESS_ALIASES = ["Supplier Address", "Supplier Address (optional)", "Supplier Address 1", "supplier_address", "供應商地址"]
-SUPPLIER_BULK_UNIT_ALIASES = ["Unit Name", "unit_name", "Transportation Destination", "Production Site", "單位名稱", "廠區"]
+
+SUPPLIER_MATERIAL_ALIASES = [
+    "Raw Material Code", "Raw Material Number", "Material", "Material Number", "Component", "Component Number",
+    "物料", "料號", "原物料代碼", "原料代碼", "元件料號",
+]
+SUPPLIER_VENDOR_ALIASES = [
+    "Vendor", "Vender", "Vendor Code", "Vendor Number", "Supplier Vendor", "供應商代碼", "供應商編號", "廠商代碼",
+]
+SUPPLIER_ADDRESS_ALIASES = [
+    "Supplier Address", "Supplier Address 1", "Supplier Address1", "Supplier Address Line1",
+    "Supplier Address (English)", "Supplier Address (Local)", "Supplier Addr", "Supplier_Address",
+    "供應商地址", "廠商地址",
+]
+SUPPLIER_BULK_NAME_ALIASES = ["Supplier Name", "Supplier Name (optional)", "Supplier Name(optional)", "供應商名稱"]
+SUPPLIER_BULK_CODE_ALIASES = ["Supplier Code", "Supplier Code (optional)", "Vendor", "Vendor Code", "供應商代碼"]
+SUPPLIER_BULK_COUNTRY_ALIASES = ["Country/Area", "Country / Area", "Country", "Country Area", "國家/地區", "國家"]
+SUPPLIER_BULK_ADDRESS_ALIASES = ["Supplier Address", "Supplier Address (optional)", "Supplier Address1", "供應商地址"]
+SUPPLIER_BULK_UNIT_ALIASES = ["Unit Name", "Unit", "Transportation Destination", "Production Site", "單位名稱", "廠區"]
+
+# Broaden raw material template header aliases while keeping old behavior.
+TRANSPORT_ORIGIN_ALIASES = list(dict.fromkeys(TRANSPORT_ORIGIN_ALIASES + [
+    "Transportation Origin (optional)", "Transport Origin", "Origin", "運輸起點(optional)",
+]))
+TRANSPORT_DESTINATION_ALIASES = list(dict.fromkeys(TRANSPORT_DESTINATION_ALIASES + [
+    "Transportation Destination (optional)", "Transport Destination", "Destination", "運輸終點(optional)",
+]))
+SUPPLIER_NAME_ALIASES = list(dict.fromkeys(SUPPLIER_NAME_ALIASES + [
+    "Supplier Name(optional)", "Supplier Name Optional", "Supplier Name（optional）",
+]))
+
+
+def _normalize_vendor_code(value: Any) -> str:
+    text = _safe_text(value).upper()
+    if text.endswith(".0"):
+        text = text[:-2]
+    text = re.sub(r"\s+", "", text)
+    return text
 
 
 def _supplier_header_key(value: Any) -> str:
     return re.sub(r"[^0-9A-Z]+", "", str(value or "").upper())
 
 
+def _find_any_dataframe_column(df: pd.DataFrame, aliases: list[str]) -> str | None:
+    normalized = {_normalize_template_header(c): c for c in df.columns}
+    for alias in aliases:
+        key = _normalize_template_header(alias)
+        if key in normalized:
+            return normalized[key]
+    return None
+
+
 def _find_supplier_col_by_rule(df: pd.DataFrame, kind: str) -> str | None:
-    cols = list(df.columns)
-    keyed = [(_supplier_header_key(c), c) for c in cols]
-
-    def has_any(key: str, words: list[str]) -> bool:
-        return any(w in key for w in words)
-
+    keyed = [(_supplier_header_key(c), c) for c in df.columns]
     if kind == "material":
         for key, col in keyed:
             if "MATERIAL" in key and not any(x in key for x in ["GROUP", "DESC", "DESCRIPTION"]):
                 return col
         return _find_any_dataframe_column(df, SUPPLIER_MATERIAL_ALIASES)
-
     if kind == "vendor":
         for key, col in keyed:
-            if key.endswith("VENDOR") or "VENDORCODE" in key or "VENDORNUMBER" in key or key.endswith("VENDER"):
+            if key.endswith("VENDOR") or key.endswith("VENDER") or "VENDORCODE" in key or "VENDORNUMBER" in key:
                 return col
         return _find_any_dataframe_column(df, SUPPLIER_VENDOR_ALIASES)
-
     if kind == "vendor_name":
         for key, col in keyed:
             if "VENDORNAME" in key or "SUPPLIERNAME" in key or "SEARCHTERM" in key:
                 return col
         return None
-
     if kind == "country":
         for key, col in keyed:
             if key.endswith("COUNTRY") or "COUNTRYAREA" in key or key == "COUNTRYREGION":
                 return col
         return None
-
     if kind == "city":
         for key, col in keyed:
             if key.endswith("CITY") or key == "CITY":
                 return col
         return None
-
     if kind == "street":
         for key, col in keyed:
             if "STREET" in key or "ADDRESSLINE" in key:
                 return col
         return None
-
     if kind == "incoterms2":
         for key, col in keyed:
             if "INCOTERMS" in key and ("PART2" in key or key.endswith("2")):
                 return col
         return None
+    return None
 
+
+def _find_supplier_address_column(df: pd.DataFrame) -> str | None:
+    exact = _find_any_dataframe_column(df, SUPPLIER_ADDRESS_ALIASES)
+    if exact:
+        return exact
+    for col in df.columns:
+        key = _normalize_template_header(col)
+        if "supplier" in key and "address" in key:
+            return col
     return None
 
 
@@ -1615,7 +1386,7 @@ def _build_supplier_address(row: pd.Series, address_col: str | None, country_col
     address = _safe_text(row.get(address_col)) if address_col else ""
     if address:
         return address
-    parts = []
+    parts: list[str] = []
     for col in [country_col, city_col, street_col]:
         text = _safe_text(row.get(col)) if col else ""
         if text and text not in parts:
@@ -1625,557 +1396,23 @@ def _build_supplier_address(row: pd.Series, address_col: str | None, country_col
     return _safe_text(row.get(incoterms2_col)) if incoterms2_col else ""
 
 
-def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ...] | None) -> tuple[dict[str, list[dict[str, str]]], Dict[str, Any]]:
-    """Read one or many supplier masters and normalize to Material -> suppliers.
-
-    Supports both tested IPS A/B formats and future SAP-like exports by tolerant
-    header detection. Multiple suppliers for one material are preserved.
-    """
-    if not supplier_paths:
-        return {}, {
-            "supplier_files": 0,
-            "supplier_rows": 0,
-            "supplier_mapped_materials": 0,
-            "supplier_mapped_suppliers": 0,
-            "supplier_skipped_files": [],
-        }
-
-    records: dict[str, list[dict[str, str]]] = {}
-    seen: set[tuple[str, str, str, str, str]] = set()
-    total_rows = 0
-    skipped_files: list[str] = []
-
-    for path in supplier_paths:
-        path = Path(path)
-        try:
-            df = pd.read_excel(path, sheet_name=0, dtype=object)
-        except Exception as exc:
-            skipped_files.append(f"{path.name}: {exc}")
-            continue
-
-        material_col = _find_supplier_col_by_rule(df, "material")
-        vendor_col = _find_supplier_col_by_rule(df, "vendor")
-        vendor_name_col = _find_supplier_col_by_rule(df, "vendor_name")
-        address_col = _find_supplier_address_column(df)
-        country_col = _find_supplier_col_by_rule(df, "country")
-        city_col = _find_supplier_col_by_rule(df, "city")
-        street_col = _find_supplier_col_by_rule(df, "street")
-        incoterms2_col = _find_supplier_col_by_rule(df, "incoterms2")
-
-        if not material_col or not vendor_col:
-            skipped_files.append(f"{path.name}: missing material/vendor column")
-            continue
-
-        total_rows += int(len(df))
-        for _, row in df.iterrows():
-            material_key = _normalize_material_key(row.get(material_col))
-            vendor_code = _normalize_vendor_code(row.get(vendor_col))
-            if not material_key or not vendor_code:
-                continue
-            vendor_name = _safe_text(row.get(vendor_name_col)) if vendor_name_col else ""
-            country = _safe_text(row.get(country_col)) if country_col else ""
-            supplier_address = _build_supplier_address(row, address_col, country_col, city_col, street_col, incoterms2_col)
-            supplier_record = {
-                "vendor_code": vendor_code,
-                "supplier_code": vendor_code,
-                "supplier_master_name": vendor_name,
-                "country_area": country,
-                "supplier_address": supplier_address,
-                "transport_origin": supplier_address,
-                "source_file": path.name,
-            }
-            dedupe_key = (material_key, vendor_code, vendor_name, country, supplier_address)
-            if dedupe_key in seen:
-                continue
-            seen.add(dedupe_key)
-            records.setdefault(material_key, []).append(supplier_record)
-
-    return records, {
-        "supplier_files": int(len(supplier_paths)),
-        "supplier_rows": int(total_rows),
-        "supplier_mapped_materials": int(len(records)),
-        "supplier_mapped_suppliers": int(sum(len(v) for v in records.values())),
-        "supplier_skipped_files": skipped_files,
-    }
-
-
-def _supplier_name_from_dropdown(option: Any) -> str:
-    text = _safe_text(option)
-    if "_" in text:
-        tail = text.split("_", 1)[1].strip()
-        tail = re.sub(r"\s+-\s+.*$", "", tail).strip()
-        return tail or text
-    return text
-
-
-def _extract_named_dropdown_values(wb, sheet_name: str, aliases: list[str]) -> list[str]:
-    """Extract list values from a named column in a Dropdown Values sheet.
-
-    Used for supplier_bulk_create: Supplier Name must be selected from
-    Dropdown Values / Supplier Name (optional), not guessed from vendor master
-    text. Header matching is tolerant for optional markers and spacing.
-    """
-    if sheet_name not in wb.sheetnames:
-        return []
-    ws = wb[sheet_name]
-    found_cols = _find_template_columns(ws, aliases)
-    col_idx = int(found_cols[0]) if found_cols else 0
-    values: list[str] = []
-    seen: set[str] = set()
-    if not col_idx:
-        return values
-    for row_idx in range(2, ws.max_row + 1):
-        text = _safe_text(ws.cell(row_idx, col_idx).value)
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        values.append(text)
-    return values
-
-
-def _get_first_non_empty(row: pd.Series, names: list[str]) -> str:
-    for name in names:
-        if name in row.index:
-            text = _safe_text(row.get(name))
-            if text:
-                return text
-    return ""
-
-
-def _infer_destination_from_supplier_option(option: Any) -> str:
-    text = _safe_text(option)
-    if "_" in text:
-        return text.split("_", 1)[0].strip()
-    return ""
-
-
-def _apply_supplier_mapping_to_exploded(
-    exploded: pd.DataFrame,
-    supplier_map: dict[str, list[dict[str, str]]],
-    supplier_options: list[str],
-) -> tuple[pd.DataFrame, Dict[str, Any]]:
-    work = exploded.copy()
-    for col in ["supplier_name", "transport_origin", "supplier_code", "supplier_master_name", "supplier_country_area", "supplier_address"]:
-        if col not in work.columns:
-            work[col] = ""
-
-    matched_source_rows = 0
-    expanded_rows = 0
-    dropdown_matched = 0
-    missing_dropdown = 0
-    output_rows: list[dict[str, Any]] = []
-
-    if work.empty or not supplier_map:
-        return work, {
-            "supplier_matched_rows": 0,
-            "supplier_expanded_rows": 0,
-            "supplier_dropdown_matched_rows": 0,
-            "supplier_dropdown_missing_rows": 0,
-        }
-
-    for _, row in work.iterrows():
-        raw_key = _normalize_material_key(row.get("raw_material"))
-        suppliers = supplier_map.get(raw_key) or []
-        if not suppliers:
-            output_rows.append(row.to_dict())
-            continue
-
-        matched_source_rows += 1
-        for info in suppliers:
-            new_row = row.to_dict()
-            new_row["transport_origin"] = info.get("transport_origin", "")
-            new_row["supplier_code"] = info.get("supplier_code", "")
-            new_row["supplier_master_name"] = info.get("supplier_master_name", "")
-            new_row["supplier_country_area"] = info.get("country_area", "")
-            new_row["supplier_address"] = info.get("supplier_address", "")
-            supplier_value = _select_supplier_dropdown_value(
-                supplier_options,
-                row.get("transport_destination", ""),
-                info.get("vendor_code", ""),
-            )
-            if supplier_value:
-                dropdown_matched += 1
-                new_row["supplier_name"] = supplier_value
-                if not new_row["supplier_master_name"]:
-                    new_row["supplier_master_name"] = _supplier_name_from_dropdown(supplier_value)
-            else:
-                missing_dropdown += 1
-                new_row["supplier_name"] = ""
-            output_rows.append(new_row)
-            expanded_rows += 1
-
-    if output_rows:
-        work = pd.DataFrame(output_rows, columns=list(dict.fromkeys(list(work.columns) + ["supplier_code", "supplier_master_name", "supplier_country_area", "supplier_address"])))
-
-    return work, {
-        "supplier_matched_rows": int(matched_source_rows),
-        "supplier_expanded_rows": int(expanded_rows),
-        "supplier_dropdown_matched_rows": int(dropdown_matched),
-        "supplier_dropdown_missing_rows": int(missing_dropdown),
-    }
-
-
-def _write_supplier_bulk_create_file(
-    expanded_with_suppliers: pd.DataFrame,
-    supplier_bulk_template_path: str | Path,
-    output_path: str | Path,
-) -> Dict[str, Any]:
-    supplier_bulk_template_path = Path(supplier_bulk_template_path)
-    output_path = Path(output_path)
-    if expanded_with_suppliers is None or expanded_with_suppliers.empty:
-        return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": ""}
-    if not supplier_bulk_template_path.exists():
-        return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": "", "supplier_bulk_error": f"找不到內建供應商 Bulk Template：{supplier_bulk_template_path.name}"}
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(supplier_bulk_template_path, output_path)
-    wb = load_workbook(output_path)
-    ws = wb[SUPPLIER_BULK_SHEET_NAME] if SUPPLIER_BULK_SHEET_NAME in wb.sheetnames else wb[wb.sheetnames[0]]
-
-    cols = {
-        "supplier_name": _find_template_column(ws, SUPPLIER_BULK_NAME_ALIASES, 1),
-        "supplier_code": _find_template_column(ws, SUPPLIER_BULK_CODE_ALIASES, 2),
-        "country_area": _find_template_column(ws, SUPPLIER_BULK_COUNTRY_ALIASES, 3),
-        "supplier_address": _find_template_column(ws, SUPPLIER_BULK_ADDRESS_ALIASES, 4),
-        "unit_name": _find_template_column(ws, SUPPLIER_BULK_UNIT_ALIASES, 5),
-    }
-    _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
-
-    supplier_bulk_dropdown_options = _extract_named_dropdown_values(
-        wb,
-        SUPPLIER_BULK_DROPDOWN_SHEET_NAME,
-        SUPPLIER_BULK_DROPDOWN_NAME_ALIASES,
-    )
-
-    rows: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str, str, str]] = set()
-    missing_supplier_name_dropdown = 0
-    for _, row in expanded_with_suppliers.iterrows():
-        supplier_code = _normalize_vendor_code(_get_first_non_empty(row, ["supplier_code", "Supplier Code", "vendor_code", "Vendor", "Vender"]))
-        if not supplier_code:
-            continue
-
-        unit_name = _get_first_non_empty(row, [
-            "transport_destination",
-            "Transportation Destination",
-            "transportation_destination",
-            "production_site",
-            "Production Site",
-            "unit_name",
-            "Unit Name",
-        ])
-        if not unit_name:
-            unit_name = _infer_destination_from_supplier_option(row.get("supplier_name"))
-
-        supplier_name = _select_supplier_dropdown_value(
-            supplier_bulk_dropdown_options,
-            unit_name,
-            supplier_code,
-        )
-        if not supplier_name:
-            # Fallback for templates that do not include Dropdown Values / Supplier Name (optional).
-            # Keep raw_material_activity_data_bulk matched full dropdown value when available.
-            supplier_name = _safe_text(row.get("supplier_name"))
-        if not supplier_name:
-            missing_supplier_name_dropdown += 1
-            supplier_name = _safe_text(row.get("supplier_master_name"))
-
-        country_area = _get_first_non_empty(row, ["supplier_country_area", "Country/Area", "country_area", "Country"] )
-        supplier_address = _get_first_non_empty(row, ["supplier_address", "Supplier Address", "Supplier Address (optional)", "transport_origin", "Transportation Origin"] )
-        key = (supplier_name, supplier_code, country_area, supplier_address, unit_name)
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append({
-            "supplier_name": supplier_name,
-            "supplier_code": supplier_code,
-            "country_area": country_area,
-            "supplier_address": supplier_address,
-            "unit_name": unit_name,
-        })
-
-    row_idx = DATA_START_ROW
-    for row in rows:
-        _write_template_value(ws, row_idx, cols["supplier_name"], row["supplier_name"])
-        _write_template_value(ws, row_idx, cols["supplier_code"], row["supplier_code"])
-        _write_template_value(ws, row_idx, cols["country_area"], row["country_area"])
-        _write_template_value(ws, row_idx, cols["supplier_address"], row["supplier_address"])
-        _write_template_value(ws, row_idx, cols["unit_name"], row["unit_name"])
-        row_idx += 1
-
-    wb.save(output_path)
-    return {
-        "supplier_bulk_rows": int(len(rows)),
-        "supplier_bulk_filename": output_path.name,
-        "supplier_bulk_download_url": f"/download/{output_path.name}",
-        "supplier_bulk_template_columns": cols,
-        "supplier_bulk_dropdown_options": int(len(supplier_bulk_dropdown_options)),
-        "supplier_bulk_dropdown_missing_rows": int(missing_supplier_name_dropdown),
-    }
-
-
-def _write_raw_material_bulk_from_exploded(
-    exploded: pd.DataFrame,
-    raw_material_template_path: str | Path,
-    output_path: str | Path,
-    supplier_map: dict[str, list[dict[str, str]]] | None = None,
-    return_expanded: bool = False,
-) -> Dict[str, Any] | tuple[Dict[str, Any], pd.DataFrame]:
-    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
-
-    raw_material_template_path = Path(raw_material_template_path)
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(raw_material_template_path, output_path)
-
-    wb = load_workbook(output_path)
-    if ACTIVITY_SHEET_NAME not in wb.sheetnames:
-        raise ValueError(f"找不到 raw material bulk 分頁：{ACTIVITY_SHEET_NAME}")
-    if RAW_MATERIAL_SHEET_NAME not in wb.sheetnames:
-        raise ValueError(f"找不到 raw material bulk 分頁：{RAW_MATERIAL_SHEET_NAME}")
-
-    activity_ws = wb[ACTIVITY_SHEET_NAME]
-    raw_ws = wb[RAW_MATERIAL_SHEET_NAME]
-    activity_cols = {
-        "raw_name": _find_template_column(activity_ws, RAW_MATERIAL_NAME_ALIASES, 1),
-        "raw_code": _find_template_column(activity_ws, RAW_MATERIAL_CODE_ALIASES, 2),
-        "start_date": _find_template_column(activity_ws, DOC_START_DATE_ALIASES, 3),
-        "end_date": _find_template_column(activity_ws, DOC_END_DATE_ALIASES, 4),
-        "document_type": _find_template_column(activity_ws, DOCUMENT_TYPE_ALIASES, 5),
-        "document_number": _find_template_column(activity_ws, DOCUMENT_NUMBER_ALIASES, 6),
-        "usage": _find_template_column(activity_ws, USAGE_ALIASES, 7),
-        "unit": _find_template_column(activity_ws, ACTIVITY_DATA_UNIT_ALIASES, 8),
-        "data_source": _find_template_column(activity_ws, DATA_SOURCE_ALIASES, 12),
-        "data_source_other": _find_template_column(activity_ws, DATA_SOURCE_OTHER_ALIASES, 13),
-        "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 15),
-        "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 16),
-        "supplier_name": _find_template_column(activity_ws, SUPPLIER_NAME_ALIASES, 14),
-        "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
-        "comment": _find_template_column(activity_ws, COMMENT_ALIASES, 18),
-        "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
-    }
-    raw_cols = {
-        "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
-        "raw_code": _find_template_column(raw_ws, RAW_MATERIAL_CODE_ALIASES, 2),
-        "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
-    }
-
-    document_type_value = _document_type_for_template(wb)
-    supplier_options = _extract_supplier_dropdown_values(wb, activity_ws, activity_cols["supplier_name"])
-    expanded, supplier_write_summary = _apply_supplier_mapping_to_exploded(exploded, supplier_map or {}, supplier_options)
-
-    _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
-    _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()))
-
-    row_idx = DATA_START_ROW
-    for _, r in expanded.iterrows():
-        valid_from = r["valid_from"]
-        if not isinstance(valid_from, date):
-            valid_from = _date_from_value(valid_from)
-        usage_value = float(r["usage"]) if not pd.isna(r["usage"]) else 0
-        _write_template_value(activity_ws, row_idx, activity_cols["raw_name"], r["raw_material"])
-        _write_template_value(activity_ws, row_idx, activity_cols["raw_code"], r["raw_material"])
-        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], valid_from)
-        _write_template_value(activity_ws, row_idx, activity_cols["end_date"], _year_end(valid_from))
-        _write_template_value(activity_ws, row_idx, activity_cols["document_type"], document_type_value)
-        _write_template_value(activity_ws, row_idx, activity_cols["document_number"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["usage"], usage_value)
-        _write_template_value(activity_ws, row_idx, activity_cols["unit"], r["unit"])
-        _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
-        _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], r.get("transport_origin", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], r.get("transport_destination", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], r.get("supplier_name", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols["target_product"], r["target_product"])
-        _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
-        activity_ws.cell(row_idx, activity_cols["start_date"]).number_format = "yyyy/mm/dd"
-        activity_ws.cell(row_idx, activity_cols["end_date"]).number_format = "yyyy/mm/dd"
-        row_idx += 1
-
-    raw_unique = expanded.sort_values(["raw_material"]).drop_duplicates(subset=["raw_material"])[["raw_material", "description"]] if not expanded.empty else pd.DataFrame(columns=["raw_material", "description"])
-    row_idx = DATA_START_ROW
-    for _, r in raw_unique.iterrows():
-        _write_template_value(raw_ws, row_idx, raw_cols["raw_name"], r["raw_material"])
-        _write_template_value(raw_ws, row_idx, raw_cols["raw_code"], r["raw_material"])
-        _write_template_value(raw_ws, row_idx, raw_cols["description"], r["description"])
-        row_idx += 1
-
-    wb.save(output_path)
-    result = {
-        "output_filename": output_path.name,
-        "activity_template_columns": activity_cols,
-        "raw_material_template_columns": raw_cols,
-        "activity_rows": int(len(expanded)),
-        "raw_materials": int(expanded["raw_material"].nunique()) if not expanded.empty else 0,
-        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
-        "supplier_dropdown_options": int(len(supplier_options)),
-    }
-    result.update(supplier_write_summary)
-    if return_expanded:
-        return result, expanded
-    return result
-
-
-def generate_raw_material_bulk_file(
-    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
-    raw_material_template_path: str | Path,
-    output_path: str | Path,
-    mapping: dict[str, str | None] | None = None,
-    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
-    supplier_bulk_template_path: str | Path | None = None,
-    supplier_bulk_output_path: str | Path | None = None,
-) -> Dict[str, Any]:
-    output_path = Path(output_path)
-    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
-    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
-    exploded, summary = _explode_bom(bom_df)
-    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
-    summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
-    summary["activity_rows"] = int(len(exploded))
-    summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
-
-    write_summary, expanded = _write_raw_material_bulk_from_exploded(
-        exploded=exploded,
-        raw_material_template_path=raw_material_template_path,
-        output_path=output_path,
-        supplier_map=supplier_map,
-        return_expanded=True,
-    )
-    summary.update(write_summary)
-    summary.update(supplier_summary)
-
-    if supplier_bulk_template_path and supplier_bulk_output_path:
-        summary.update(_write_supplier_bulk_create_file(expanded, supplier_bulk_template_path, supplier_bulk_output_path))
-
-    summary["used_columns"] = used_columns
-    summary["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
-    summary["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
-    summary["bom_rows_after_dedup"] = int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0
-    summary["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
-    return summary
-
-
-def generate_raw_material_bulk_files_by_site_zip(
-    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
-    raw_material_template_path: str | Path,
-    output_dir: str | Path,
-    token: str,
-    step1_output_path: str | Path,
-    mapping: dict[str, str | None] | None = None,
-    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
-    supplier_bulk_template_path: str | Path | None = None,
-    supplier_bulk_output_path: str | Path | None = None,
-) -> Dict[str, Any]:
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
-    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
-    exploded, base_summary = _explode_bom(bom_df)
-    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
-
-    total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(step1_output_path=step1_output_path, bom_df=bom_df)
-    exploded, zero_total_working_hour_rows_excluded = _exclude_zero_total_working_hour_target_rows(exploded=exploded, total_hour_by_material=total_hour_by_target)
-    base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
-    base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
-    base_summary["activity_rows"] = int(len(exploded))
-    base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
-    base_summary.update(working_hour_summary)
-
-    site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
-    work = exploded.copy()
-    if work.empty:
-        work["_production_site"] = ""
-    else:
-        work["_target_key"] = work["target_product"].apply(_normalize_material_key)
-        work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
-        work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
-        work["transport_destination"] = work["_production_site"]
-        if "material_group" not in work.columns:
-            work["material_group"] = ""
-
-    site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
-    generated_files: list[dict[str, Any]] = []
-    expanded_all: list[pd.DataFrame] = []
-    supplier_matched_total = 0
-    supplier_expanded_total = 0
-    supplier_dropdown_matched_total = 0
-    supplier_dropdown_missing_total = 0
-    supplier_dropdown_options_total = 0
-    zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
-    zip_path = output_dir / zip_filename
-
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for site in site_values:
-            site_df = work[work["_production_site"] == site].copy().drop(columns=["_target_key", "_production_site"], errors="ignore")
-            safe_site = _sanitize_filename_part(site)
-            file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
-            write_summary, expanded_site = _write_raw_material_bulk_from_exploded(
-                exploded=site_df,
-                raw_material_template_path=raw_material_template_path,
-                output_path=file_path,
-                supplier_map=supplier_map,
-                return_expanded=True,
-            )
-            expanded_all.append(expanded_site)
-            supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
-            supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
-            supplier_dropdown_matched_total += int(write_summary.get("supplier_dropdown_matched_rows", 0))
-            supplier_dropdown_missing_total += int(write_summary.get("supplier_dropdown_missing_rows", 0))
-            supplier_dropdown_options_total = max(supplier_dropdown_options_total, int(write_summary.get("supplier_dropdown_options", 0)))
-            zf.write(file_path, arcname=file_path.name)
-            generated_files.append({
-                "production_site": site,
-                "filename": file_path.name,
-                "activity_rows": int(write_summary.get("activity_rows", 0)),
-                "raw_materials": int(write_summary.get("raw_materials", 0)),
-            })
-
-    if supplier_bulk_template_path and supplier_bulk_output_path:
-        combined_expanded = pd.concat(expanded_all, ignore_index=True) if expanded_all else pd.DataFrame()
-        supplier_bulk_summary = _write_supplier_bulk_create_file(combined_expanded, supplier_bulk_template_path, supplier_bulk_output_path)
-    else:
-        supplier_bulk_summary = {}
-
-    unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
-    summary = dict(base_summary)
-    summary.update({
-        "output_filename": zip_filename,
-        "download_url": f"/download/{zip_filename}",
-        "split_by_production_site": True,
-        "production_site_files": generated_files,
-        "production_site_count": int(len(site_values)),
-        "unassigned_rows": unassigned_rows,
-        "used_columns": used_columns,
-        "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
-        "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
-        "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
-        "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
-        "supplier_matched_rows": int(supplier_matched_total),
-        "supplier_expanded_rows": int(supplier_expanded_total),
-        "supplier_dropdown_matched_rows": int(supplier_dropdown_matched_total),
-        "supplier_dropdown_missing_rows": int(supplier_dropdown_missing_total),
-        "supplier_dropdown_options": int(supplier_dropdown_options_total),
-    })
-    summary.update(step1_summary)
-    summary.update(supplier_summary)
-    summary.update(supplier_bulk_summary)
-    return summary
-
-BOM_FORMATTER_VERSION = "CMP_V15_1_SUPPLIER_MASTER_AND_SUPPLIER_BULK"
-
-# V15.2 override: merge duplicate Material+Vendor across supplier files and keep the richest address record.
 def _supplier_record_score(record: dict[str, str]) -> int:
     score = 0
     if record.get("country_area"):
         score += 1000
-    score += min(len(record.get("supplier_address") or ""), 500)
+    if record.get("supplier_address"):
+        score += min(len(record.get("supplier_address") or ""), 500)
     if record.get("supplier_master_name"):
         score += 50
     return score
 
 
 def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ...] | None) -> tuple[dict[str, list[dict[str, str]]], Dict[str, Any]]:
+    """Read one or many supplier masters and normalize to Material -> suppliers.
+
+    A/B supplier formats are supported. If the same Material+Vendor appears in
+    multiple uploaded files, the record with richer address information wins.
+    """
     if not supplier_paths:
         return {}, {"supplier_files": 0, "supplier_rows": 0, "supplier_mapped_materials": 0, "supplier_mapped_suppliers": 0, "supplier_skipped_files": []}
 
@@ -2241,32 +1478,11 @@ def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ..
         "supplier_skipped_files": skipped_files,
     }
 
-BOM_FORMATTER_VERSION = "CMP_V15_2_SUPPLIER_MASTER_BULK_INTERNAL_TEMPLATE"
 
-# =========================================================
-# V15.3 Hotfix
-# - Keep original Transportation Destination generation untouched.
-# - Read Supplier Name candidates from raw_materials_&_activity_data_template_v1 / Dropdown Values / Supplier Name (optional).
-# - Broaden header aliases for optional Transportation Destination/Origin labels.
-# =========================================================
-TRANSPORT_ORIGIN_ALIASES = list(dict.fromkeys(TRANSPORT_ORIGIN_ALIASES + [
-    "Transportation Origin (optional)", "Transport Origin", "Origin", "運輸起點(optional)",
-]))
-TRANSPORT_DESTINATION_ALIASES = list(dict.fromkeys(TRANSPORT_DESTINATION_ALIASES + [
-    "Transportation Destination (optional)", "Transport Destination", "Destination", "運輸終點(optional)",
-]))
-SUPPLIER_NAME_ALIASES = list(dict.fromkeys(SUPPLIER_NAME_ALIASES + [
-    "Supplier Name(optional)", "Supplier Name Optional", "Supplier Name（optional）",
-]))
+def _extract_supplier_name_options_from_raw_template(wb) -> list[str]:
+    """Read all supplier-name candidates from raw_materials_&_activity_data_template_v1.
 
-
-def _extract_supplier_dropdown_values(wb, ws=None, supplier_col: int | None = None) -> list[str]:
-    """Return Supplier Name candidates from the Raw Material Bulk template.
-
-    Requirement: Supplier Name options are stored in the uploaded
-    raw_materials_&_activity_data_template_v1 workbook, sheet "Dropdown Values",
-    column "Supplier Name (optional)". This is not treated as an Excel data
-    validation dependency; the visible list itself is the source of truth.
+    Source of truth: sheet "Dropdown Values", column "Supplier Name (optional)".
     """
     values: list[str] = []
     seen: set[str] = set()
@@ -2277,103 +1493,57 @@ def _extract_supplier_dropdown_values(wb, ws=None, supplier_col: int | None = No
             seen.add(text)
             values.append(text)
 
-    # Primary source: Dropdown Values / Supplier Name (optional)
-    if "Dropdown Values" in wb.sheetnames:
-        dropdown_ws = wb["Dropdown Values"]
-        candidate_cols = _find_template_columns(
-            dropdown_ws,
-            ["Supplier Name (optional)", "Supplier Name(optional)", "Supplier Name", "supplier_name", "供應商名稱"],
-            header_rows=5,
-        )
-        for col_idx in candidate_cols[:1]:
-            for row_idx in range(2, dropdown_ws.max_row + 1):
-                add(dropdown_ws.cell(row_idx, int(col_idx)).value)
-        if values:
-            return values
-
-    # Fallback: old template data-validation source, kept only for compatibility.
-    if ws is None or not supplier_col:
+    if "Dropdown Values" not in wb.sheetnames:
         return values
-
-    def read_formula_list(formula: str) -> None:
-        ref = str(formula or "").strip()
-        if ref.startswith('"') and ref.endswith('"'):
-            for item in ref[1:-1].split(','):
-                add(item)
-            return
-        ref = ref.lstrip('=')
-        try:
-            if '!' in ref:
-                sheet_name, cell_range = ref.split('!', 1)
-                sheet_name = sheet_name.strip("'")
-            else:
-                dn = wb.defined_names.get(ref)
-                if dn is None:
-                    return
-                for title, coord in dn.destinations:
-                    sheet_name, cell_range = title, coord
-                    break
-                else:
-                    return
-            sheet = wb[sheet_name]
-            for row in sheet[cell_range.replace('$', '')]:
-                cells = row if isinstance(row, tuple) else (row,)
-                for cell in cells:
-                    add(cell.value)
-        except Exception:
-            return
-
-    for dv in getattr(ws, 'data_validations', []).dataValidation:
-        if getattr(dv, 'type', None) != 'list':
-            continue
-        applies = False
-        for cell_range in dv.sqref.ranges:
-            if cell_range.min_col <= int(supplier_col) <= cell_range.max_col and cell_range.max_row >= DATA_START_ROW:
-                applies = True
-                break
-        if applies:
-            read_formula_list(dv.formula1)
+    ws = wb["Dropdown Values"]
+    cols = _find_template_columns(
+        ws,
+        ["Supplier Name (optional)", "Supplier Name(optional)", "Supplier Name", "supplier_name", "供應商名稱"],
+        header_rows=10,
+    )
+    if not cols:
+        return values
+    col_idx = int(cols[0])
+    for row_idx in range(2, ws.max_row + 1):
+        add(ws.cell(row_idx, col_idx).value)
     return values
 
 
-def _select_supplier_dropdown_value(options: list[str], destination: Any, vendor_code: Any) -> str:
+def _supplier_name_from_option(option: Any) -> str:
+    text = _safe_text(option)
+    if "_" in text:
+        tail = text.split("_", 1)[1].strip()
+        tail = re.sub(r"\s+-\s+.*$", "", tail).strip()
+        return tail or text
+    return text
+
+
+def _select_supplier_name_option(options: list[str], destination: Any, vendor_code: Any) -> str:
     dest = _safe_text(destination)
     dest_compact = re.sub(r"\s+", "", dest).upper()
     vendor = _normalize_vendor_code(vendor_code)
     if not vendor:
         return ""
-
     candidates: list[str] = []
     for option in options or []:
         text = _safe_text(option)
         compact = re.sub(r"\s+", "", text).upper()
-        has_vendor = vendor in compact
-        # Supplier values look like: 越南海防廠-IPS_供應商名稱 - 01W-191310
+        if vendor not in compact:
+            continue
         option_dest = text.split("_", 1)[0].strip() if "_" in text else ""
         option_dest_compact = re.sub(r"\s+", "", option_dest).upper()
         has_dest = bool(dest_compact) and (
-            dest_compact == option_dest_compact or dest_compact in compact or option_dest_compact in dest_compact
+            dest_compact == option_dest_compact or dest_compact in compact or (option_dest_compact and option_dest_compact in dest_compact)
         )
-        if has_vendor and has_dest:
+        if has_dest:
             candidates.append(text)
+    if not candidates:
+        return ""
+    suffix_matches = [c for c in candidates if re.search(r"-\s*[^-]*" + re.escape(vendor) + r"\s*$", c, flags=re.I)]
+    return suffix_matches[0] if suffix_matches else candidates[0]
 
-    if candidates:
-        suffix_matches = [c for c in candidates if re.search(r"-\s*[^-]*" + re.escape(vendor) + r"\s*$", c, flags=re.I)]
-        return suffix_matches[0] if suffix_matches else candidates[0]
-    return ""
 
-
-def _apply_supplier_mapping_to_exploded(
-    exploded: pd.DataFrame,
-    supplier_map: dict[str, list[dict[str, str]]],
-    supplier_options: list[str],
-) -> tuple[pd.DataFrame, Dict[str, Any]]:
-    """Expand raw-material rows by suppliers without changing original destination.
-
-    Transportation Destination must remain the value that Module 2 already
-    assigned from Step1 Production Site. Supplier logic may read it, but must not
-    blank or overwrite it.
-    """
+def _apply_supplier_mapping_to_exploded(exploded: pd.DataFrame, supplier_map: dict[str, list[dict[str, str]]], supplier_options: list[str]) -> tuple[pd.DataFrame, Dict[str, Any]]:
     work = exploded.copy()
     for col in ["supplier_name", "transport_origin", "supplier_code", "supplier_master_name", "supplier_country_area", "supplier_address"]:
         if col not in work.columns:
@@ -2381,69 +1551,382 @@ def _apply_supplier_mapping_to_exploded(
 
     matched_source_rows = 0
     expanded_rows = 0
-    dropdown_matched = 0
-    missing_dropdown = 0
+    supplier_name_matched = 0
+    supplier_name_missing = 0
     output_rows: list[dict[str, Any]] = []
 
     if work.empty or not supplier_map:
         return work, {
             "supplier_matched_rows": 0,
             "supplier_expanded_rows": 0,
+            "supplier_name_matched_rows": 0,
+            "supplier_name_missing_rows": 0,
             "supplier_dropdown_matched_rows": 0,
             "supplier_dropdown_missing_rows": 0,
         }
 
     for _, row in work.iterrows():
-        original_row = row.to_dict()
+        original = row.to_dict()
         raw_key = _normalize_material_key(row.get("raw_material"))
         destination = _safe_text(row.get("transport_destination"))
         suppliers = supplier_map.get(raw_key) or []
         if not suppliers:
-            output_rows.append(original_row)
+            output_rows.append(original)
             continue
-
         matched_source_rows += 1
         for info in suppliers:
-            new_row = dict(original_row)
-            # Preserve original Destination exactly; never replace with supplier data.
+            new_row = dict(original)
+            # Supplier logic only reads destination. It never clears or overwrites it.
             new_row["transport_destination"] = destination
             supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
+            supplier_code = info.get("supplier_code", "") or info.get("vendor_code", "")
+            supplier_name = _select_supplier_name_option(supplier_options, destination, supplier_code)
             new_row["transport_origin"] = supplier_address
-            new_row["supplier_code"] = info.get("supplier_code", "") or info.get("vendor_code", "")
-            new_row["supplier_master_name"] = info.get("supplier_master_name", "")
+            new_row["supplier_code"] = supplier_code
+            new_row["supplier_master_name"] = info.get("supplier_master_name", "") or _supplier_name_from_option(supplier_name)
             new_row["supplier_country_area"] = info.get("country_area", "")
             new_row["supplier_address"] = supplier_address
-            supplier_value = _select_supplier_dropdown_value(
-                supplier_options,
-                destination,
-                info.get("vendor_code", "") or info.get("supplier_code", ""),
-            )
-            if supplier_value:
-                dropdown_matched += 1
-                new_row["supplier_name"] = supplier_value
-                if not new_row["supplier_master_name"]:
-                    new_row["supplier_master_name"] = _supplier_name_from_dropdown(supplier_value)
+            new_row["supplier_name"] = supplier_name
+            if supplier_name:
+                supplier_name_matched += 1
             else:
-                missing_dropdown += 1
-                new_row["supplier_name"] = ""
+                supplier_name_missing += 1
             output_rows.append(new_row)
             expanded_rows += 1
 
-    if output_rows:
-        ordered_columns = list(dict.fromkeys(list(work.columns) + [
-            "supplier_code", "supplier_master_name", "supplier_country_area", "supplier_address"
-        ]))
-        work = pd.DataFrame(output_rows)
-        for col in ordered_columns:
-            if col not in work.columns:
-                work[col] = ""
-        work = work[ordered_columns]
-
-    return work, {
+    ordered_columns = list(dict.fromkeys(list(work.columns) + ["supplier_code", "supplier_master_name", "supplier_country_area", "supplier_address"]))
+    result = pd.DataFrame(output_rows) if output_rows else work
+    for col in ordered_columns:
+        if col not in result.columns:
+            result[col] = ""
+    return result[ordered_columns], {
         "supplier_matched_rows": int(matched_source_rows),
         "supplier_expanded_rows": int(expanded_rows),
-        "supplier_dropdown_matched_rows": int(dropdown_matched),
-        "supplier_dropdown_missing_rows": int(missing_dropdown),
+        "supplier_name_matched_rows": int(supplier_name_matched),
+        "supplier_name_missing_rows": int(supplier_name_missing),
+        # Backward-compatible summary keys for the current UI text.
+        "supplier_dropdown_matched_rows": int(supplier_name_matched),
+        "supplier_dropdown_missing_rows": int(supplier_name_missing),
     }
 
-BOM_FORMATTER_VERSION = "CMP_V15_3_SUPPLIER_DESTINATION_HOTFIX"
+
+def _first_text(row: pd.Series, names: list[str]) -> str:
+    for name in names:
+        if name in row.index:
+            text = _safe_text(row.get(name))
+            if text:
+                return text
+    return ""
+
+
+def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supplier_bulk_template_path: str | Path, output_path: str | Path) -> Dict[str, Any]:
+    supplier_bulk_template_path = Path(supplier_bulk_template_path)
+    output_path = Path(output_path)
+    if expanded_with_suppliers is None or expanded_with_suppliers.empty:
+        return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": ""}
+    if not supplier_bulk_template_path.exists():
+        return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": "", "supplier_bulk_error": f"找不到內建供應商 Bulk Template：{supplier_bulk_template_path.name}"}
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(supplier_bulk_template_path, output_path)
+    wb = load_workbook(output_path)
+    ws = wb[SUPPLIER_BULK_SHEET_NAME] if SUPPLIER_BULK_SHEET_NAME in wb.sheetnames else wb[wb.sheetnames[0]]
+    cols = {
+        "supplier_name": _find_template_column(ws, SUPPLIER_BULK_NAME_ALIASES, 1),
+        "supplier_code": _find_template_column(ws, SUPPLIER_BULK_CODE_ALIASES, 2),
+        "country_area": _find_template_column(ws, SUPPLIER_BULK_COUNTRY_ALIASES, 3),
+        "supplier_address": _find_template_column(ws, SUPPLIER_BULK_ADDRESS_ALIASES, 4),
+        "unit_name": _find_template_column(ws, SUPPLIER_BULK_UNIT_ALIASES, 5),
+    }
+    _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
+
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for _, row in expanded_with_suppliers.iterrows():
+        supplier_code = _normalize_vendor_code(_first_text(row, ["supplier_code", "vendor_code", "Vendor", "Vender", "Supplier Code"]))
+        if not supplier_code:
+            continue
+        unit_name = _first_text(row, ["transport_destination", "Transportation Destination", "transportation_destination", "production_site", "Production Site", "Unit Name"])
+        supplier_name = _first_text(row, ["supplier_name", "Supplier Name", "Supplier Name (optional)"])
+        if not supplier_name:
+            supplier_name = _first_text(row, ["supplier_master_name", "Vendor Name", "Search Term"])
+        country_area = _first_text(row, ["supplier_country_area", "Country/Area", "country_area", "Country"])
+        supplier_address = _first_text(row, ["supplier_address", "Supplier Address", "transport_origin", "Transportation Origin"])
+        key = (supplier_name, supplier_code, country_area, supplier_address, unit_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            "supplier_name": supplier_name,
+            "supplier_code": supplier_code,
+            "country_area": country_area,
+            "supplier_address": supplier_address,
+            "unit_name": unit_name,
+        })
+
+    row_idx = DATA_START_ROW
+    for row in rows:
+        _write_template_value(ws, row_idx, cols["supplier_name"], row["supplier_name"])
+        _write_template_value(ws, row_idx, cols["supplier_code"], row["supplier_code"])
+        _write_template_value(ws, row_idx, cols["country_area"], row["country_area"])
+        _write_template_value(ws, row_idx, cols["supplier_address"], row["supplier_address"])
+        _write_template_value(ws, row_idx, cols["unit_name"], row["unit_name"])
+        row_idx += 1
+
+    wb.save(output_path)
+    return {
+        "supplier_bulk_rows": int(len(rows)),
+        "supplier_bulk_filename": output_path.name,
+        "supplier_bulk_download_url": f"/download/{output_path.name}",
+        "supplier_bulk_template_columns": cols,
+    }
+
+
+def _write_raw_material_bulk_from_exploded(
+    exploded: pd.DataFrame,
+    raw_material_template_path: str | Path,
+    output_path: str | Path,
+    supplier_map: dict[str, list[dict[str, str]]] | None = None,
+    return_expanded: bool = False,
+) -> Dict[str, Any] | tuple[Dict[str, Any], pd.DataFrame]:
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+
+    raw_material_template_path = Path(raw_material_template_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(raw_material_template_path, output_path)
+
+    wb = load_workbook(output_path)
+    if ACTIVITY_SHEET_NAME not in wb.sheetnames:
+        raise ValueError(f"找不到 raw material bulk 分頁：{ACTIVITY_SHEET_NAME}")
+    if RAW_MATERIAL_SHEET_NAME not in wb.sheetnames:
+        raise ValueError(f"找不到 raw material bulk 分頁：{RAW_MATERIAL_SHEET_NAME}")
+
+    activity_ws = wb[ACTIVITY_SHEET_NAME]
+    raw_ws = wb[RAW_MATERIAL_SHEET_NAME]
+    activity_cols = {
+        "raw_name": _find_template_column(activity_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+        "raw_code": _find_template_column(activity_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+        "start_date": _find_template_column(activity_ws, DOC_START_DATE_ALIASES, 3),
+        "end_date": _find_template_column(activity_ws, DOC_END_DATE_ALIASES, 4),
+        "document_type": _find_template_column(activity_ws, DOCUMENT_TYPE_ALIASES, 5),
+        "document_number": _find_template_column(activity_ws, DOCUMENT_NUMBER_ALIASES, 6),
+        "usage": _find_template_column(activity_ws, USAGE_ALIASES, 7),
+        "unit": _find_template_column(activity_ws, ACTIVITY_DATA_UNIT_ALIASES, 8),
+        "data_source": _find_template_column(activity_ws, DATA_SOURCE_ALIASES, 12),
+        "data_source_other": _find_template_column(activity_ws, DATA_SOURCE_OTHER_ALIASES, 13),
+        "supplier_name": _find_template_column(activity_ws, SUPPLIER_NAME_ALIASES, 14),
+        "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 15),
+        "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 16),
+        "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
+        "comment": _find_template_column(activity_ws, COMMENT_ALIASES, 18),
+        "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
+    }
+    raw_cols = {
+        "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+        "raw_code": _find_template_column(raw_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+        "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
+    }
+
+    document_type_value = _document_type_for_template(wb)
+    supplier_options = _extract_supplier_name_options_from_raw_template(wb)
+    expanded, supplier_write_summary = _apply_supplier_mapping_to_exploded(exploded, supplier_map or {}, supplier_options)
+
+    _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
+    _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()))
+
+    row_idx = DATA_START_ROW
+    for _, r in expanded.iterrows():
+        valid_from = r["valid_from"]
+        if not isinstance(valid_from, date):
+            valid_from = _date_from_value(valid_from)
+        usage_value = float(r["usage"]) if not pd.isna(r["usage"]) else 0
+        _write_template_value(activity_ws, row_idx, activity_cols["raw_name"], r["raw_material"])
+        _write_template_value(activity_ws, row_idx, activity_cols["raw_code"], r["raw_material"])
+        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], valid_from)
+        _write_template_value(activity_ws, row_idx, activity_cols["end_date"], _year_end(valid_from))
+        _write_template_value(activity_ws, row_idx, activity_cols["document_type"], document_type_value)
+        _write_template_value(activity_ws, row_idx, activity_cols["document_number"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["usage"], usage_value)
+        _write_template_value(activity_ws, row_idx, activity_cols["unit"], r["unit"])
+        _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
+        _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], r.get("supplier_name", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], r.get("transport_origin", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], r.get("transport_destination", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols["target_product"], r["target_product"])
+        _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
+        activity_ws.cell(row_idx, activity_cols["start_date"]).number_format = "yyyy/mm/dd"
+        activity_ws.cell(row_idx, activity_cols["end_date"]).number_format = "yyyy/mm/dd"
+        row_idx += 1
+
+    raw_unique = expanded.sort_values(["raw_material"]).drop_duplicates(subset=["raw_material"])[["raw_material", "description"]] if not expanded.empty else pd.DataFrame(columns=["raw_material", "description"])
+    row_idx = DATA_START_ROW
+    for _, r in raw_unique.iterrows():
+        _write_template_value(raw_ws, row_idx, raw_cols["raw_name"], r["raw_material"])
+        _write_template_value(raw_ws, row_idx, raw_cols["raw_code"], r["raw_material"])
+        _write_template_value(raw_ws, row_idx, raw_cols["description"], r["description"])
+        row_idx += 1
+
+    wb.save(output_path)
+    result = {
+        "output_filename": output_path.name,
+        "activity_template_columns": activity_cols,
+        "raw_material_template_columns": raw_cols,
+        "activity_rows": int(len(expanded)),
+        "raw_materials": int(expanded["raw_material"].nunique()) if not expanded.empty else 0,
+        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
+        "supplier_name_options": int(len(supplier_options)),
+    }
+    result.update(supplier_write_summary)
+    if return_expanded:
+        return result, expanded
+    return result
+
+
+def generate_raw_material_bulk_file(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    raw_material_template_path: str | Path,
+    output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
+    supplier_bulk_template_path: str | Path | None = None,
+    supplier_bulk_output_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    output_path = Path(output_path)
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+    exploded, summary = _explode_bom(bom_df)
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    summary["activity_rows"] = int(len(exploded))
+    summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+    write_summary, expanded = _write_raw_material_bulk_from_exploded(
+        exploded=exploded,
+        raw_material_template_path=raw_material_template_path,
+        output_path=output_path,
+        supplier_map=supplier_map,
+        return_expanded=True,
+    )
+    summary.update(write_summary)
+    summary.update(supplier_summary)
+    if supplier_bulk_template_path and supplier_bulk_output_path:
+        summary.update(_write_supplier_bulk_create_file(expanded, supplier_bulk_template_path, supplier_bulk_output_path))
+    summary["used_columns"] = used_columns
+    summary["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
+    summary["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
+    summary["bom_rows_after_dedup"] = int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0
+    summary["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
+    return summary
+
+
+def generate_raw_material_bulk_files_by_site_zip(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    raw_material_template_path: str | Path,
+    output_dir: str | Path,
+    token: str,
+    step1_output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
+    supplier_bulk_template_path: str | Path | None = None,
+    supplier_bulk_output_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+    exploded, base_summary = _explode_bom(bom_df)
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(step1_output_path=step1_output_path, bom_df=bom_df)
+    exploded, zero_total_working_hour_rows_excluded = _exclude_zero_total_working_hour_target_rows(exploded=exploded, total_hour_by_material=total_hour_by_target)
+    base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
+    base_summary["activity_rows"] = int(len(exploded))
+    base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+    base_summary.update(working_hour_summary)
+
+    site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
+    work = exploded.copy()
+    if work.empty:
+        work["_production_site"] = ""
+    else:
+        work["_target_key"] = work["target_product"].apply(_normalize_material_key)
+        work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
+        work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+        # Original official logic: Transportation Destination follows Step1 Production Site.
+        work["transport_destination"] = work["_production_site"]
+        if "material_group" not in work.columns:
+            work["material_group"] = ""
+
+    site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
+    generated_files: list[dict[str, Any]] = []
+    expanded_all: list[pd.DataFrame] = []
+    supplier_matched_total = 0
+    supplier_expanded_total = 0
+    supplier_name_matched_total = 0
+    supplier_name_missing_total = 0
+    supplier_options_total = 0
+    zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
+    zip_path = output_dir / zip_filename
+
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for site in site_values:
+            site_df = work[work["_production_site"] == site].copy().drop(columns=["_target_key", "_production_site"], errors="ignore")
+            safe_site = _sanitize_filename_part(site)
+            file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
+            write_summary, expanded_site = _write_raw_material_bulk_from_exploded(
+                exploded=site_df,
+                raw_material_template_path=raw_material_template_path,
+                output_path=file_path,
+                supplier_map=supplier_map,
+                return_expanded=True,
+            )
+            expanded_all.append(expanded_site)
+            supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
+            supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
+            supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
+            supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
+            supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
+            zf.write(file_path, arcname=file_path.name)
+            generated_files.append({
+                "production_site": site,
+                "filename": file_path.name,
+                "activity_rows": int(write_summary.get("activity_rows", 0)),
+                "raw_materials": int(write_summary.get("raw_materials", 0)),
+            })
+
+    combined_expanded = pd.concat(expanded_all, ignore_index=True) if expanded_all else pd.DataFrame()
+    supplier_bulk_summary = {}
+    if supplier_bulk_template_path and supplier_bulk_output_path:
+        supplier_bulk_summary = _write_supplier_bulk_create_file(combined_expanded, supplier_bulk_template_path, supplier_bulk_output_path)
+
+    unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
+    summary = dict(base_summary)
+    summary.update({
+        "output_filename": zip_filename,
+        "download_url": f"/download/{zip_filename}",
+        "split_by_production_site": True,
+        "production_site_files": generated_files,
+        "production_site_count": int(len(site_values)),
+        "unassigned_rows": unassigned_rows,
+        "used_columns": used_columns,
+        "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
+        "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
+        "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
+        "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
+        "supplier_matched_rows": int(supplier_matched_total),
+        "supplier_expanded_rows": int(supplier_expanded_total),
+        "supplier_name_matched_rows": int(supplier_name_matched_total),
+        "supplier_name_missing_rows": int(supplier_name_missing_total),
+        "supplier_dropdown_matched_rows": int(supplier_name_matched_total),
+        "supplier_dropdown_missing_rows": int(supplier_name_missing_total),
+        "supplier_name_options": int(supplier_options_total),
+    })
+    summary.update(step1_summary)
+    summary.update(supplier_summary)
+    summary.update(supplier_bulk_summary)
+    return summary
+
+
+BOM_FORMATTER_VERSION = "CMP_V16_0_SUPPLIER_MASTER_CLEAN_PATCH"
