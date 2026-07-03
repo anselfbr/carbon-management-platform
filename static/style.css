@@ -1949,3 +1949,37 @@ select:focus {
 .module3-sub-nav .sub-nav-item:focus-visible {
   transform: translateX(3px);
 }
+
+/* MODULE3 Stage2 v4: align all sidebar sub-layer items to the left
+   Applies to Rule Management, CCL Mapping, and Factor Library only through the existing sub-nav structure. */
+.sidebar-expanded .sub-nav {
+  margin-left: 72px;
+  padding-left: 0;
+  border-left: 1px solid rgba(255,255,255,.14);
+  gap: 6px;
+}
+
+.sidebar-expanded .sub-nav .sub-nav-item {
+  width: calc(100% - 12px);
+  min-height: 36px;
+  padding: 7px 10px 7px 10px;
+  justify-content: flex-start;
+  gap: 10px;
+  text-align: left;
+}
+
+.sidebar-expanded .sub-nav .sub-dot {
+  margin-left: 0;
+  flex: 0 0 8px;
+}
+
+.sidebar-expanded .module3-sub-nav {
+  margin-left: 72px;
+  padding-left: 0;
+  border-left: 1px solid rgba(255,255,255,.14);
+}
+
+.sidebar-expanded .module3-sub-nav .sub-nav-item {
+  width: calc(100% - 12px);
+  padding-left: 10px;
+}
