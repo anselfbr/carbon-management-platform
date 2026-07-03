@@ -1923,3 +1923,29 @@ select:focus {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* MODULE3 Stage2 v3: align sub-layer navigation under Module 3 title */
+.module3-sub-nav {
+  margin: 0 0 6px 72px;
+  padding-left: 0;
+  border-left: 0;
+  gap: 6px;
+}
+
+.module3-sub-nav .sub-nav-item {
+  width: calc(100% - 12px);
+  min-height: 34px;
+  padding: 7px 10px 7px 0;
+  border-radius: 10px;
+  gap: 10px;
+  transition: background .18s ease, border-color .18s ease, transform .18s ease, color .18s ease;
+}
+
+.module3-sub-nav .sub-dot {
+  margin-left: 0;
+}
+
+.module3-sub-nav .sub-nav-item:hover,
+.module3-sub-nav .sub-nav-item:focus-visible {
+  transform: translateX(3px);
+}
