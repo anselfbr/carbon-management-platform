@@ -647,7 +647,10 @@
                 <h2 data-i18n="ruleManagement">Rule Management</h2>
                 <p data-i18n="importDownloadClassificationRules">Import and download classification rule masters for Product Data Preparation.</p>
               </div>
-              <span class="step-chip" data-i18n="ruleMaster">Rule Master</span>
+              <div class="section-actions">
+                <span class="step-chip" data-i18n="ruleMaster">Rule Master</span>
+                <button class="btn-secondary module-back-btn" type="button" data-prep-page="product-data" data-i18n="backToModule1Menu">返回模組 1 選單</button>
+              </div>
             </div>
 
             <p class="hint" data-i18n="ruleManagementHint">
@@ -985,6 +988,13 @@ document.querySelectorAll('.sub-nav-item').forEach(btn => {
       return;
     }
     activatePrepPage(pageId);
+  };
+});
+
+
+document.querySelectorAll('[data-prep-page]').forEach(btn => {
+  btn.onclick = () => {
+    activatePrepPage(btn.dataset.prepPage || 'product-data');
   };
 });
 

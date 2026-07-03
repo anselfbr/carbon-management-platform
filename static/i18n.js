@@ -92,6 +92,10 @@
         "en": "Back to Module 3 Menu",
         "zh": "返回模組 3 選單"
     },
+    "backToModule1Menu": {
+        "en": "Back to Module 1 Menu",
+        "zh": "返回模組 1 選單"
+    },
     "module3CclStep1": {
         "en": "Upload raw material bulk output from Module 2",
         "zh": "上傳 MODULE2 產出的 raw material bulk 檔"

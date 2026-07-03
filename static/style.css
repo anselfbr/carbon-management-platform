@@ -1983,3 +1983,24 @@ select:focus {
   width: calc(100% - 12px);
   padding-left: 10px;
 }
+
+
+/* MODULE sub-page reusable return button alignment - 20260703 v5 */
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.module-back-btn {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .section-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
