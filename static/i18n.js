@@ -1185,3 +1185,26 @@
 
   applyLanguage(currentLang);
 })();
+
+
+// MODULE3 Stage 2 v15 i18n patch
+try {
+  if (typeof translations !== 'undefined') {
+    if (translations.zh) {
+      translations.zh.factorDetailKicker = translations.zh.factorDetailKicker || '係數詳情';
+      translations.zh.factorDetailTitle = translations.zh.factorDetailTitle || '係數詳細說明';
+      translations.zh.referenceProductName = translations.zh.referenceProductName || 'Reference Product Name';
+      translations.zh.lciaIndicator = translations.zh.lciaIndicator || 'LCIA 指標';
+      translations.zh.clickForFactorDetail = translations.zh.clickForFactorDetail || '點選查看係數詳細說明';
+      translations.zh.close = translations.zh.close || '關閉';
+    }
+    if (translations.en) {
+      translations.en.factorDetailKicker = translations.en.factorDetailKicker || 'Factor Detail';
+      translations.en.factorDetailTitle = translations.en.factorDetailTitle || 'Factor Detail';
+      translations.en.referenceProductName = translations.en.referenceProductName || 'Reference Product Name';
+      translations.en.lciaIndicator = translations.en.lciaIndicator || 'LCIA Indicator';
+      translations.en.clickForFactorDetail = translations.en.clickForFactorDetail || 'Click to view factor detail';
+      translations.en.close = translations.en.close || 'Close';
+    }
+  }
+} catch (e) { console.warn('MODULE3 v15 i18n patch skipped', e); }

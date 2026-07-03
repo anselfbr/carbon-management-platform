@@ -1324,14 +1324,15 @@ function ensureModule3FactorDetailModal() {
     <section class="module3-factor-modal-card" role="dialog" aria-modal="true" aria-labelledby="module3FactorDetailTitle">
       <div class="module3-factor-modal-head">
         <div>
-          <p class="module3-factor-modal-kicker">Factor Detail</p>
-          <h3 id="module3FactorDetailTitle">係數詳細說明</h3>
+          <p class="module3-factor-modal-kicker" data-i18n="factorDetailKicker">Factor Detail</p>
+          <h3 id="module3FactorDetailTitle" data-i18n="factorDetailTitle">係數詳細說明</h3>
         </div>
-        <button class="module3-factor-modal-close" type="button" data-module3-factor-close="1" aria-label="Close">×</button>
+        <button class="module3-factor-modal-close" type="button" data-module3-factor-close="1" aria-label="Close" data-i18n-aria-label="close">×</button>
       </div>
       <div id="module3FactorDetailBody" class="module3-factor-detail-grid"></div>
     </section>`;
   document.body.appendChild(modal);
+  if (typeof applyI18n === 'function') applyI18n();
   modal.addEventListener('click', (event) => {
     if (event.target && event.target.dataset && event.target.dataset.module3FactorClose) {
       closeModule3FactorDetail();
@@ -1384,6 +1385,7 @@ function renderModule3FactorRows(results) {
     const tr = document.createElement('tr');
     tr.className = 'module3-factor-result-row';
     tr.tabIndex = 0;
+    tr.setAttribute('role', 'button');
     tr.title = cmpT('clickForFactorDetail', '點選查看係數詳細說明');
     const cells = [
       row.source || '',
