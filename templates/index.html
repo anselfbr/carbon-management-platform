@@ -1458,9 +1458,17 @@ function scheduleModule3FactorSearch() {
   if (!module3FactorKeyword) return;
   module3FactorCurrentPage = 1;
   window.clearTimeout(module3FactorSearchTimer);
+  const keyword = (module3FactorKeyword.value || '').trim();
+  if (!keyword || keyword.length < 2) {
+    if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。');
+    renderModule3FactorRows([]);
+    resetModule3FactorPagination();
+    return;
+  }
+  if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3TypingSearchReady', '偵測到關鍵字，正在準備即時搜尋...');
   module3FactorSearchTimer = window.setTimeout(() => {
     searchModule3Factors({auto: true});
-  }, 300);
+  }, 220);
 }
 
 async function searchModule3Factors(options = {}) {
@@ -1480,7 +1488,7 @@ async function searchModule3Factors(options = {}) {
     module3FactorSearchBtn.disabled = true;
     module3FactorSearchBtn.classList.add('is-loading');
   }
-  renderModule3FactorRows([]);
+  // Keep current results visible while the next instant-search request is running.
   try {
     const params = new URLSearchParams({
       keyword,

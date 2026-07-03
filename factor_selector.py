@@ -311,6 +311,28 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
     return cached
 
 
+
+def _keyword_matches_activity_or_reference(keyword: str, searchable: str) -> bool:
+    """Match keyword against Activity Name and Reference Product Name.
+
+    English / alphanumeric keywords are matched as complete words or complete
+    phrases, so a query such as "tin" will not match "coating" merely because
+    the letters appear inside another word. Non-English keywords continue to use
+    a direct containment check because word boundaries are less reliable.
+    """
+    key = str(keyword or "").strip().lower()
+    text = str(searchable or "").lower()
+    if not key:
+        return True
+    if re.fullmatch(r"[a-z0-9][a-z0-9\s\-_/.,()+]*", key, flags=re.I):
+        # Treat separators and punctuation as boundaries, but do not match inside
+        # another English/alphanumeric token.
+        escaped = re.escape(key)
+        escaped = escaped.replace(r"\ ", r"\s+")
+        pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
+        return re.search(pattern, text, flags=re.I) is not None
+    return key in text
+
 def _search_lcia_file(
     path: str | Path,
     keyword: str,
@@ -330,7 +352,7 @@ def _search_lcia_file(
             continue
         if process_token and process_token not in row.get("_activity_lower", ""):
             continue
-        if key not in row.get("_searchable", ""):
+        if not _keyword_matches_activity_or_reference(key, row.get("_searchable", "")):
             continue
         total_count += 1
         if len(results) < limit:
