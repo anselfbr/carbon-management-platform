@@ -2159,3 +2159,54 @@ select:focus {
 @keyframes module3FactorSpin {
   to { transform: rotate(360deg); }
 }
+
+/* MODULE3 Stage 2 v11 · Factor Library pagination */
+.module3-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 12px 0 4px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.module3-pagination.hidden {
+  display: none;
+}
+
+.module3-page-size-field,
+.module3-page-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.module3-page-size-field select {
+  min-width: 76px;
+  padding: 7px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+}
+
+.module3-page-btn {
+  min-width: 76px;
+  padding: 7px 12px;
+}
+
+.module3-page-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.module3-page-info {
+  min-width: 56px;
+  text-align: center;
+  font-weight: 700;
+  color: #0f172a;
+}

@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V10"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V11"
 
 
 def _norm(value: Any) -> str:
@@ -205,6 +205,7 @@ def _resolve_lcia_metadata_columns(ws) -> dict[str, int]:
     """Resolve LCIA metadata columns by row-4 headers instead of fixed column letters."""
     aliases = {
         "activity_name": ["Activity Name"],
+        "reference_product_name": ["Reference Product Name", "Reference Product", "Product Name"],
         "geography": ["Geography", "Geographical representativeness"],
         "reference_product_unit": ["Reference Product Unit", "Unit"],
     }
@@ -216,7 +217,9 @@ def _resolve_lcia_metadata_columns(ws) -> dict[str, int]:
             if _norm(ws.cell(header_row, col).value) in alias_keys:
                 resolved[key] = col
                 break
-        if key not in resolved:
+        if key not in resolved and key == "reference_product_name":
+            resolved[key] = 4  # ecoinvent LCIA common position; used only as a fallback for keyword search
+        elif key not in resolved:
             raise ValueError(f"LCIA 檔案找不到欄位：{', '.join(names)}")
     return resolved
 
@@ -264,16 +267,13 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
     for values in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
         activity_name = _text(values[meta_cols["activity_name"] - 1] if len(values) >= meta_cols["activity_name"] else "")
         row_geography = _text(values[meta_cols["geography"] - 1] if len(values) >= meta_cols["geography"] else "")
+        reference_product_name = _text(values[meta_cols["reference_product_name"] - 1] if len(values) >= meta_cols["reference_product_name"] else "")
         ref_unit = _text(values[meta_cols["reference_product_unit"] - 1] if len(values) >= meta_cols["reference_product_unit"] else "")
         factor_value = values[value_col - 1] if len(values) >= value_col else None
         if row_geography:
             geographies.add(row_geography)
-        searchable_values = [
-            activity_name,
-            row_geography,
-            ref_unit,
-            _text(values[3] if len(values) > 3 else ""),  # Reference Product Name, when present
-        ]
+        # Keyword search is intentionally limited to Activity Name and Reference Product Name only.
+        searchable_values = [activity_name, reference_product_name]
         searchable = " ".join(_text(v).lower() for v in searchable_values)
         rows.append({
             "source": display_source,
@@ -282,6 +282,7 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
             "geography": row_geography,
             "emission_factor": factor_value,
             "reference_product_unit": ref_unit,
+            "reference_product_name": reference_product_name,
             "ipcc2021_gwp100": factor_value,
             "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
             "_activity_lower": activity_name.lower(),
@@ -306,9 +307,10 @@ def _search_lcia_file(
     limit: int,
     geography: str | None = "all",
     process_type: str | None = "all",
-) -> list[Dict[str, Any]]:
+) -> tuple[list[Dict[str, Any]], int]:
     cache = _load_lcia_cache(path, source)
     results: list[Dict[str, Any]] = []
+    total_count = 0
     key = keyword.lower().strip()
     geography_key = str(geography or "all").strip()
     process_token = _process_type_token(process_type)
@@ -319,11 +321,11 @@ def _search_lcia_file(
             continue
         if key not in row.get("_searchable", ""):
             continue
-        clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key"}
-        results.append(clean_row)
-        if len(results) >= limit:
-            break
-    return results
+        total_count += 1
+        if len(results) < limit:
+            clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key" and k != "reference_product_name"}
+            results.append(clean_row)
+    return results, total_count
 
 
 def collect_factor_library_geographies(*paths: str | Path | None) -> list[str]:
@@ -343,25 +345,49 @@ def search_factor_library(
     keyword: str,
     apos_path: str | Path | None,
     cutoff_path: str | Path | None,
-    limit: int = 80,
+    limit: int = 10,
     source: str = "all",
     geography: str = "all",
     process_type: str = "all",
+    page: int = 1,
+    page_size: int = 10,
 ) -> Dict[str, Any]:
     keyword = str(keyword or "").strip()
     if len(keyword) < 2:
         raise ValueError("請輸入至少 2 個字元的關鍵字")
-    limit = max(1, min(int(limit or 80), 200))
+    page_size = int(page_size or limit or 10)
+    if page_size not in {10, 20, 50}:
+        page_size = 10
+    page = max(1, int(page or 1))
+    # Load enough rows to slice the requested page after APOS -> Cut-off priority ordering.
+    fetch_limit = page * page_size
     selected_source = str(source or "all").strip().lower()
-    results: list[Dict[str, Any]] = []
+    ordered_results: list[Dict[str, Any]] = []
+    total_count = 0
     if selected_source in {"all", "apos"} and apos_path and Path(apos_path).exists():
-        results.extend(_search_lcia_file(apos_path, keyword, "APOS", limit, geography, process_type))
-    remaining = limit - len(results)
-    if remaining > 0 and selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
-        results.extend(_search_lcia_file(cutoff_path, keyword, "Cut-off", remaining, geography, process_type))
+        apos_results, apos_count = _search_lcia_file(apos_path, keyword, "APOS", fetch_limit, geography, process_type)
+        ordered_results.extend(apos_results)
+        total_count += apos_count
+    remaining_fetch = max(0, fetch_limit - len(ordered_results))
+    if remaining_fetch > 0 and selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
+        cutoff_results, cutoff_count = _search_lcia_file(cutoff_path, keyword, "Cut-off", remaining_fetch, geography, process_type)
+        ordered_results.extend(cutoff_results)
+        total_count += cutoff_count
+    elif selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
+        # Count Cut-off matches even when the requested page is fully occupied by APOS results.
+        _, cutoff_count = _search_lcia_file(cutoff_path, keyword, "Cut-off", 0, geography, process_type)
+        total_count += cutoff_count
+    start = (page - 1) * page_size
+    end = start + page_size
+    results = ordered_results[start:end]
+    total_pages = max(1, (total_count + page_size - 1) // page_size) if total_count else 0
     return {
         "keyword": keyword,
         "count": len(results),
+        "total_count": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
         "priority": "APOS first, then Cut-off",
         "filters": {
             "source": source or "all",

@@ -547,6 +547,22 @@
                   <tbody></tbody>
                 </table>
               </div>
+              <div id="module3FactorPagination" class="module3-pagination hidden">
+                <label class="module3-page-size-field" for="module3FactorPageSize">
+                  <span data-i18n="rowsPerPage">每頁顯示</span>
+                  <select id="module3FactorPageSize">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                  </select>
+                  <span data-i18n="rowsUnit">筆</span>
+                </label>
+                <div class="module3-page-controls">
+                  <button id="module3FactorPrevPage" class="btn-secondary module3-page-btn" type="button" data-i18n="previousPage">上一頁</button>
+                  <span id="module3FactorPageInfo" class="module3-page-info">0/0</span>
+                  <button id="module3FactorNextPage" class="btn-secondary module3-page-btn" type="button" data-i18n="nextPage">下一頁</button>
+                </div>
+              </div>
             </div>
           </section>
         </section>
@@ -872,6 +888,11 @@ const module3FactorSearchBtn = document.getElementById('module3FactorSearchBtn')
 const module3FactorClearBtn = document.getElementById('module3FactorClearBtn');
 const module3FactorStatus = document.getElementById('module3FactorStatus');
 const module3FactorTable = document.getElementById('module3FactorTable');
+const module3FactorPagination = document.getElementById('module3FactorPagination');
+const module3FactorPageSize = document.getElementById('module3FactorPageSize');
+const module3FactorPrevPage = document.getElementById('module3FactorPrevPage');
+const module3FactorNextPage = document.getElementById('module3FactorNextPage');
+const module3FactorPageInfo = document.getElementById('module3FactorPageInfo');
 
 function formatRuleSetLabel(value) {
   if (value === 'PC_CE') return 'PC&CE';
@@ -1305,6 +1326,24 @@ function renderModule3FactorRows(results) {
   module3FactorTable.classList.toggle('hidden', results.length === 0);
 }
 
+function updateModule3FactorPagination(meta = {}) {
+  module3FactorTotalCount = Number(meta.total_count || 0);
+  module3FactorCurrentPage = Number(meta.page || module3FactorCurrentPage || 1);
+  module3FactorTotalPages = Number(meta.total_pages || 0);
+  const hasResults = module3FactorTotalCount > 0 && module3FactorTotalPages > 0;
+  if (module3FactorPagination) module3FactorPagination.classList.toggle('hidden', !hasResults);
+  if (module3FactorPageInfo) module3FactorPageInfo.textContent = hasResults ? `${module3FactorCurrentPage}/${module3FactorTotalPages}` : '0/0';
+  if (module3FactorPrevPage) module3FactorPrevPage.disabled = !hasResults || module3FactorCurrentPage <= 1;
+  if (module3FactorNextPage) module3FactorNextPage.disabled = !hasResults || module3FactorCurrentPage >= module3FactorTotalPages;
+}
+
+function resetModule3FactorPagination() {
+  module3FactorCurrentPage = 1;
+  module3FactorTotalPages = 0;
+  module3FactorTotalCount = 0;
+  updateModule3FactorPagination({total_count: 0, page: 1, total_pages: 0});
+}
+
 async function loadModule3FactorFilters() {
   if (!module3FactorGeography) return;
   try {
@@ -1328,9 +1367,13 @@ async function loadModule3FactorFilters() {
 
 let module3FactorSearchTimer = null;
 let module3FactorRequestSeq = 0;
+let module3FactorCurrentPage = 1;
+let module3FactorTotalPages = 0;
+let module3FactorTotalCount = 0;
 
 function scheduleModule3FactorSearch() {
   if (!module3FactorKeyword) return;
+  module3FactorCurrentPage = 1;
   window.clearTimeout(module3FactorSearchTimer);
   module3FactorSearchTimer = window.setTimeout(() => {
     searchModule3Factors({auto: true});
@@ -1344,6 +1387,7 @@ async function searchModule3Factors(options = {}) {
       ? cmpT('module3LibraryReady', '請輸入關鍵字搜尋 APOS / Cut-off 係數資料庫。')
       : cmpT('module3KeywordTooShort', '請輸入至少 2 個字元。');
     renderModule3FactorRows([]);
+    resetModule3FactorPagination();
     return;
   }
   const requestId = ++module3FactorRequestSeq;
@@ -1357,7 +1401,9 @@ async function searchModule3Factors(options = {}) {
   try {
     const params = new URLSearchParams({
       keyword,
-      limit: '80',
+      limit: module3FactorPageSize?.value || '10',
+      page_size: module3FactorPageSize?.value || '10',
+      page: String(module3FactorCurrentPage || 1),
       source: module3FactorSource?.value || 'all',
       geography: module3FactorGeography?.value || 'all',
       process_type: module3FactorProcessType?.value || 'all'
@@ -1367,14 +1413,17 @@ async function searchModule3Factors(options = {}) {
     if (requestId !== module3FactorRequestSeq) return;
     if (!data.ok) throw new Error(data.message || cmpT('module3SearchFailed', '係數搜尋失敗'));
     const results = data.results || [];
-    module3FactorStatus.textContent = results.length
-      ? formatDynamic('module3SearchSuccessText', '找到 {count} 筆資料；顯示順序為 APOS 優先，再 Cut-off。', {count: results.length})
+    const totalCount = Number(data.total_count || results.length || 0);
+    module3FactorStatus.textContent = totalCount
+      ? formatDynamic('module3SearchSuccessText', '找到 {count} 筆資料；顯示順序為 APOS 優先，再 Cut-off。', {count: totalCount})
       : cmpT('module3NoFactorResult', '查無符合資料。');
     renderModule3FactorRows(results);
+    updateModule3FactorPagination(data);
   } catch (err) {
     if (requestId !== module3FactorRequestSeq) return;
     module3FactorStatus.textContent = err.message;
     renderModule3FactorRows([]);
+    resetModule3FactorPagination();
   } finally {
     if (requestId !== module3FactorRequestSeq) return;
     module3FactorStatus.classList.remove('loading');
@@ -1392,6 +1441,7 @@ function clearModule3FactorFilters() {
   if (module3FactorKeyword) module3FactorKeyword.value = '';
   if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。');
   renderModule3FactorRows([]);
+  resetModule3FactorPagination();
 }
 
 if (module3FactorSearchBtn) {
@@ -1405,6 +1455,28 @@ if (module3FactorKeyword) {
 });
 if (module3FactorClearBtn) {
   module3FactorClearBtn.addEventListener('click', clearModule3FactorFilters);
+}
+if (module3FactorPageSize) {
+  module3FactorPageSize.addEventListener('change', () => {
+    module3FactorCurrentPage = 1;
+    searchModule3Factors({auto: true});
+  });
+}
+if (module3FactorPrevPage) {
+  module3FactorPrevPage.addEventListener('click', () => {
+    if (module3FactorCurrentPage > 1) {
+      module3FactorCurrentPage -= 1;
+      searchModule3Factors({auto: true});
+    }
+  });
+}
+if (module3FactorNextPage) {
+  module3FactorNextPage.addEventListener('click', () => {
+    if (module3FactorTotalPages && module3FactorCurrentPage < module3FactorTotalPages) {
+      module3FactorCurrentPage += 1;
+      searchModule3Factors({auto: true});
+    }
+  });
 }
 if (module3FactorKeyword) {
   module3FactorKeyword.addEventListener('keydown', (e) => {
