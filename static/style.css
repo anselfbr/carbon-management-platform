@@ -2129,3 +2129,33 @@ select:focus {
   .module3-search-btn,
   .module3-clear-btn { width: 100%; }
 }
+
+/* MODULE3 Stage 2 v9: factor library loading state */
+.module3-empty-result.loading {
+  position: relative;
+  padding-left: 2.5rem;
+}
+
+.module3-empty-result.loading::before {
+  content: "";
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-top: -0.425rem;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: module3FactorSpin 0.8s linear infinite;
+}
+
+.module3-search-btn.is-loading,
+.module3-search-btn:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+@keyframes module3FactorSpin {
+  to { transform: rotate(360deg); }
+}

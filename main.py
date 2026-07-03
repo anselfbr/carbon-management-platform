@@ -1770,7 +1770,7 @@ def module3_factor_library_filters():
             "geographies": geographies,
             "sources": ["APOS", "Cut-off"],
             "process_types": ["production", "market_for"],
-            "app_version": "CMP_MODULE3_STAGE2_V7",
+            "app_version": "CMP_MODULE3_STAGE2_V9",
         }
     except Exception as exc:
         traceback.print_exc()
@@ -1797,7 +1797,7 @@ def module3_search_factor_library(
             process_type=process_type,
         )
         result["ok"] = True
-        result["app_version"] = "CMP_MODULE3_STAGE2_V7"
+        result["app_version"] = "CMP_MODULE3_STAGE2_V9"
         return result
     except Exception as exc:
         traceback.print_exc()

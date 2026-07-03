@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V7"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V9"
 
 
 def _norm(value: Any) -> str:
@@ -209,6 +209,67 @@ def _process_type_token(process_type: str | None) -> str:
     return ""
 
 
+
+_SOURCE_DISPLAY_NAMES = {
+    "APOS": "Ecoinvent 3.12 APOS",
+    "Cut-off": "Ecoinvent 3.12 Cut-off",
+}
+
+_LCIA_CACHE: dict[str, Dict[str, Any]] = {}
+
+
+def _source_display_name(source: str) -> str:
+    return _SOURCE_DISPLAY_NAMES.get(source, source)
+
+
+def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
+    """Load LCIA rows once into memory so repeated keyword searches do not re-read Excel."""
+    path = Path(path)
+    cache_key = str(path.resolve())
+    stat = path.stat()
+    cached = _LCIA_CACHE.get(cache_key)
+    if cached and cached.get("mtime") == stat.st_mtime and cached.get("size") == stat.st_size:
+        return cached
+
+    wb = load_workbook(path, read_only=True, data_only=True)
+    if LCIA_SHEET_NAME not in wb.sheetnames:
+        raise ValueError(f"{path.name} 找不到分頁：{LCIA_SHEET_NAME}")
+    ws = wb[LCIA_SHEET_NAME]
+    value_col = _resolve_lcia_target_column(ws)
+
+    rows: list[Dict[str, Any]] = []
+    geographies: set[str] = set()
+    display_source = _source_display_name(source)
+    for values in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
+        activity_name = _text(values[1] if len(values) > 1 else "")
+        row_geography = _text(values[2] if len(values) > 2 else "")
+        ref_unit = _text(values[4] if len(values) > 4 else "")
+        if row_geography:
+            geographies.add(row_geography)
+        searchable = " ".join(_text(v).lower() for v in values[:6])
+        rows.append({
+            "source": display_source,
+            "source_key": source,
+            "activity_name": activity_name,
+            "geography": row_geography,
+            "reference_product_unit": ref_unit,
+            "ipcc2021_gwp100": values[value_col - 1] if len(values) >= value_col else None,
+            "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
+            "_activity_lower": activity_name.lower(),
+            "_searchable": searchable,
+        })
+
+    cached = {
+        "mtime": stat.st_mtime,
+        "size": stat.st_size,
+        "source": source,
+        "rows": rows,
+        "geographies": geographies,
+    }
+    _LCIA_CACHE[cache_key] = cached
+    return cached
+
+
 def _search_lcia_file(
     path: str | Path,
     keyword: str,
@@ -217,36 +278,20 @@ def _search_lcia_file(
     geography: str | None = "all",
     process_type: str | None = "all",
 ) -> list[Dict[str, Any]]:
-    wb = load_workbook(path, read_only=True, data_only=True)
-    if LCIA_SHEET_NAME not in wb.sheetnames:
-        raise ValueError(f"{Path(path).name} 找不到分頁：{LCIA_SHEET_NAME}")
-    ws = wb[LCIA_SHEET_NAME]
-    value_col = _resolve_lcia_target_column(ws)
+    cache = _load_lcia_cache(path, source)
     results: list[Dict[str, Any]] = []
     key = keyword.lower().strip()
     geography_key = str(geography or "all").strip()
     process_token = _process_type_token(process_type)
-    # iter_rows is much faster than repeated ws.cell calls for the 26k+ row LCIA sheets.
-    for values in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
-        activity_name = _text(values[1] if len(values) > 1 else "")
-        row_geography = _text(values[2] if len(values) > 2 else "")
-        if geography_key.lower() != "all" and row_geography != geography_key:
+    for row in cache["rows"]:
+        if geography_key.lower() != "all" and row.get("geography") != geography_key:
             continue
-        if process_token and process_token not in activity_name.lower():
+        if process_token and process_token not in row.get("_activity_lower", ""):
             continue
-        searchable = values[:6]
-        haystack = " ".join(_text(v).lower() for v in searchable)
-        if key not in haystack:
+        if key not in row.get("_searchable", ""):
             continue
-        results.append({
-            "source": source,
-            "activity_name": activity_name,
-            "geography": row_geography,
-            "reference_product_name": _text(values[3] if len(values) > 3 else ""),
-            "reference_product_unit": _text(values[4] if len(values) > 4 else ""),
-            "ipcc2021_gwp100": values[value_col - 1] if len(values) >= value_col else None,
-            "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
-        })
+        clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key"}
+        results.append(clean_row)
         if len(results) >= limit:
             break
     return results
@@ -254,19 +299,16 @@ def _search_lcia_file(
 
 def collect_factor_library_geographies(*paths: str | Path | None) -> list[str]:
     values: set[str] = set()
-    for path in paths:
+    source_names = ["APOS", "Cut-off"]
+    for idx, path in enumerate(paths):
         if not path or not Path(path).exists():
             continue
-        wb = load_workbook(path, read_only=True, data_only=True)
-        if LCIA_SHEET_NAME not in wb.sheetnames:
+        source = source_names[idx] if idx < len(source_names) else Path(path).stem
+        try:
+            values.update(_load_lcia_cache(path, source).get("geographies", set()))
+        except Exception:
             continue
-        ws = wb[LCIA_SHEET_NAME]
-        for row_values in ws.iter_rows(min_row=5, max_row=ws.max_row, min_col=3, max_col=3, values_only=True):
-            geo = _text(row_values[0] if row_values else "")
-            if geo:
-                values.add(geo)
     return sorted(values, key=lambda x: (x != "GLO", x.lower()))
-
 
 def search_factor_library(
     keyword: str,

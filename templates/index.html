@@ -540,7 +540,6 @@
                       <th data-i18n="factorSource">來源</th>
                       <th data-i18n="activityName">Activity Name</th>
                       <th data-i18n="geography">Geography</th>
-                      <th data-i18n="referenceProduct">Reference Product</th>
                       <th data-i18n="unit">單位</th>
                       <th data-i18n="ipcc2021Gwp100">IPCC 2021 GWP100</th>
                     </tr>
@@ -1293,7 +1292,6 @@ function renderModule3FactorRows(results) {
       row.source || '',
       row.activity_name || '',
       row.geography || '',
-      row.reference_product_name || '',
       row.reference_product_unit || '',
       row.ipcc2021_gwp100 ?? ''
     ];
@@ -1335,7 +1333,12 @@ async function searchModule3Factors() {
     renderModule3FactorRows([]);
     return;
   }
-  module3FactorStatus.textContent = cmpT('module3Searching', '搜尋中...');
+  module3FactorStatus.textContent = cmpT('module3Searching', '查詢中，請稍候...');
+  module3FactorStatus.classList.add('loading');
+  if (module3FactorSearchBtn) {
+    module3FactorSearchBtn.disabled = true;
+    module3FactorSearchBtn.classList.add('is-loading');
+  }
   renderModule3FactorRows([]);
   try {
     const params = new URLSearchParams({
@@ -1356,6 +1359,12 @@ async function searchModule3Factors() {
   } catch (err) {
     module3FactorStatus.textContent = err.message;
     renderModule3FactorRows([]);
+  } finally {
+    module3FactorStatus.classList.remove('loading');
+    if (module3FactorSearchBtn) {
+      module3FactorSearchBtn.disabled = false;
+      module3FactorSearchBtn.classList.remove('is-loading');
+    }
   }
 }
 
