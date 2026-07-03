@@ -411,6 +411,44 @@
       </section>
 
 
+      <section id="factor-selection" class="page-section">
+        <section class="workspace module3-stage1">
+          <section class="card primary-card">
+            <div class="section-title">
+              <div>
+                <h2>Module 3 · Carbon Emission Factor Selection</h2>
+                <p>Stage 1 placeholder. This page is reserved for CCL Mapping and Factor Library search.</p>
+              </div>
+              <span class="step-chip">Stage 1</span>
+            </div>
+
+            <div class="module3-placeholder-grid">
+              <article class="module3-placeholder-card">
+                <span class="module3-placeholder-icon">A</span>
+                <div>
+                  <h3>CCL Mapping</h3>
+                  <p>Next stage: upload Module 2 raw material bulk output and Lite-On CCL mapping table, then write Factor fields by column name.</p>
+                </div>
+              </article>
+
+              <article class="module3-placeholder-card">
+                <span class="module3-placeholder-icon">B</span>
+                <div>
+                  <h3>Factor Library</h3>
+                  <p>Next stage: keyword search for APOS first, then Cut-off; display Activity Name and IPCC 2021 GWP100 factor values.</p>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="card insight-card">
+            <h2>Module 3 Integration Policy</h2>
+            <p>This page intentionally does not call any backend API yet. Module 1 and Module 2 routes, forms, Excel logic, and outputs remain unchanged in this Stage 1 version.</p>
+          </section>
+        </section>
+      </section>
+
+
       <section id="bom-expansion" class="page-section">
         <section class="workspace">
           <section class="card primary-card">
@@ -822,7 +860,7 @@ const moduleMessages = {
   },
   factor: {
     title: '3. Carbon Emission Factor Selection',
-    text: 'Reserved module. This area can be extended for emission factor mapping and selection.'
+    text: 'Stage 1 page is ready. CCL Mapping and Factor Library will be added in separate versions.'
   },
   pcf: {
     title: '4. PCF Calculation',
@@ -890,6 +928,22 @@ document.querySelectorAll('.sub-nav-item').forEach(btn => {
   btn.onclick = () => activatePrepPage(btn.dataset.page);
 });
 
+
+function activateFactorPage() {
+  document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+  document.getElementById('factor-selection').classList.add('active');
+
+  document.querySelectorAll('.sub-nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-main="factor"]').classList.add('active');
+
+  moduleNotice.classList.add('hidden');
+  pageTitle.textContent = 'Carbon Emission Factor Selection';
+  pageLead.textContent = 'Stage 1: independent Module 3 page shell for CCL Mapping and Factor Library expansion.';
+  pageLead.style.display = 'block';
+  cmpApplyI18n();
+  document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
+}
 
 function activateBomPage() {
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
@@ -1057,6 +1111,10 @@ document.querySelectorAll('[data-dashboard-target]').forEach(card => {
       activateBomPage();
       return;
     }
+    if (target === 'factor') {
+      activateFactorPage();
+      return;
+    }
     const navButton = document.querySelector(`[data-main="${target}"]`);
     if (navButton) navButton.click();
   };
@@ -1075,6 +1133,10 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     }
     if (key === 'bom') {
       activateBomPage();
+      return;
+    }
+    if (key === 'factor') {
+      activateFactorPage();
       return;
     }
 
