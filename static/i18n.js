@@ -1,4 +1,4 @@
-/* CMP i18n MODULE3 stage2 20260703 v7
+/* CMP i18n MODULE3 stage2 20260703 v10
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */
@@ -139,7 +139,7 @@
     "module3CclSuccessTitle": {"en": "CCL Mapping Completed", "zh": "CCL 係數對應完成"},
     "module3CclSuccessText": {"en": "Completed: {written} rows written, {unmatched} rows unmatched.", "zh": "完成：已寫入 {written} 筆，未對應 {unmatched} 筆。"},
     "module3CclFailed": {"en": "CCL Mapping failed", "zh": "CCL 係數對應失敗"},
-    "module3LibraryReady": {"en": "Enter a keyword to search APOS / Cut-off factor databases.", "zh": "請輸入關鍵字搜尋 APOS / Cut-off 係數資料庫。"},
+    "module3LibraryReady": {"en": "Type a keyword to search APOS / Cut-off factor databases automatically.", "zh": "請輸入關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。"},
     "module3SearchFactor": {"en": "Search", "zh": "搜尋"},
     "allItems": {"en": "All", "zh": "全部"},
     "processType": {"en": "Process Type", "zh": "製程類型"},
@@ -149,7 +149,8 @@
     "factorSource": {"en": "Source", "zh": "來源"},
     "activityName": {"en": "Activity Name", "zh": "Activity Name"},
     "geography": {"en": "Geography", "zh": "Geography"},
-        "unit": {"en": "Unit", "zh": "單位"},
+    "emissionFactorValue": {"en": "Emission Factor", "zh": "係數值"},
+    "unit": {"en": "Unit", "zh": "單位"},
     "ipcc2021Gwp100": {"en": "IPCC 2021 GWP100", "zh": "IPCC 2021 GWP100"},
     "module3KeywordTooShort": {"en": "Please enter at least 2 characters.", "zh": "請輸入至少 2 個字元。"},
     "module3Searching": {"en": "Searching, please wait...", "zh": "查詢中，請稍候..."},

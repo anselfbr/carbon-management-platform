@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V9"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V10"
 
 
 def _norm(value: Any) -> str:
@@ -200,6 +200,26 @@ def _resolve_lcia_target_column(ws) -> int:
     return sorted(candidates, reverse=True)[0][1]
 
 
+
+def _resolve_lcia_metadata_columns(ws) -> dict[str, int]:
+    """Resolve LCIA metadata columns by row-4 headers instead of fixed column letters."""
+    aliases = {
+        "activity_name": ["Activity Name"],
+        "geography": ["Geography", "Geographical representativeness"],
+        "reference_product_unit": ["Reference Product Unit", "Unit"],
+    }
+    resolved: dict[str, int] = {}
+    header_row = 4
+    for key, names in aliases.items():
+        alias_keys = {_norm(name) for name in names}
+        for col in range(1, ws.max_column + 1):
+            if _norm(ws.cell(header_row, col).value) in alias_keys:
+                resolved[key] = col
+                break
+        if key not in resolved:
+            raise ValueError(f"LCIA 檔案找不到欄位：{', '.join(names)}")
+    return resolved
+
 def _process_type_token(process_type: str | None) -> str:
     value = str(process_type or "all").strip().lower()
     if value in {"production", "production_only"}:
@@ -236,24 +256,33 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
         raise ValueError(f"{path.name} 找不到分頁：{LCIA_SHEET_NAME}")
     ws = wb[LCIA_SHEET_NAME]
     value_col = _resolve_lcia_target_column(ws)
+    meta_cols = _resolve_lcia_metadata_columns(ws)
 
     rows: list[Dict[str, Any]] = []
     geographies: set[str] = set()
     display_source = _source_display_name(source)
     for values in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
-        activity_name = _text(values[1] if len(values) > 1 else "")
-        row_geography = _text(values[2] if len(values) > 2 else "")
-        ref_unit = _text(values[4] if len(values) > 4 else "")
+        activity_name = _text(values[meta_cols["activity_name"] - 1] if len(values) >= meta_cols["activity_name"] else "")
+        row_geography = _text(values[meta_cols["geography"] - 1] if len(values) >= meta_cols["geography"] else "")
+        ref_unit = _text(values[meta_cols["reference_product_unit"] - 1] if len(values) >= meta_cols["reference_product_unit"] else "")
+        factor_value = values[value_col - 1] if len(values) >= value_col else None
         if row_geography:
             geographies.add(row_geography)
-        searchable = " ".join(_text(v).lower() for v in values[:6])
+        searchable_values = [
+            activity_name,
+            row_geography,
+            ref_unit,
+            _text(values[3] if len(values) > 3 else ""),  # Reference Product Name, when present
+        ]
+        searchable = " ".join(_text(v).lower() for v in searchable_values)
         rows.append({
             "source": display_source,
             "source_key": source,
             "activity_name": activity_name,
             "geography": row_geography,
+            "emission_factor": factor_value,
             "reference_product_unit": ref_unit,
-            "ipcc2021_gwp100": values[value_col - 1] if len(values) >= value_col else None,
+            "ipcc2021_gwp100": factor_value,
             "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
             "_activity_lower": activity_name.lower(),
             "_searchable": searchable,
