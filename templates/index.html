@@ -502,10 +502,35 @@
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
             <div class="module3-search-shell">
+              <div class="module3-filter-grid">
+                <label class="module3-filter-field" for="module3FactorSource">
+                  <span data-i18n="factorSource">來源</span>
+                  <select id="module3FactorSource">
+                    <option value="all" data-i18n="allItems">全部</option>
+                    <option value="APOS">APOS</option>
+                    <option value="Cut-off">Cut-off</option>
+                  </select>
+                </label>
+                <label class="module3-filter-field" for="module3FactorGeography">
+                  <span data-i18n="geography">Geography</span>
+                  <select id="module3FactorGeography">
+                    <option value="all" data-i18n="allItems">全部</option>
+                  </select>
+                </label>
+                <label class="module3-filter-field" for="module3FactorProcessType">
+                  <span data-i18n="processType">製程類型</span>
+                  <select id="module3FactorProcessType">
+                    <option value="all" data-i18n="allItems">全部</option>
+                    <option value="production" data-i18n="productionOnly">僅生產</option>
+                    <option value="market_for" data-i18n="productionWithTransport">生產(含運輸)</option>
+                  </select>
+                </label>
+              </div>
               <label for="module3FactorKeyword" data-i18n="keywordSearch">關鍵字搜尋</label>
               <div class="module3-search-row">
                 <input id="module3FactorKeyword" type="text" placeholder="solder" data-i18n-placeholder="factorSearchPlaceholder">
                 <button id="module3FactorSearchBtn" class="btn-primary module3-search-btn" type="button" data-i18n="module3SearchFactor">搜尋</button>
+                <button id="module3FactorClearBtn" class="btn-secondary module3-clear-btn" type="button" data-i18n="clearFilters">清除</button>
               </div>
               <div id="module3FactorStatus" class="module3-empty-result" data-i18n="module3LibraryReady">請輸入關鍵字搜尋 APOS / Cut-off 係數資料庫。</div>
               <div class="module3-table-wrap">
@@ -841,7 +866,11 @@ const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
 const module3CclDownload = document.getElementById('module3CclDownload');
 const module3FactorKeyword = document.getElementById('module3FactorKeyword');
+const module3FactorSource = document.getElementById('module3FactorSource');
+const module3FactorGeography = document.getElementById('module3FactorGeography');
+const module3FactorProcessType = document.getElementById('module3FactorProcessType');
 const module3FactorSearchBtn = document.getElementById('module3FactorSearchBtn');
+const module3FactorClearBtn = document.getElementById('module3FactorClearBtn');
 const module3FactorStatus = document.getElementById('module3FactorStatus');
 const module3FactorTable = document.getElementById('module3FactorTable');
 
@@ -1278,6 +1307,27 @@ function renderModule3FactorRows(results) {
   module3FactorTable.classList.toggle('hidden', results.length === 0);
 }
 
+async function loadModule3FactorFilters() {
+  if (!module3FactorGeography) return;
+  try {
+    const res = await fetch('/module3/factor-library-filters');
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.message || 'filter load failed');
+    const current = module3FactorGeography.value || 'all';
+    module3FactorGeography.innerHTML = `<option value="all">${cmpT('allItems', '全部')}</option>`;
+    (data.geographies || []).forEach(value => {
+      if (!value) return;
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = value;
+      module3FactorGeography.appendChild(opt);
+    });
+    module3FactorGeography.value = [...module3FactorGeography.options].some(o => o.value === current) ? current : 'all';
+  } catch (err) {
+    // Filter loading should not block keyword search.
+  }
+}
+
 async function searchModule3Factors() {
   const keyword = (module3FactorKeyword?.value || '').trim();
   if (!keyword || keyword.length < 2) {
@@ -1288,7 +1338,14 @@ async function searchModule3Factors() {
   module3FactorStatus.textContent = cmpT('module3Searching', '搜尋中...');
   renderModule3FactorRows([]);
   try {
-    const res = await fetch(`/module3/search-factor-library?keyword=${encodeURIComponent(keyword)}&limit=80`);
+    const params = new URLSearchParams({
+      keyword,
+      limit: '80',
+      source: module3FactorSource?.value || 'all',
+      geography: module3FactorGeography?.value || 'all',
+      process_type: module3FactorProcessType?.value || 'all'
+    });
+    const res = await fetch(`/module3/search-factor-library?${params.toString()}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.message || cmpT('module3SearchFailed', '係數搜尋失敗'));
     const results = data.results || [];
@@ -1302,14 +1359,27 @@ async function searchModule3Factors() {
   }
 }
 
+function clearModule3FactorFilters() {
+  if (module3FactorSource) module3FactorSource.value = 'all';
+  if (module3FactorGeography) module3FactorGeography.value = 'all';
+  if (module3FactorProcessType) module3FactorProcessType.value = 'all';
+  if (module3FactorKeyword) module3FactorKeyword.value = '';
+  if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入關鍵字搜尋 APOS / Cut-off 係數資料庫。');
+  renderModule3FactorRows([]);
+}
+
 if (module3FactorSearchBtn) {
   module3FactorSearchBtn.addEventListener('click', searchModule3Factors);
+}
+if (module3FactorClearBtn) {
+  module3FactorClearBtn.addEventListener('click', clearModule3FactorFilters);
 }
 if (module3FactorKeyword) {
   module3FactorKeyword.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') searchModule3Factors();
   });
 }
+loadModule3FactorFilters();
 
 
 

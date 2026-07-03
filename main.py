@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
 from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file
-from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, search_factor_library
+from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -1753,14 +1753,51 @@ async def module3_apply_ccl_factors(
     }
 
 
-@app.get("/module3/search-factor-library")
-def module3_search_factor_library(keyword: str, limit: int = 80):
-    apos_path = FACTOR_LIBRARY_DIR / "APOS Cumulative LCIA v3.12(顧問).xlsx"
-    cutoff_path = FACTOR_LIBRARY_DIR / "Cut-off Cumulative LCIA v3.12(顧問).xlsx"
+def _module3_factor_library_paths():
+    return (
+        FACTOR_LIBRARY_DIR / "APOS Cumulative LCIA v3.12(顧問).xlsx",
+        FACTOR_LIBRARY_DIR / "Cut-off Cumulative LCIA v3.12(顧問).xlsx",
+    )
+
+
+@app.get("/module3/factor-library-filters")
+def module3_factor_library_filters():
+    apos_path, cutoff_path = _module3_factor_library_paths()
     try:
-        result = search_factor_library(keyword, apos_path, cutoff_path, limit=limit)
+        geographies = collect_factor_library_geographies(apos_path, cutoff_path)
+        return {
+            "ok": True,
+            "geographies": geographies,
+            "sources": ["APOS", "Cut-off"],
+            "process_types": ["production", "market_for"],
+            "app_version": "CMP_MODULE3_STAGE2_V7",
+        }
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+
+@app.get("/module3/search-factor-library")
+def module3_search_factor_library(
+    keyword: str,
+    limit: int = 80,
+    source: str = "all",
+    geography: str = "all",
+    process_type: str = "all",
+):
+    apos_path, cutoff_path = _module3_factor_library_paths()
+    try:
+        result = search_factor_library(
+            keyword,
+            apos_path,
+            cutoff_path,
+            limit=limit,
+            source=source,
+            geography=geography,
+            process_type=process_type,
+        )
         result["ok"] = True
-        result["app_version"] = "CMP_MODULE3_STAGE2_V6"
+        result["app_version"] = "CMP_MODULE3_STAGE2_V7"
         return result
     except Exception as exc:
         traceback.print_exc()

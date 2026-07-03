@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_V20260703_V1"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V7"
 
 
 def _norm(value: Any) -> str:
@@ -200,7 +200,23 @@ def _resolve_lcia_target_column(ws) -> int:
     return sorted(candidates, reverse=True)[0][1]
 
 
-def _search_lcia_file(path: str | Path, keyword: str, source: str, limit: int) -> list[Dict[str, Any]]:
+def _process_type_token(process_type: str | None) -> str:
+    value = str(process_type or "all").strip().lower()
+    if value in {"production", "production_only"}:
+        return "production"
+    if value in {"market_for", "market", "production_with_transport"}:
+        return "market for"
+    return ""
+
+
+def _search_lcia_file(
+    path: str | Path,
+    keyword: str,
+    source: str,
+    limit: int,
+    geography: str | None = "all",
+    process_type: str | None = "all",
+) -> list[Dict[str, Any]]:
     wb = load_workbook(path, read_only=True, data_only=True)
     if LCIA_SHEET_NAME not in wb.sheetnames:
         raise ValueError(f"{Path(path).name} 找不到分頁：{LCIA_SHEET_NAME}")
@@ -208,16 +224,24 @@ def _search_lcia_file(path: str | Path, keyword: str, source: str, limit: int) -
     value_col = _resolve_lcia_target_column(ws)
     results: list[Dict[str, Any]] = []
     key = keyword.lower().strip()
+    geography_key = str(geography or "all").strip()
+    process_token = _process_type_token(process_type)
     # iter_rows is much faster than repeated ws.cell calls for the 26k+ row LCIA sheets.
     for values in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
+        activity_name = _text(values[1] if len(values) > 1 else "")
+        row_geography = _text(values[2] if len(values) > 2 else "")
+        if geography_key.lower() != "all" and row_geography != geography_key:
+            continue
+        if process_token and process_token not in activity_name.lower():
+            continue
         searchable = values[:6]
         haystack = " ".join(_text(v).lower() for v in searchable)
         if key not in haystack:
             continue
         results.append({
             "source": source,
-            "activity_name": _text(values[1] if len(values) > 1 else ""),
-            "geography": _text(values[2] if len(values) > 2 else ""),
+            "activity_name": activity_name,
+            "geography": row_geography,
             "reference_product_name": _text(values[3] if len(values) > 3 else ""),
             "reference_product_unit": _text(values[4] if len(values) > 4 else ""),
             "ipcc2021_gwp100": values[value_col - 1] if len(values) >= value_col else None,
@@ -228,21 +252,51 @@ def _search_lcia_file(path: str | Path, keyword: str, source: str, limit: int) -
     return results
 
 
-def search_factor_library(keyword: str, apos_path: str | Path | None, cutoff_path: str | Path | None, limit: int = 80) -> Dict[str, Any]:
+def collect_factor_library_geographies(*paths: str | Path | None) -> list[str]:
+    values: set[str] = set()
+    for path in paths:
+        if not path or not Path(path).exists():
+            continue
+        wb = load_workbook(path, read_only=True, data_only=True)
+        if LCIA_SHEET_NAME not in wb.sheetnames:
+            continue
+        ws = wb[LCIA_SHEET_NAME]
+        for row_values in ws.iter_rows(min_row=5, max_row=ws.max_row, min_col=3, max_col=3, values_only=True):
+            geo = _text(row_values[0] if row_values else "")
+            if geo:
+                values.add(geo)
+    return sorted(values, key=lambda x: (x != "GLO", x.lower()))
+
+
+def search_factor_library(
+    keyword: str,
+    apos_path: str | Path | None,
+    cutoff_path: str | Path | None,
+    limit: int = 80,
+    source: str = "all",
+    geography: str = "all",
+    process_type: str = "all",
+) -> Dict[str, Any]:
     keyword = str(keyword or "").strip()
     if len(keyword) < 2:
         raise ValueError("請輸入至少 2 個字元的關鍵字")
     limit = max(1, min(int(limit or 80), 200))
+    selected_source = str(source or "all").strip().lower()
     results: list[Dict[str, Any]] = []
-    if apos_path and Path(apos_path).exists():
-        results.extend(_search_lcia_file(apos_path, keyword, "APOS", limit))
+    if selected_source in {"all", "apos"} and apos_path and Path(apos_path).exists():
+        results.extend(_search_lcia_file(apos_path, keyword, "APOS", limit, geography, process_type))
     remaining = limit - len(results)
-    if remaining > 0 and cutoff_path and Path(cutoff_path).exists():
-        results.extend(_search_lcia_file(cutoff_path, keyword, "Cut-off", remaining))
+    if remaining > 0 and selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
+        results.extend(_search_lcia_file(cutoff_path, keyword, "Cut-off", remaining, geography, process_type))
     return {
         "keyword": keyword,
         "count": len(results),
         "priority": "APOS first, then Cut-off",
+        "filters": {
+            "source": source or "all",
+            "geography": geography or "all",
+            "process_type": process_type or "all",
+        },
         "results": results,
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
     }

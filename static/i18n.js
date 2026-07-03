@@ -1,4 +1,4 @@
-/* CMP i18n MODULE3 stage2 20260703 v6
+/* CMP i18n MODULE3 stage2 20260703 v7
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */
@@ -141,6 +141,11 @@
     "module3CclFailed": {"en": "CCL Mapping failed", "zh": "CCL 係數對應失敗"},
     "module3LibraryReady": {"en": "Enter a keyword to search APOS / Cut-off factor databases.", "zh": "請輸入關鍵字搜尋 APOS / Cut-off 係數資料庫。"},
     "module3SearchFactor": {"en": "Search", "zh": "搜尋"},
+    "allItems": {"en": "All", "zh": "全部"},
+    "processType": {"en": "Process Type", "zh": "製程類型"},
+    "productionOnly": {"en": "Production only", "zh": "僅生產"},
+    "productionWithTransport": {"en": "Production incl. transport", "zh": "生產(含運輸)"},
+    "clearFilters": {"en": "Clear", "zh": "清除"},
     "factorSource": {"en": "Source", "zh": "來源"},
     "activityName": {"en": "Activity Name", "zh": "Activity Name"},
     "geography": {"en": "Geography", "zh": "Geography"},
