@@ -1,4 +1,4 @@
-/* CMP i18n MODULE3 stage2 20260703 v1
+/* CMP i18n MODULE3 stage2 20260703 v2
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */

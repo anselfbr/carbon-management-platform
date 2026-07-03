@@ -1910,3 +1910,16 @@ select:focus {
     width: 100%;
   }
 }
+
+/* MODULE3 Stage2 v2: sub-layer page navigation */
+.module3-sub-nav .sub-nav-item { cursor: pointer; }
+.module3-sub-nav .sub-nav-item:hover {
+  transform: translateX(3px);
+}
+.module3-stage2 .module3-zone-card {
+  animation: module3PageIn 0.22s ease-out;
+}
+@keyframes module3PageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
