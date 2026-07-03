@@ -2004,3 +2004,90 @@ select:focus {
     justify-content: flex-start;
   }
 }
+
+/* MODULE3 Stage2 v6: implementation forms and factor search table */
+.module3-action-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+.module3-action-panel label,
+.module3-search-shell label {
+  color: #0b2c57;
+  font-weight: 800;
+}
+.module3-action-panel input[type="file"],
+.module3-search-row input {
+  width: 100%;
+  border: 1px solid rgba(24, 83, 130, 0.18);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: #f8fbff;
+  color: #0b2c57;
+  font: inherit;
+}
+.module3-run-btn,
+.module3-search-btn {
+  justify-self: start;
+  border: 0;
+  cursor: pointer;
+}
+.module3-result-box {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(24, 83, 130, 0.18);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: #f7fbff;
+  color: #5e6f8b;
+}
+.module3-result-box b { color: #0b2c57; }
+.module3-result-box.running { background: #fff9e8; border-color: rgba(198, 151, 45, 0.35); }
+.module3-result-box.success { background: #effbf5; border-color: rgba(42, 178, 115, 0.35); }
+.module3-result-box.error { background: #fff1f1; border-color: rgba(209, 65, 65, 0.35); }
+.module3-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+.module3-table-wrap {
+  width: 100%;
+  overflow: auto;
+  margin-top: 14px;
+  border-radius: 18px;
+}
+.module3-factor-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 880px;
+  background: #fff;
+  border: 1px solid rgba(24, 83, 130, 0.15);
+}
+.module3-factor-table th,
+.module3-factor-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(24, 83, 130, 0.12);
+  text-align: left;
+  vertical-align: top;
+  font-size: 0.9rem;
+}
+.module3-factor-table th {
+  color: #0b2c57;
+  background: #eef7ff;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.module3-factor-table td:nth-child(2),
+.module3-factor-table td:nth-child(4) {
+  min-width: 260px;
+}
+.module3-factor-table td:nth-child(6) {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .module3-search-row { grid-template-columns: 1fr; }
+  .module3-run-btn,
+  .module3-search-btn { width: 100%; }
+}

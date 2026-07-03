@@ -471,11 +471,22 @@
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
-            <div class="module3-zone-placeholder">
-              <div class="module3-zone-step"><b>1</b><span data-i18n="module3CclStep1">上傳 MODULE2 產出的 raw material bulk 檔</span></div>
-              <div class="module3-zone-step"><b>2</b><span data-i18n="module3CclStep2">上傳光寶 CCL 係數組配表</span></div>
-              <div class="module3-zone-step"><b>3</b><span data-i18n="module3CclStep3">依 Material 對應 CCL Item、碳係數與單位</span></div>
-            </div>
+            <form id="module3CclForm" class="module3-action-panel" enctype="multipart/form-data">
+              <label data-i18n="module3UploadRawBulk">上傳 MODULE2 產出的 raw material bulk 檔</label>
+              <input id="module3RawBulkFile" name="raw_material_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+
+              <label data-i18n="module3UploadCclMapping">上傳光寶 CCL 係數組配表</label>
+              <input id="module3CclMappingFile" name="ccl_mapping_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+
+              <button type="submit" class="btn-primary module3-run-btn" data-i18n="module3RunCclMapping">執行 CCL 係數對應</button>
+
+              <div id="module3CclResult" class="module3-result-box idle">
+                <b data-i18n="module3CclReadyTitle">待上傳檔案</b>
+                <span data-i18n="module3CclReadyText">系統會依 Material 對應 CCL Item、碳係數與單位，並寫入 Factor 欄位。</span>
+              </div>
+
+              <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載已填入係數的 Bulk 檔</span></a>
+            </form>
           </section>
         </section>
       </section>
@@ -491,9 +502,27 @@
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
             <div class="module3-search-shell">
-              <label data-i18n="keywordSearch">關鍵字搜尋</label>
-              <input type="text" placeholder="solder" data-i18n-placeholder="factorSearchPlaceholder" disabled>
-              <div class="module3-empty-result" data-i18n="module3LibraryNotConnected">搜尋 API 尚未啟用，下一階段接入 APOS / Cut-off 係數資料庫。</div>
+              <label for="module3FactorKeyword" data-i18n="keywordSearch">關鍵字搜尋</label>
+              <div class="module3-search-row">
+                <input id="module3FactorKeyword" type="text" placeholder="solder" data-i18n-placeholder="factorSearchPlaceholder">
+                <button id="module3FactorSearchBtn" class="btn-primary module3-search-btn" type="button" data-i18n="module3SearchFactor">搜尋</button>
+              </div>
+              <div id="module3FactorStatus" class="module3-empty-result" data-i18n="module3LibraryReady">請輸入關鍵字搜尋 APOS / Cut-off 係數資料庫。</div>
+              <div class="module3-table-wrap">
+                <table id="module3FactorTable" class="module3-factor-table hidden">
+                  <thead>
+                    <tr>
+                      <th data-i18n="factorSource">來源</th>
+                      <th data-i18n="activityName">Activity Name</th>
+                      <th data-i18n="geography">Geography</th>
+                      <th data-i18n="referenceProduct">Reference Product</th>
+                      <th data-i18n="unit">單位</th>
+                      <th data-i18n="ipcc2021Gwp100">IPCC 2021 GWP100</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
             </div>
           </section>
         </section>
@@ -808,6 +837,13 @@ const bomStatusText = document.getElementById('bomStatusText');
 const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
+const module3CclForm = document.getElementById('module3CclForm');
+const module3CclResult = document.getElementById('module3CclResult');
+const module3CclDownload = document.getElementById('module3CclDownload');
+const module3FactorKeyword = document.getElementById('module3FactorKeyword');
+const module3FactorSearchBtn = document.getElementById('module3FactorSearchBtn');
+const module3FactorStatus = document.getElementById('module3FactorStatus');
+const module3FactorTable = document.getElementById('module3FactorTable');
 
 function formatRuleSetLabel(value) {
   if (value === 'PC_CE') return 'PC&CE';
@@ -1180,6 +1216,100 @@ bomForm.addEventListener('submit', async (e) => {
     stopBomProgressError(err.message);
   }
 });
+
+
+function setModule3CclResult(mode, title, text) {
+  if (!module3CclResult) return;
+  module3CclResult.classList.remove('idle', 'running', 'success', 'error');
+  module3CclResult.classList.add(mode);
+  module3CclResult.innerHTML = `<b>${title}</b><span>${text}</span>`;
+}
+
+if (module3CclForm) {
+  module3CclForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (module3CclDownload) {
+      module3CclDownload.classList.add('disabled');
+      module3CclDownload.href = '#';
+    }
+    setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。'));
+    const fd = new FormData(module3CclForm);
+    try {
+      const res = await fetch('/module3/apply-ccl-factors', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.message || cmpT('module3CclFailed', 'CCL 係數對應失敗'));
+      const summary = data.summary || {};
+      const text = formatDynamic('module3CclSuccessText', '完成：已寫入 {written} 筆，未對應 {unmatched} 筆。', {
+        written: summary.written_rows ?? 0,
+        unmatched: summary.unmatched_rows ?? 0
+      });
+      setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), text);
+      if (module3CclDownload && data.download_url) {
+        module3CclDownload.href = data.download_url;
+        module3CclDownload.classList.remove('disabled');
+      }
+    } catch (err) {
+      setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message);
+    }
+  });
+}
+
+function renderModule3FactorRows(results) {
+  if (!module3FactorTable) return;
+  const tbody = module3FactorTable.querySelector('tbody');
+  tbody.innerHTML = '';
+  results.forEach(row => {
+    const tr = document.createElement('tr');
+    const cells = [
+      row.source || '',
+      row.activity_name || '',
+      row.geography || '',
+      row.reference_product_name || '',
+      row.reference_product_unit || '',
+      row.ipcc2021_gwp100 ?? ''
+    ];
+    cells.forEach(value => {
+      const td = document.createElement('td');
+      td.textContent = value;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  module3FactorTable.classList.toggle('hidden', results.length === 0);
+}
+
+async function searchModule3Factors() {
+  const keyword = (module3FactorKeyword?.value || '').trim();
+  if (!keyword || keyword.length < 2) {
+    module3FactorStatus.textContent = cmpT('module3KeywordTooShort', '請輸入至少 2 個字元。');
+    renderModule3FactorRows([]);
+    return;
+  }
+  module3FactorStatus.textContent = cmpT('module3Searching', '搜尋中...');
+  renderModule3FactorRows([]);
+  try {
+    const res = await fetch(`/module3/search-factor-library?keyword=${encodeURIComponent(keyword)}&limit=80`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.message || cmpT('module3SearchFailed', '係數搜尋失敗'));
+    const results = data.results || [];
+    module3FactorStatus.textContent = results.length
+      ? formatDynamic('module3SearchSuccessText', '找到 {count} 筆資料；顯示順序為 APOS 優先，再 Cut-off。', {count: results.length})
+      : cmpT('module3NoFactorResult', '查無符合資料。');
+    renderModule3FactorRows(results);
+  } catch (err) {
+    module3FactorStatus.textContent = err.message;
+    renderModule3FactorRows([]);
+  }
+}
+
+if (module3FactorSearchBtn) {
+  module3FactorSearchBtn.addEventListener('click', searchModule3Factors);
+}
+if (module3FactorKeyword) {
+  module3FactorKeyword.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') searchModule3Factors();
+  });
+}
 
 
 

@@ -1,4 +1,4 @@
-/* CMP i18n MODULE3 stage2 20260703 v2
+/* CMP i18n MODULE3 stage2 20260703 v6
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */
@@ -128,6 +128,30 @@
         "en": "Search API is not enabled yet. The next stage will connect the APOS / Cut-off factor databases.",
         "zh": "搜尋 API 尚未啟用，下一階段接入 APOS / Cut-off 係數資料庫。"
     },
+    "module3UploadRawBulk": {"en": "Upload raw material bulk file from Module 2", "zh": "上傳 MODULE2 產出的 raw material bulk 檔"},
+    "module3UploadCclMapping": {"en": "Upload Lite-On CCL mapping table", "zh": "上傳光寶 CCL 係數組配表"},
+    "module3RunCclMapping": {"en": "Run CCL Mapping", "zh": "執行 CCL 係數對應"},
+    "module3CclReadyTitle": {"en": "Ready for upload", "zh": "待上傳檔案"},
+    "module3CclReadyText": {"en": "The system maps Material to CCL Item, emission factor, and unit, then fills Factor fields.", "zh": "系統會依 Material 對應 CCL Item、碳係數與單位，並寫入 Factor 欄位。"},
+    "module3DownloadFilledBulk": {"en": "Download factor-filled Bulk file", "zh": "下載已填入係數的 Bulk 檔"},
+    "module3ProcessingTitle": {"en": "Processing", "zh": "處理中"},
+    "module3ProcessingText": {"en": "Writing CCL factor fields. Please wait.", "zh": "正在寫入 CCL 係數欄位，請稍候。"},
+    "module3CclSuccessTitle": {"en": "CCL Mapping Completed", "zh": "CCL 係數對應完成"},
+    "module3CclSuccessText": {"en": "Completed: {written} rows written, {unmatched} rows unmatched.", "zh": "完成：已寫入 {written} 筆，未對應 {unmatched} 筆。"},
+    "module3CclFailed": {"en": "CCL Mapping failed", "zh": "CCL 係數對應失敗"},
+    "module3LibraryReady": {"en": "Enter a keyword to search APOS / Cut-off factor databases.", "zh": "請輸入關鍵字搜尋 APOS / Cut-off 係數資料庫。"},
+    "module3SearchFactor": {"en": "Search", "zh": "搜尋"},
+    "factorSource": {"en": "Source", "zh": "來源"},
+    "activityName": {"en": "Activity Name", "zh": "Activity Name"},
+    "geography": {"en": "Geography", "zh": "Geography"},
+    "referenceProduct": {"en": "Reference Product", "zh": "Reference Product"},
+    "unit": {"en": "Unit", "zh": "單位"},
+    "ipcc2021Gwp100": {"en": "IPCC 2021 GWP100", "zh": "IPCC 2021 GWP100"},
+    "module3KeywordTooShort": {"en": "Please enter at least 2 characters.", "zh": "請輸入至少 2 個字元。"},
+    "module3Searching": {"en": "Searching...", "zh": "搜尋中..."},
+    "module3SearchFailed": {"en": "Factor search failed", "zh": "係數搜尋失敗"},
+    "module3SearchSuccessText": {"en": "Found {count} records. Results are ordered APOS first, then Cut-off.", "zh": "找到 {count} 筆資料；顯示順序為 APOS 優先，再 Cut-off。"},
+    "module3NoFactorResult": {"en": "No matching records found.", "zh": "查無符合資料。"},
     "module3IntegrationPolicy": {
         "en": "Module 3 Integration Policy",
         "zh": "模組 3 整合原則"

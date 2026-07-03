@@ -13,12 +13,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
 from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file
+from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 OUTPUT_DIR = BASE_DIR / "outputs"
 DATA_DIR = BASE_DIR / "data"
 RULE_LIBRARY_DIR = BASE_DIR / "rule_library"
+FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 
@@ -34,6 +36,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
+FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
 print("===== CMP MAIN VERSION: CMP_V15_0_RULE_MASTER_ENGINE_SITE_PREFIX_WHITELIST =====")
@@ -1709,6 +1712,59 @@ def download_product_series_master(rule_set: str = DEFAULT_RULE_SET):
     rule_set = normalize_rule_set(rule_set)
     path = get_rule_set_dir(rule_set) / "product_series_master.csv"
     return FileResponse(path, filename=f"product_series_master_{rule_set}.csv", media_type="text/csv")
+
+
+
+# =========================================================
+# Module 3 · Carbon Emission Factor Selection
+# CCL Mapping + Factor Library Search
+# =========================================================
+@app.post("/module3/apply-ccl-factors")
+async def module3_apply_ccl_factors(
+    raw_material_file: UploadFile = File(...),
+    ccl_mapping_file: UploadFile = File(...),
+):
+    token = uuid.uuid4().hex[:10]
+
+    for file_obj, label in ((raw_material_file, "Raw Material Bulk"), (ccl_mapping_file, "CCL 係數組配表")):
+        filename = str(getattr(file_obj, "filename", "") or "")
+        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{label} 請上傳 Excel 檔案"}, status_code=400)
+
+    raw_path = UPLOAD_DIR / f"module3_raw_material_{token}_{Path(raw_material_file.filename).name}"
+    ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_mapping_file.filename).name}"
+    output_path = OUTPUT_DIR / f"module3_ccl_factor_filled_{token}.xlsx"
+
+    raw_path.write_bytes(await raw_material_file.read())
+    ccl_path.write_bytes(await ccl_mapping_file.read())
+
+    try:
+        summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path)
+        summary["app_version"] = "CMP_MODULE3_STAGE2_V6"
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+    return {
+        "ok": True,
+        "message": "CCL 係數對應完成。",
+        "summary": summary,
+        "download_url": summary.get("download_url", f"/download/{output_path.name}"),
+    }
+
+
+@app.get("/module3/search-factor-library")
+def module3_search_factor_library(keyword: str, limit: int = 80):
+    apos_path = FACTOR_LIBRARY_DIR / "APOS Cumulative LCIA v3.12(顧問).xlsx"
+    cutoff_path = FACTOR_LIBRARY_DIR / "Cut-off Cumulative LCIA v3.12(顧問).xlsx"
+    try:
+        result = search_factor_library(keyword, apos_path, cutoff_path, limit=limit)
+        result["ok"] = True
+        result["app_version"] = "CMP_MODULE3_STAGE2_V6"
+        return result
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
 
 
