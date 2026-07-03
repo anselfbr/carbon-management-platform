@@ -1789,3 +1789,124 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* MODULE3 Stage 2 entry navigation - scoped styles only */
+.module3-entry-card {
+  width: 100%;
+  border: 1px solid var(--line);
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
+}
+
+.module3-entry-card:hover,
+.module3-entry-card:focus-visible {
+  transform: translateY(-3px);
+  border-color: rgba(0, 167, 200, .45);
+  box-shadow: 0 18px 38px rgba(15, 45, 78, .14);
+  background: #ffffff;
+  outline: none;
+}
+
+.module3-entry-card:hover .module3-placeholder-icon,
+.module3-entry-card:focus-visible .module3-placeholder-icon {
+  background: var(--cyan);
+  color: #ffffff;
+}
+
+.module3-entry-action {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 12px;
+  color: var(--cyan);
+  font-weight: 800;
+}
+
+.module3-entry-action::after {
+  content: "→";
+  margin-left: 8px;
+  transition: transform .18s ease;
+}
+
+.module3-entry-card:hover .module3-entry-action::after,
+.module3-entry-card:focus-visible .module3-entry-action::after {
+  transform: translateX(4px);
+}
+
+.module3-zone-card {
+  scroll-margin-top: 20px;
+}
+
+.module3-zone-placeholder {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.module3-zone-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #f8fbff;
+  color: var(--navy);
+}
+
+.module3-zone-step b {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 167, 200, .12);
+  color: var(--cyan);
+}
+
+.module3-back-btn {
+  white-space: nowrap;
+}
+
+.module3-search-shell {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.module3-search-shell label {
+  color: var(--navy);
+  font-weight: 800;
+}
+
+.module3-search-shell input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 13px 14px;
+  font-size: 15px;
+  background: #f8fbff;
+}
+
+.module3-empty-result {
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  color: var(--muted);
+  background: #ffffff;
+}
+
+@media (max-width: 760px) {
+  .module3-zone-card .section-title {
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .module3-back-btn {
+    width: 100%;
+  }
+}

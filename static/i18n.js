@@ -1,4 +1,4 @@
-/* CMP i18n MODULE3 stage1 20260703 v4
+/* CMP i18n MODULE3 stage2 20260703 v1
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */
@@ -53,8 +53,8 @@
         "zh": "模組 3 · 碳排放係數選擇"
     },
     "module3Stage1Placeholder": {
-        "en": "Stage 1 placeholder. This page is reserved for CCL Mapping and Factor Library search.",
-        "zh": "第一階段預留頁面。此頁面保留給 CCL 係數對應與係數資料庫查詢功能。"
+        "en": "Stage 2 entry page. Choose CCL Mapping or Factor Library to enter each workspace.",
+        "zh": "第二階段入口頁面。請選擇 CCL 係數對應或係數資料庫，進入各自專區。"
     },
     "stage1": {
         "en": "Stage 1",
@@ -65,28 +65,76 @@
         "zh": "CCL 係數對應"
     },
     "cclMappingStage1Desc": {
-        "en": "Next stage: upload Module 2 raw material bulk output and Lite-On CCL mapping table, then write Factor fields by column name.",
-        "zh": "下一階段：上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。"
+        "en": "Upload Module 2 raw material bulk output and Lite-On CCL mapping table, then write Factor fields by column name.",
+        "zh": "上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。"
     },
     "factorLibrary": {
         "en": "Factor Library",
         "zh": "係數資料庫"
     },
     "factorLibraryStage1Desc": {
-        "en": "Next stage: keyword search for APOS first, then Cut-off; display Activity Name and IPCC 2021 GWP100 factor values.",
-        "zh": "下一階段：以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。"
+        "en": "Search factors by keyword, prioritize APOS, then Cut-off; display Activity Name and IPCC 2021 GWP100 factor values.",
+        "zh": "以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。"
+    },
+    "enterWorkspace": {
+        "en": "Enter Workspace",
+        "zh": "進入專區"
+    },
+    "module3CclZoneTitle": {
+        "en": "A. CCL Mapping Workspace",
+        "zh": "A. CCL 係數對應專區"
+    },
+    "module3CclZoneLead": {
+        "en": "Upload the raw material bulk file and Lite-On CCL mapping table here, then export the bulk file with factor fields populated.",
+        "zh": "在此上傳原物料 Bulk 檔與光寶 CCL 係數組配表，後續將輸出已填入係數欄位的 Bulk 檔。"
+    },
+    "backToModule3Menu": {
+        "en": "Back to Module 3 Menu",
+        "zh": "返回模組 3 選單"
+    },
+    "module3CclStep1": {
+        "en": "Upload raw material bulk output from Module 2",
+        "zh": "上傳 MODULE2 產出的 raw material bulk 檔"
+    },
+    "module3CclStep2": {
+        "en": "Upload Lite-On CCL mapping table",
+        "zh": "上傳光寶 CCL 係數組配表"
+    },
+    "module3CclStep3": {
+        "en": "Map CCL Item, emission factor, and unit by Material",
+        "zh": "依 Material 對應 CCL Item、碳係數與單位"
+    },
+    "module3LibraryZoneTitle": {
+        "en": "B. Factor Library Workspace",
+        "zh": "B. 係數資料庫專區"
+    },
+    "module3LibraryZoneLead": {
+        "en": "Build keyword search here, prioritizing APOS and then Cut-off.",
+        "zh": "在此建立關鍵字搜尋，優先查詢 APOS，再查詢 Cut-off。"
+    },
+    "keywordSearch": {
+        "en": "Keyword Search",
+        "zh": "關鍵字搜尋"
+    },
+    "factorSearchPlaceholder": {
+        "en": "Enter keyword, e.g. solder",
+        "zh": "請輸入關鍵字，例如 solder"
+    },
+    "module3LibraryNotConnected": {
+        "en": "Search API is not enabled yet. The next stage will connect the APOS / Cut-off factor databases.",
+        "zh": "搜尋 API 尚未啟用，下一階段接入 APOS / Cut-off 係數資料庫。"
     },
     "module3IntegrationPolicy": {
         "en": "Module 3 Integration Policy",
         "zh": "模組 3 整合原則"
     },
     "module3IntegrationPolicyDesc": {
-        "en": "This page intentionally does not call any backend API yet. Module 1 and Module 2 routes, forms, Excel logic, and outputs remain unchanged in this Stage 1 version.",
-        "zh": "此頁面目前刻意不呼叫任何後端 API。第一階段版本不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。"
+        "en": "This version only creates the A/B workspace entry points and does not call any backend API yet. Module 1 and Module 2 routes, forms, Excel logic, and outputs remain unchanged.",
+        "zh": "此版本只建立 A/B 專區入口，不呼叫任何後端 API，且不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。"
     },
     "module3PageLead": {
-        "en": "Stage 1: independent Module 3 page shell for CCL Mapping and Factor Library expansion.",
-        "zh": "第一階段：建立獨立的模組 3 頁面框架，供後續 CCL 係數對應與係數資料庫擴充。"
+        "en": "Stage 2: A/B workspaces are available for CCL Mapping and Factor Library implementation.",
+        "zh": "第二階段：已建立 A/B 專區入口，供 CCL 係數對應與係數資料庫功能實裝。"
     },
     "module3NoticeTitle": {
         "en": "3. Carbon Emission Factor Selection",

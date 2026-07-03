@@ -422,28 +422,60 @@
               <span class="step-chip" data-i18n="stage1">第一階段</span>
             </div>
 
-            <div class="module3-placeholder-grid">
-              <article class="module3-placeholder-card">
+            <div class="module3-placeholder-grid" role="list" aria-label="Module 3 function areas">
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module3-target="module3-ccl-zone" role="listitem">
                 <span class="module3-placeholder-icon">A</span>
                 <div>
-                  <h3 data-i18n="cclMapping">CCL Mapping</h3>
-                  <p data-i18n="cclMappingStage1Desc">下一階段：上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。</p>
+                  <h3 data-i18n="cclMapping">CCL 係數對應</h3>
+                  <p data-i18n="cclMappingStage1Desc">上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。</p>
+                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
                 </div>
-              </article>
+              </button>
 
-              <article class="module3-placeholder-card">
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module3-target="module3-library-zone" role="listitem">
                 <span class="module3-placeholder-icon">B</span>
                 <div>
                   <h3 data-i18n="factorLibrary">係數資料庫</h3>
-                  <p data-i18n="factorLibraryStage1Desc">下一階段：以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。</p>
+                  <p data-i18n="factorLibraryStage1Desc">以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。</p>
+                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
                 </div>
-              </article>
+              </button>
             </div>
           </section>
 
-          <section class="card insight-card">
+          <section id="module3-ccl-zone" class="card module3-zone-card hidden">
+            <div class="section-title">
+              <div>
+                <h2 data-i18n="module3CclZoneTitle">A. CCL 係數對應專區</h2>
+                <p data-i18n="module3CclZoneLead">第二階段將在此上傳原物料 Bulk 檔與光寶 CCL 係數組配表，並產出已填入係數欄位的覆蓋檔。</p>
+              </div>
+              <button class="btn-secondary module3-back-btn" type="button" data-module3-back data-i18n="backToModule3Menu">返回模組 3 選單</button>
+            </div>
+            <div class="module3-zone-placeholder">
+              <div class="module3-zone-step"><b>1</b><span data-i18n="module3CclStep1">上傳 MODULE2 產出的 raw material bulk 檔</span></div>
+              <div class="module3-zone-step"><b>2</b><span data-i18n="module3CclStep2">上傳光寶 CCL 係數組配表</span></div>
+              <div class="module3-zone-step"><b>3</b><span data-i18n="module3CclStep3">依 Material 對應 CCL Item、碳係數與單位</span></div>
+            </div>
+          </section>
+
+          <section id="module3-library-zone" class="card module3-zone-card hidden">
+            <div class="section-title">
+              <div>
+                <h2 data-i18n="module3LibraryZoneTitle">B. 係數資料庫專區</h2>
+                <p data-i18n="module3LibraryZoneLead">第三階段將在此建立關鍵字搜尋，優先查詢 APOS，再查詢 Cut-off。</p>
+              </div>
+              <button class="btn-secondary module3-back-btn" type="button" data-module3-back data-i18n="backToModule3Menu">返回模組 3 選單</button>
+            </div>
+            <div class="module3-search-shell">
+              <label data-i18n="keywordSearch">關鍵字搜尋</label>
+              <input type="text" placeholder="solder" data-i18n-placeholder="factorSearchPlaceholder" disabled>
+              <div class="module3-empty-result" data-i18n="module3LibraryNotConnected">搜尋 API 尚未啟用，下一階段接入 APOS / Cut-off 係數資料庫。</div>
+            </div>
+          </section>
+
+          <section class="card insight-card module3-policy-card">
             <h2 data-i18n="module3IntegrationPolicy">模組 3 整合原則</h2>
-            <p data-i18n="module3IntegrationPolicyDesc">此頁面目前刻意不呼叫任何後端 API。第一階段版本不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。</p>
+            <p data-i18n="module3IntegrationPolicyDesc">此頁面目前只建立 A/B 專區入口，不呼叫任何後端 API。此版本不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。</p>
           </section>
         </section>
       </section>
@@ -946,6 +978,27 @@ function activateFactorPage() {
   cmpApplyI18n();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
 }
+
+function activateModule3Zone(targetId) {
+  document.querySelectorAll('.module3-zone-card').forEach(zone => zone.classList.add('hidden'));
+  const target = document.getElementById(targetId);
+  if (target) {
+    target.classList.remove('hidden');
+    target.scrollIntoView({behavior: 'smooth', block: 'start'});
+  }
+}
+
+document.querySelectorAll('[data-module3-target]').forEach(card => {
+  card.onclick = () => activateModule3Zone(card.dataset.module3Target);
+});
+
+document.querySelectorAll('[data-module3-back]').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.module3-zone-card').forEach(zone => zone.classList.add('hidden'));
+    const module3Top = document.querySelector('#factor-selection .primary-card');
+    if (module3Top) module3Top.scrollIntoView({behavior: 'smooth', block: 'start'});
+  };
+});
 
 function activateBomPage() {
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
