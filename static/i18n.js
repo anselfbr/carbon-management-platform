@@ -150,6 +150,7 @@
     "activityName": {"en": "Activity Name", "zh": "Activity Name"},
     "geography": {"en": "Geography", "zh": "Geography"},
     "emissionFactorValue": {"en": "Emission Factor", "zh": "係數值"},
+    "emissionFactorUnit": {"en": "Emission Factor Unit", "zh": "係數單位"},
     "unit": {"en": "Unit", "zh": "單位"},
     "rowsPerPage": {"en": "Rows per page", "zh": "每頁顯示"},
     "rowsUnit": {"en": "rows", "zh": "筆"},

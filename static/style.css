@@ -1319,6 +1319,17 @@ pre.panel,
   }
 }
 
+
+.module3-factor-table,
+.module3-factor-table th,
+.module3-factor-table td {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.module3-factor-table td {
+  cursor: text;
+}
+
 @media (max-width: 720px) {
   .logic-mapping-control {
     grid-template-columns: 1fr;
@@ -2086,6 +2097,17 @@ select:focus {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+.module3-factor-table,
+.module3-factor-table th,
+.module3-factor-table td {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.module3-factor-table td {
+  cursor: text;
+}
+
 @media (max-width: 720px) {
   .module3-search-row { grid-template-columns: 1fr; }
   .module3-run-btn,

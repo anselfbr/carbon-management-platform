@@ -515,6 +515,9 @@
                   <span data-i18n="geography">Geography</span>
                   <select id="module3FactorGeography">
                     <option value="all" data-i18n="allItems">全部</option>
+                    <option value="GLO">GLO</option>
+                    <option value="RoW">RoW</option>
+                    <option value="RER">RER</option>
                   </select>
                 </label>
                 <label class="module3-filter-field" for="module3FactorProcessType">
@@ -541,7 +544,7 @@
                       <th data-i18n="activityName">Activity Name</th>
                       <th data-i18n="geography">Geography</th>
                       <th data-i18n="emissionFactorValue">係數值</th>
-                      <th data-i18n="unit">單位</th>
+                      <th data-i18n="emissionFactorUnit">係數單位</th>
                     </tr>
                   </thead>
                   <tbody></tbody>
@@ -1303,6 +1306,13 @@ if (module3CclForm) {
   });
 }
 
+function formatModule3EmissionFactorUnit(unit) {
+  const rawUnit = String(unit || '').trim();
+  if (!rawUnit) return '';
+  if (/^kg\s*co2e\s*\//i.test(rawUnit)) return rawUnit;
+  return `kgCO2e / ${rawUnit}`;
+}
+
 function renderModule3FactorRows(results) {
   if (!module3FactorTable) return;
   const tbody = module3FactorTable.querySelector('tbody');
@@ -1314,7 +1324,7 @@ function renderModule3FactorRows(results) {
       row.activity_name || '',
       row.geography || '',
       row.emission_factor ?? row.ipcc2021_gwp100 ?? '',
-      row.reference_product_unit || ''
+      row.emission_factor_unit || formatModule3EmissionFactorUnit(row.reference_product_unit || '')
     ];
     cells.forEach(value => {
       const td = document.createElement('td');
@@ -1346,23 +1356,21 @@ function resetModule3FactorPagination() {
 
 async function loadModule3FactorFilters() {
   if (!module3FactorGeography) return;
-  try {
-    const res = await fetch('/module3/factor-library-filters');
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.message || 'filter load failed');
-    const current = module3FactorGeography.value || 'all';
-    module3FactorGeography.innerHTML = `<option value="all">${cmpT('allItems', '全部')}</option>`;
-    (data.geographies || []).forEach(value => {
-      if (!value) return;
-      const opt = document.createElement('option');
-      opt.value = value;
-      opt.textContent = value;
-      module3FactorGeography.appendChild(opt);
-    });
-    module3FactorGeography.value = [...module3FactorGeography.options].some(o => o.value === current) ? current : 'all';
-  } catch (err) {
-    // Filter loading should not block keyword search.
-  }
+  const current = module3FactorGeography.value || 'all';
+  const commonGeographies = [
+    { value: 'all', label: cmpT('allItems', '全部') },
+    { value: 'GLO', label: 'GLO' },
+    { value: 'RoW', label: 'RoW' },
+    { value: 'RER', label: 'RER' }
+  ];
+  module3FactorGeography.innerHTML = '';
+  commonGeographies.forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item.value;
+    opt.textContent = item.label;
+    module3FactorGeography.appendChild(opt);
+  });
+  module3FactorGeography.value = commonGeographies.some(item => item.value === current) ? current : 'all';
 }
 
 let module3FactorSearchTimer = null;

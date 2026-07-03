@@ -1764,13 +1764,13 @@ def _module3_factor_library_paths():
 def module3_factor_library_filters():
     apos_path, cutoff_path = _module3_factor_library_paths()
     try:
-        geographies = collect_factor_library_geographies(apos_path, cutoff_path)
+        geographies = ["GLO", "RoW", "RER"]
         return {
             "ok": True,
             "geographies": geographies,
             "sources": ["APOS", "Cut-off"],
             "process_types": ["production", "market_for"],
-            "app_version": "CMP_MODULE3_STAGE2_V11",
+            "app_version": "CMP_MODULE3_STAGE2_V12",
         }
     except Exception as exc:
         traceback.print_exc()
@@ -1801,7 +1801,7 @@ def module3_search_factor_library(
             page_size=page_size,
         )
         result["ok"] = True
-        result["app_version"] = "CMP_MODULE3_STAGE2_V11"
+        result["app_version"] = "CMP_MODULE3_STAGE2_V12"
         return result
     except Exception as exc:
         traceback.print_exc()

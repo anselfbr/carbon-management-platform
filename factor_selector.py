@@ -233,6 +233,16 @@ def _process_type_token(process_type: str | None) -> str:
 
 
 
+def _format_emission_factor_unit(unit: Any) -> str:
+    raw_unit = _text(unit).strip()
+    if not raw_unit:
+        return ""
+    normalized = raw_unit.lower().replace(" ", "")
+    if normalized.startswith("kgco2e/"):
+        return raw_unit
+    return f"kgCO2e / {raw_unit}"
+
+
 _SOURCE_DISPLAY_NAMES = {
     "APOS": "Ecoinvent 3.12 APOS",
     "Cut-off": "Ecoinvent 3.12 Cut-off",
@@ -282,6 +292,7 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
             "geography": row_geography,
             "emission_factor": factor_value,
             "reference_product_unit": ref_unit,
+            "emission_factor_unit": _format_emission_factor_unit(ref_unit),
             "reference_product_name": reference_product_name,
             "ipcc2021_gwp100": factor_value,
             "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
@@ -329,17 +340,13 @@ def _search_lcia_file(
 
 
 def collect_factor_library_geographies(*paths: str | Path | None) -> list[str]:
-    values: set[str] = set()
-    source_names = ["APOS", "Cut-off"]
-    for idx, path in enumerate(paths):
-        if not path or not Path(path).exists():
-            continue
-        source = source_names[idx] if idx < len(source_names) else Path(path).stem
-        try:
-            values.update(_load_lcia_cache(path, source).get("geographies", set()))
-        except Exception:
-            continue
-    return sorted(values, key=lambda x: (x != "GLO", x.lower()))
+    """Return the common geography filters shown in the UI.
+
+    The database can contain many Geography values, but the factor library UI is
+    intentionally limited to the common review filters requested for CMP:
+    GLO, RoW, and RER.
+    """
+    return ["GLO", "RoW", "RER"]
 
 def search_factor_library(
     keyword: str,
