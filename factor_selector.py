@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V11"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V14"
 
 
 def _norm(value: Any) -> str:
@@ -334,7 +334,7 @@ def _search_lcia_file(
             continue
         total_count += 1
         if len(results) < limit:
-            clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key" and k != "reference_product_name"}
+            clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key"}
             results.append(clean_row)
     return results, total_count
 

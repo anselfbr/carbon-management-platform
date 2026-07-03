@@ -1,4 +1,4 @@
-/* CMP i18n MODULE3 stage2 20260703 v10
+/* CMP i18n MODULE3 stage2 20260703 v14
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */
@@ -151,6 +151,9 @@
     "geography": {"en": "Geography", "zh": "Geography"},
     "emissionFactorValue": {"en": "Emission Factor", "zh": "係數值"},
     "emissionFactorUnit": {"en": "Emission Factor Unit", "zh": "係數單位"},
+    "referenceProductName": {"en": "Reference Product Name", "zh": "Reference Product Name"},
+    "lciaIndicator": {"en": "LCIA Indicator", "zh": "LCIA 指標"},
+    "clickForFactorDetail": {"en": "Click to view factor details", "zh": "點選查看係數詳細說明"},
     "unit": {"en": "Unit", "zh": "單位"},
     "rowsPerPage": {"en": "Rows per page", "zh": "每頁顯示"},
     "rowsUnit": {"en": "rows", "zh": "筆"},

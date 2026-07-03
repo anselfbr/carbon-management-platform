@@ -1313,12 +1313,78 @@ function formatModule3EmissionFactorUnit(unit) {
   return `kgCO2e / ${rawUnit}`;
 }
 
+function ensureModule3FactorDetailModal() {
+  let modal = document.getElementById('module3FactorDetailModal');
+  if (modal) return modal;
+  modal = document.createElement('div');
+  modal.id = 'module3FactorDetailModal';
+  modal.className = 'module3-factor-modal hidden';
+  modal.innerHTML = `
+    <div class="module3-factor-modal-backdrop" data-module3-factor-close="1"></div>
+    <section class="module3-factor-modal-card" role="dialog" aria-modal="true" aria-labelledby="module3FactorDetailTitle">
+      <div class="module3-factor-modal-head">
+        <div>
+          <p class="module3-factor-modal-kicker">Factor Detail</p>
+          <h3 id="module3FactorDetailTitle">係數詳細說明</h3>
+        </div>
+        <button class="module3-factor-modal-close" type="button" data-module3-factor-close="1" aria-label="Close">×</button>
+      </div>
+      <div id="module3FactorDetailBody" class="module3-factor-detail-grid"></div>
+    </section>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', (event) => {
+    if (event.target && event.target.dataset && event.target.dataset.module3FactorClose) {
+      closeModule3FactorDetail();
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeModule3FactorDetail();
+  });
+  return modal;
+}
+
+function closeModule3FactorDetail() {
+  const modal = document.getElementById('module3FactorDetailModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function showModule3FactorDetail(row) {
+  const modal = ensureModule3FactorDetailModal();
+  const body = document.getElementById('module3FactorDetailBody');
+  if (!body) return;
+  const detailItems = [
+    [cmpT('activityName', 'Activity Name'), row.activity_name || ''],
+    [cmpT('referenceProductName', 'Reference Product Name'), row.reference_product_name || ''],
+    [cmpT('factorSource', '來源'), row.source || ''],
+    [cmpT('geography', 'Geography'), row.geography || ''],
+    [cmpT('emissionFactorValue', '係數值'), row.emission_factor ?? row.ipcc2021_gwp100 ?? ''],
+    [cmpT('emissionFactorUnit', '係數單位'), row.emission_factor_unit || formatModule3EmissionFactorUnit(row.reference_product_unit || '')],
+    [cmpT('lciaIndicator', 'LCIA Indicator'), row.indicator || 'IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)']
+  ];
+  body.innerHTML = '';
+  detailItems.forEach(([label, value]) => {
+    const item = document.createElement('div');
+    item.className = 'module3-factor-detail-item';
+    const labelEl = document.createElement('span');
+    labelEl.textContent = label;
+    const valueEl = document.createElement('b');
+    valueEl.textContent = value === null || value === undefined ? '' : String(value);
+    item.appendChild(labelEl);
+    item.appendChild(valueEl);
+    body.appendChild(item);
+  });
+  modal.classList.remove('hidden');
+}
+
 function renderModule3FactorRows(results) {
   if (!module3FactorTable) return;
   const tbody = module3FactorTable.querySelector('tbody');
   tbody.innerHTML = '';
   results.forEach(row => {
     const tr = document.createElement('tr');
+    tr.className = 'module3-factor-result-row';
+    tr.tabIndex = 0;
+    tr.title = cmpT('clickForFactorDetail', '點選查看係數詳細說明');
     const cells = [
       row.source || '',
       row.activity_name || '',
@@ -1330,6 +1396,13 @@ function renderModule3FactorRows(results) {
       const td = document.createElement('td');
       td.textContent = value;
       tr.appendChild(td);
+    });
+    tr.addEventListener('click', () => showModule3FactorDetail(row));
+    tr.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        showModule3FactorDetail(row);
+      }
     });
     tbody.appendChild(tr);
   });
