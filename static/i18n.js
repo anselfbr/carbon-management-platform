@@ -1,4 +1,4 @@
-/* CMP i18n v2.0
+/* CMP i18n MODULE3 stage1 20260703 v4
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */
@@ -54,11 +54,11 @@
     },
     "module3Stage1Placeholder": {
         "en": "Stage 1 placeholder. This page is reserved for CCL Mapping and Factor Library search.",
-        "zh": "Stage 1 預留頁面。此頁面保留給 CCL 係數對應與係數 Library 搜尋功能。"
+        "zh": "第一階段預留頁面。此頁面保留給 CCL 係數對應與係數資料庫查詢功能。"
     },
     "stage1": {
         "en": "Stage 1",
-        "zh": "階段 1"
+        "zh": "第一階段"
     },
     "cclMapping": {
         "en": "CCL Mapping",
@@ -66,27 +66,27 @@
     },
     "cclMappingStage1Desc": {
         "en": "Next stage: upload Module 2 raw material bulk output and Lite-On CCL mapping table, then write Factor fields by column name.",
-        "zh": "下一階段：上傳 Module 2 原物料 Bulk 輸出與光寶 CCL 係數組配表，並依欄位名稱寫入 Factor 相關欄位。"
+        "zh": "下一階段：上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。"
     },
     "factorLibrary": {
         "en": "Factor Library",
-        "zh": "係數 Library"
+        "zh": "係數資料庫"
     },
     "factorLibraryStage1Desc": {
         "en": "Next stage: keyword search for APOS first, then Cut-off; display Activity Name and IPCC 2021 GWP100 factor values.",
-        "zh": "下一階段：以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示 Activity Name 與 IPCC 2021 GWP100 係數值。"
+        "zh": "下一階段：以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。"
     },
     "module3IntegrationPolicy": {
         "en": "Module 3 Integration Policy",
-        "zh": "Module 3 整合原則"
+        "zh": "模組 3 整合原則"
     },
     "module3IntegrationPolicyDesc": {
         "en": "This page intentionally does not call any backend API yet. Module 1 and Module 2 routes, forms, Excel logic, and outputs remain unchanged in this Stage 1 version.",
-        "zh": "此頁面目前刻意不呼叫任何後端 API。Stage 1 版本不變更 Module 1 與 Module 2 的路由、表單、Excel 邏輯與輸出檔。"
+        "zh": "此頁面目前刻意不呼叫任何後端 API。第一階段版本不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。"
     },
     "module3PageLead": {
         "en": "Stage 1: independent Module 3 page shell for CCL Mapping and Factor Library expansion.",
-        "zh": "Stage 1：建立獨立 Module 3 頁面框架，供後續 CCL 係數對應與係數 Library 擴充。"
+        "zh": "第一階段：建立獨立的模組 3 頁面框架，供後續 CCL 係數對應與係數資料庫擴充。"
     },
     "module3NoticeTitle": {
         "en": "3. Carbon Emission Factor Selection",
@@ -94,43 +94,7 @@
     },
     "module3NoticeText": {
         "en": "Stage 1 page is ready. CCL Mapping and Factor Library will be added in separate versions.",
-        "zh": "Stage 1 頁面已建立。CCL 係數對應與係數 Library 會在後續版本分別加入。"
-    },
-    "comingSoon": {
-        "en": "Coming Soon",
-        "zh": "即將開放"
-    },
-    "search": {
-        "en": "Search",
-        "zh": "搜尋"
-    },
-    "searchKeyword": {
-        "en": "Search keyword",
-        "zh": "搜尋關鍵字"
-    },
-    "searchPlaceholderSolder": {
-        "en": "e.g. solder",
-        "zh": "例如：solder"
-    },
-    "result": {
-        "en": "Result",
-        "zh": "結果"
-    },
-    "noData": {
-        "en": "No data",
-        "zh": "尚無資料"
-    },
-    "activityName": {
-        "en": "Activity Name",
-        "zh": "Activity Name"
-    },
-    "emissionFactor": {
-        "en": "Emission Factor",
-        "zh": "碳係數"
-    },
-    "factorUnit": {
-        "en": "Factor Unit",
-        "zh": "係數單位"
+        "zh": "第一階段頁面已建立。CCL 係數對應與係數資料庫會在後續版本分別加入。"
     },
     "pcfCalculation": {
         "en": "PCF Calculation",

@@ -416,34 +416,34 @@
           <section class="card primary-card">
             <div class="section-title">
               <div>
-                <h2>Module 3 · Carbon Emission Factor Selection</h2>
-                <p>Stage 1 placeholder. This page is reserved for CCL Mapping and Factor Library search.</p>
+                <h2 data-i18n="module3Title">模組 3 · 碳排放係數選擇</h2>
+                <p data-i18n="module3Stage1Placeholder">第一階段預留頁面。此頁面保留給 CCL 係數對應與係數資料庫查詢功能。</p>
               </div>
-              <span class="step-chip">Stage 1</span>
+              <span class="step-chip" data-i18n="stage1">第一階段</span>
             </div>
 
             <div class="module3-placeholder-grid">
               <article class="module3-placeholder-card">
                 <span class="module3-placeholder-icon">A</span>
                 <div>
-                  <h3>CCL Mapping</h3>
-                  <p>Next stage: upload Module 2 raw material bulk output and Lite-On CCL mapping table, then write Factor fields by column name.</p>
+                  <h3 data-i18n="cclMapping">CCL Mapping</h3>
+                  <p data-i18n="cclMappingStage1Desc">下一階段：上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。</p>
                 </div>
               </article>
 
               <article class="module3-placeholder-card">
                 <span class="module3-placeholder-icon">B</span>
                 <div>
-                  <h3>Factor Library</h3>
-                  <p>Next stage: keyword search for APOS first, then Cut-off; display Activity Name and IPCC 2021 GWP100 factor values.</p>
+                  <h3 data-i18n="factorLibrary">係數資料庫</h3>
+                  <p data-i18n="factorLibraryStage1Desc">下一階段：以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。</p>
                 </div>
               </article>
             </div>
           </section>
 
           <section class="card insight-card">
-            <h2>Module 3 Integration Policy</h2>
-            <p>This page intentionally does not call any backend API yet. Module 1 and Module 2 routes, forms, Excel logic, and outputs remain unchanged in this Stage 1 version.</p>
+            <h2 data-i18n="module3IntegrationPolicy">模組 3 整合原則</h2>
+            <p data-i18n="module3IntegrationPolicyDesc">此頁面目前刻意不呼叫任何後端 API。第一階段版本不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。</p>
           </section>
         </section>
       </section>
@@ -860,7 +860,9 @@ const moduleMessages = {
   },
   factor: {
     title: '3. Carbon Emission Factor Selection',
-    text: 'Stage 1 page is ready. CCL Mapping and Factor Library will be added in separate versions.'
+    titleKey: 'module3NoticeTitle',
+    text: 'Stage 1 page is ready. CCL Mapping and 係數資料庫 will be added in separate versions.',
+    textKey: 'module3NoticeText'
   },
   pcf: {
     title: '4. PCF Calculation',
@@ -938,8 +940,8 @@ function activateFactorPage() {
   document.querySelector('[data-main="factor"]').classList.add('active');
 
   moduleNotice.classList.add('hidden');
-  pageTitle.textContent = 'Carbon Emission Factor Selection';
-  pageLead.textContent = 'Stage 1: independent Module 3 page shell for CCL Mapping and Factor Library expansion.';
+  pageTitle.textContent = window.CMPI18N ? window.CMPI18N.t('carbonEmissionFactorSelection', '碳排放係數選擇') : '碳排放係數選擇';
+  pageLead.textContent = window.CMPI18N ? window.CMPI18N.t('module3PageLead', 'Stage 1: independent Module 3 page shell for CCL Mapping and 係數資料庫 expansion.') : 'Stage 1: independent Module 3 page shell for CCL Mapping and 係數資料庫 expansion.';
   pageLead.style.display = 'block';
   cmpApplyI18n();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
