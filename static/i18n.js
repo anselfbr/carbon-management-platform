@@ -148,10 +148,12 @@
     "clearFilters": {"en": "Clear", "zh": "清除"},
     "factorSource": {"en": "Source", "zh": "來源"},
     "activityName": {"en": "Activity Name", "zh": "Activity Name"},
+    "activityKeywordSearch": {"en": "Keyword search", "zh": "關鍵字查詢"},
     "geography": {"en": "Geography", "zh": "Geography"},
     "emissionFactorValue": {"en": "Emission Factor", "zh": "係數值"},
     "emissionFactorUnit": {"en": "Emission Factor Unit", "zh": "係數單位"},
     "referenceProductName": {"en": "Reference Product Name", "zh": "Reference Product Name"},
+    "referenceNameSearch": {"en": "Name search", "zh": "名稱查詢"},
     "activityNameSearchPlaceholder": {"en": "Type Activity Name, e.g. market for solder", "zh": "請輸入 Activity Name，例如 market for solder"},
     "referenceProductSearchPlaceholder": {"en": "Type Reference Product Name, e.g. solder", "zh": "請輸入 Reference Product Name，例如 solder"},
     "lciaIndicator": {"en": "LCIA Indicator", "zh": "LCIA 指標"},
@@ -163,6 +165,9 @@
     "nextPage": {"en": "Next", "zh": "下一頁"},
     "ipcc2021Gwp100": {"en": "IPCC 2021 GWP100", "zh": "IPCC 2021 GWP100"},
     "module3KeywordTooShort": {"en": "Please enter at least 2 characters in either Activity Name or Reference Product Name.", "zh": "請至少在其中一個欄位輸入 2 個字元。"},
+    "copy": {"en": "Copy", "zh": "複製"},
+    "copied": {"en": "Copied", "zh": "已複製"},
+    "copyFailed": {"en": "Copy failed", "zh": "複製失敗"},
     "module3Searching": {"en": "Searching, please wait...", "zh": "查詢中，請稍候..."},
     "module3SearchFailed": {"en": "Factor search failed", "zh": "係數搜尋失敗"},
     "module3SearchSuccessText": {"en": "Found {count} records. Results are ordered APOS first, then Cut-off.", "zh": "找到 {count} 筆資料；顯示順序為 APOS 優先，再 Cut-off。"},
@@ -1197,6 +1202,10 @@ try {
       translations.zh.factorDetailKicker = translations.zh.factorDetailKicker || '係數詳情';
       translations.zh.factorDetailTitle = translations.zh.factorDetailTitle || '係數詳細說明';
       translations.zh.referenceProductName = translations.zh.referenceProductName || 'Reference Product Name';
+      translations.zh.activityKeywordSearch = translations.zh.activityKeywordSearch || '關鍵字查詢';
+      translations.zh.referenceNameSearch = translations.zh.referenceNameSearch || '名稱查詢';
+      translations.zh.copy = translations.zh.copy || '複製';
+      translations.zh.copied = translations.zh.copied || '已複製';
       translations.zh.lciaIndicator = translations.zh.lciaIndicator || 'LCIA 指標';
       translations.zh.clickForFactorDetail = translations.zh.clickForFactorDetail || '點選查看係數詳細說明';
       translations.zh.close = translations.zh.close || '關閉';
@@ -1205,6 +1214,10 @@ try {
       translations.en.factorDetailKicker = translations.en.factorDetailKicker || 'Factor Detail';
       translations.en.factorDetailTitle = translations.en.factorDetailTitle || 'Factor Detail';
       translations.en.referenceProductName = translations.en.referenceProductName || 'Reference Product Name';
+      translations.en.activityKeywordSearch = translations.en.activityKeywordSearch || 'Keyword search';
+      translations.en.referenceNameSearch = translations.en.referenceNameSearch || 'Name search';
+      translations.en.copy = translations.en.copy || 'Copy';
+      translations.en.copied = translations.en.copied || 'Copied';
       translations.en.lciaIndicator = translations.en.lciaIndicator || 'LCIA Indicator';
       translations.en.clickForFactorDetail = translations.en.clickForFactorDetail || 'Click to view factor detail';
       translations.en.close = translations.en.close || 'Close';

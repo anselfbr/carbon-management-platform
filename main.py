@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
 from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file
-from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, search_factor_library
+from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -1760,6 +1760,17 @@ def _module3_factor_library_paths():
     )
 
 
+@app.on_event("startup")
+def module3_preload_factor_libraries_on_startup():
+    """Preload APOS / Cut-off factor libraries into memory for faster Module 3 searches."""
+    try:
+        apos_path, cutoff_path = _module3_factor_library_paths()
+        summary = preload_factor_libraries(apos_path, cutoff_path)
+        print(f"===== MODULE3 FACTOR LIBRARY PRELOAD: {summary} =====")
+    except Exception as exc:
+        print(f"===== MODULE3 FACTOR LIBRARY PRELOAD FAILED: {exc} =====")
+
+
 @app.get("/module3/factor-library-filters")
 def module3_factor_library_filters():
     apos_path, cutoff_path = _module3_factor_library_paths()
@@ -1770,7 +1781,7 @@ def module3_factor_library_filters():
             "geographies": geographies,
             "sources": ["APOS", "Cut-off"],
             "process_types": ["production", "market_for"],
-            "app_version": "CMP_MODULE3_STAGE2_V12",
+            "app_version": "CMP_MODULE3_STAGE2_V21",
         }
     except Exception as exc:
         traceback.print_exc()

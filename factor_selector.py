@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V20"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V21"
 
 
 def _norm(value: Any) -> str:
@@ -387,6 +387,36 @@ def _search_lcia_file(
             results.append(clean_row)
     return results, total_count
 
+
+
+def preload_factor_libraries(apos_path: str | Path | None, cutoff_path: str | Path | None) -> Dict[str, Any]:
+    """Preload APOS and Cut-off LCIA workbooks into memory at application startup.
+
+    This keeps the first user search from paying the Excel read cost. Missing
+    files are skipped so local development can still start without the databases.
+    """
+    loaded: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict[str, str]] = []
+    for path, source in ((apos_path, "APOS"), (cutoff_path, "Cut-off")):
+        if not path:
+            skipped.append(source)
+            continue
+        p = Path(path)
+        if not p.exists():
+            skipped.append(source)
+            continue
+        try:
+            _load_lcia_cache(p, source)
+            loaded.append(source)
+        except Exception as exc:  # keep startup robust
+            errors.append({"source": source, "message": str(exc)})
+    return {
+        "loaded": loaded,
+        "skipped": skipped,
+        "errors": errors,
+        "factor_selector_version": FACTOR_SELECTOR_VERSION,
+    }
 
 def collect_factor_library_geographies(*paths: str | Path | None) -> list[str]:
     """Return the common geography filters shown in the UI.

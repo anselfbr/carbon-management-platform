@@ -531,11 +531,11 @@
               </div>
               <div class="module3-keyword-grid">
                 <label class="module3-keyword-field" for="module3FactorActivityKeyword">
-                  <span data-i18n="activityName">Activity Name</span>
+                  <span data-i18n="activityKeywordSearch">關鍵字查詢</span>
                   <input id="module3FactorActivityKeyword" type="text" placeholder="market for solder" data-i18n-placeholder="activityNameSearchPlaceholder">
                 </label>
                 <label class="module3-keyword-field" for="module3FactorReferenceKeyword">
-                  <span data-i18n="referenceProductName">Reference Product Name</span>
+                  <span data-i18n="referenceNameSearch">名稱查詢</span>
                   <input id="module3FactorReferenceKeyword" type="text" placeholder="solder" data-i18n-placeholder="referenceProductSearchPlaceholder">
                 </label>
               </div>
@@ -1371,13 +1371,53 @@ function showModule3FactorDetail(row) {
     item.className = 'module3-factor-detail-item';
     const labelEl = document.createElement('span');
     labelEl.textContent = label;
+    const valueText = value === null || value === undefined ? '' : String(value);
     const valueEl = document.createElement('b');
-    valueEl.textContent = value === null || value === undefined ? '' : String(value);
+    valueEl.textContent = valueText;
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'module3-copy-detail-btn';
+    copyBtn.textContent = cmpT('copy', '複製');
+    copyBtn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      await copyModule3DetailValue(valueText, copyBtn);
+    });
     item.appendChild(labelEl);
     item.appendChild(valueEl);
+    item.appendChild(copyBtn);
     body.appendChild(item);
   });
   modal.classList.remove('hidden');
+}
+
+async function copyModule3DetailValue(value, button) {
+  const text = value === null || value === undefined ? '' : String(value);
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+    if (button) {
+      const original = button.textContent;
+      button.textContent = cmpT('copied', '已複製');
+      button.classList.add('copied');
+      window.setTimeout(() => {
+        button.textContent = original || cmpT('copy', '複製');
+        button.classList.remove('copied');
+      }, 1200);
+    }
+  } catch (err) {
+    if (button) button.textContent = cmpT('copyFailed', '複製失敗');
+  }
 }
 
 function renderModule3FactorRows(results) {
