@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import re
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
 import pandas as pd
-from openpyxl import Workbook, load_workbook
+from openpyxl import load_workbook
 
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_CCL_RESULT_PERFORMANCE_FIX_20260704_V2"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_CCL_REMAINING_SECONDS_20260704_V1"
 
 
 def _norm(value: Any) -> str:
@@ -28,6 +29,23 @@ def _text(value: Any) -> str:
     if isinstance(value, float) and pd.isna(value):
         return ""
     return str(value).strip()
+
+
+def _normalize_material_key(value: Any) -> str:
+    """Normalize material number for exact CCL dictionary matching."""
+    text = _text(value).replace("\u3000", " ").strip().upper()
+    text = re.sub(r"\s+", "", text)
+    text = re.sub(r"\.0+$", "", text)
+    return text
+
+
+def _emit_progress(progress_callback: Callable[..., None] | None, progress: int, step: str, remaining_seconds: int | None = None) -> None:
+    if not progress_callback:
+        return
+    try:
+        progress_callback(progress, step, remaining_seconds)
+    except TypeError:
+        progress_callback(progress, step)
 
 
 def _find_header_row(ws, aliases: Iterable[str], max_scan_rows: int = 30) -> int:
@@ -63,81 +81,6 @@ def _find_col_in_header_row(ws, header_row: int, aliases: list[str], required: b
     return None
 
 
-
-
-def _normalize_material_key(value: Any) -> str:
-    """Normalize material numbers for CCL exact matching.
-
-    Keeps meaningful symbols such as '-' and '_' but removes common Excel/text noise.
-    """
-    text = _text(value)
-    if not text:
-        return ""
-    text = text.replace("\u3000", " ").replace("\t", " ").replace("\n", " ").replace("\r", " ").strip()
-    text = re.sub(r"\s+", "", text)
-    # Excel sometimes turns text material numbers into numeric-like strings.
-    if re.fullmatch(r"\d+\.0", text):
-        text = text[:-2]
-    return text.upper()
-
-
-def _format_ccl_factor_unit(unit: Any) -> str:
-    raw = _text(unit)
-    if not raw:
-        return ""
-    if re.match(r"^kg\s*co2e\s*/", raw, flags=re.I):
-        return raw
-    return f"kgCO2e / {raw}"
-
-
-def _create_ccl_mapping_report(report_path: Path, summary: Dict[str, Any], unmatched_records: list[Dict[str, Any]]) -> None:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Summary"
-    rows = [
-        ["項目", "內容"],
-        ["處理狀態", "完成"],
-        ["Raw Material 總筆數", summary.get("total_rows", 0)],
-        ["成功對應", summary.get("matched_rows", 0)],
-        ["未對應", summary.get("unmatched_rows", 0)],
-        ["對應率", summary.get("match_rate", "0.00%")],
-        ["CCL 對照表筆數", summary.get("ccl_mapping_rows", 0)],
-        ["Factor Source", "CCL library"],
-        ["Factor Comment", "無"],
-        ["Country/Area", "GLO"],
-        ["Data Quality", "SECONDARY"],
-        ["Factor Unit", "kgCO2e / 係數單位"],
-    ]
-    for r in rows:
-        ws.append(r)
-    ws.column_dimensions["A"].width = 24
-    ws.column_dimensions["B"].width = 42
-
-    ws_rule = wb.create_sheet("Rules")
-    ws_rule.append(["Bulk 欄位", "寫入來源 / 規則"])
-    for r in [
-        ["Factor Name", "CCL Item"],
-        ["Factor Source", "固定寫入：CCL library"],
-        ["Factor Comment", "固定寫入：無"],
-        ["Country/Area", "固定寫入：GLO"],
-        ["Enabled Date", "沿用 Bulk 原本 Doc. Start Date"],
-        ["Data Quality", "固定寫入：SECONDARY"],
-        ["Emission Factor", "碳係數"],
-        ["Factor Unit", "kgCO2e / 係數單位"],
-    ]:
-        ws_rule.append(r)
-    ws_rule.column_dimensions["A"].width = 24
-    ws_rule.column_dimensions["B"].width = 50
-
-    ws_un = wb.create_sheet("Unmatched")
-    ws_un.append(["Row", "Material", "Normalized Material", "Material Description"] )
-    for item in unmatched_records:
-        ws_un.append([item.get("row"), item.get("material"), item.get("normalized_material"), item.get("description")])
-    for col, width in zip(["A", "B", "C", "D"], [10, 28, 32, 60]):
-        ws_un.column_dimensions[col].width = width
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(report_path)
-
 def _safe_number(value: Any) -> float | None:
     if value is None:
         return None
@@ -152,15 +95,13 @@ def _safe_number(value: Any) -> float | None:
         return None
 
 
-def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[[int, str], None] | None = None) -> dict[str, Dict[str, Any]]:
-    if progress_callback:
-        progress_callback(10, "讀取 CCL 係數組配表")
+def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[..., None] | None = None) -> dict[str, Dict[str, Any]]:
+    _emit_progress(progress_callback, 10, "讀取 CCL 係數組配表", 30)
     wb = load_workbook(ccl_path, read_only=True, data_only=True)
     sheet_name = CCL_SHEET_NAME if CCL_SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
     ws = wb[sheet_name]
-    header_row = _find_header_row(ws, ["Material", "CCL Item", "碳係數", "係數單位"])
+    header_row = _find_header_row(ws, ["Material"])
 
-    # CCL table fixed official headers: Material / CCL Item / 碳係數 / 係數單位.
     material_col = _find_col_in_header_row(ws, header_row, ["Material"])
     ccl_item_col = _find_col_in_header_row(ws, header_row, ["CCL Item"])
     factor_col = _find_col_in_header_row(ws, header_row, ["碳係數"])
@@ -170,23 +111,19 @@ def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[[int, st
     total_rows = max(1, ws.max_row - header_row)
     for idx, row in enumerate(range(header_row + 1, ws.max_row + 1), start=1):
         material = _text(ws.cell(row, material_col).value)
-        key = _normalize_material_key(material)
-        if not key:
+        if not material:
             continue
+        key = _normalize_material_key(material)
         factor_value = ws.cell(row, factor_col).value
-        safe_factor = _safe_number(factor_value)
         mapping[key] = {
             "material": material,
-            "material_key": key,
             "ccl_item": _text(ws.cell(row, ccl_item_col).value),
-            "emission_factor": safe_factor if safe_factor is not None else factor_value,
-            "unit": _text(ws.cell(row, unit_col).value),
-            "factor_unit": _format_ccl_factor_unit(ws.cell(row, unit_col).value),
+            "emission_factor": _safe_number(factor_value) if _safe_number(factor_value) is not None else factor_value,
+            "unit": _text(ws.cell(row, unit_col).value) if unit_col else "",
         }
-        if progress_callback and (idx == 1 or idx % 1000 == 0):
-            progress_callback(10 + int(min(20, idx / total_rows * 20)), "建立 CCL Material → Factor 對應索引")
-    if progress_callback:
-        progress_callback(32, f"CCL 索引建立完成，共 {len(mapping):,} 筆")
+        if idx == 1 or idx % 1000 == 0:
+            _emit_progress(progress_callback, 10 + int(min(20, idx / total_rows * 20)), "建立 CCL Material → Factor 對應索引", 30)
+    _emit_progress(progress_callback, 32, f"CCL 索引建立完成，共 {len(mapping):,} 筆", 25)
     return mapping
 
 
@@ -194,21 +131,17 @@ def apply_ccl_factors_to_raw_material_bulk(
     raw_material_bulk_path: str | Path,
     ccl_mapping_path: str | Path,
     output_path: str | Path,
-    progress_callback: Callable[[int, str], None] | None = None,
+    progress_callback: Callable[..., None] | None = None,
 ) -> Dict[str, Any]:
     """Fill Module 3 CCL factor fields into a Module 2 raw-material bulk workbook."""
     raw_material_bulk_path = Path(raw_material_bulk_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path = output_path.with_name(output_path.stem + "_CCL_Mapping_Report.xlsx")
-
-    if progress_callback:
-        progress_callback(3, "複製 raw material bulk 模板")
+    _emit_progress(progress_callback, 3, "複製 raw material bulk 模板", 30)
     shutil.copy2(raw_material_bulk_path, output_path)
 
     ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
-    if progress_callback:
-        progress_callback(36, "開啟 raw material bulk 檔案")
+    _emit_progress(progress_callback, 36, "開啟 raw material bulk 檔案", 25)
     wb = load_workbook(output_path)
     if ACTIVITY_SHEET_NAME not in wb.sheetnames:
         raise ValueError(f"找不到分頁：{ACTIVITY_SHEET_NAME}")
@@ -216,7 +149,6 @@ def apply_ccl_factors_to_raw_material_bulk(
 
     cols = {
         "material": _find_col(ws, ["Raw Material Code", "Raw Material Number", "Material", "Material Number", "原物料代碼", "料號"]),
-        "description": _find_col(ws, ["Material Description", "Raw Material Description", "Description", "原物料描述", "物料說明"], required=False),
         "doc_start": _find_col(ws, ["Doc. Start Date", "Document Start Date", "開始日期"], required=False),
         "factor_name": _find_col(ws, ["Factor Name", "Emission Factor Name", "係數名稱"]),
         "emission_factor": _find_col(ws, ["Emission Factor", "Carbon Factor", "碳係數"]),
@@ -230,26 +162,16 @@ def apply_ccl_factors_to_raw_material_bulk(
 
     matched = 0
     unmatched = 0
-    total_rows = 0
     written_rows = 0
-    unmatched_records: list[Dict[str, Any]] = []
     total_activity_rows = max(1, ws.max_row - DATA_START_ROW + 1)
-
+    mapping_started_at = time.monotonic()
     for idx, row in enumerate(range(DATA_START_ROW, ws.max_row + 1), start=1):
         material = _text(ws.cell(row, cols["material"]).value)
-        material_key = _normalize_material_key(material)
-        if not material_key:
+        if not material:
             continue
-        total_rows += 1
-        item = ccl_map.get(material_key)
+        item = ccl_map.get(_normalize_material_key(material))
         if not item:
             unmatched += 1
-            unmatched_records.append({
-                "row": row,
-                "material": material,
-                "normalized_material": material_key,
-                "description": _text(ws.cell(row, cols["description"]).value) if cols.get("description") else "",
-            })
             continue
 
         ws.cell(row, cols["factor_name"]).value = item["ccl_item"]
@@ -265,43 +187,30 @@ def apply_ccl_factors_to_raw_material_bulk(
             ws.cell(row, cols["enabled_date"]).number_format = "yyyy/mm/dd"
         if cols["data_quality"]:
             ws.cell(row, cols["data_quality"]).value = "SECONDARY"
-        if cols["factor_unit"]:
-            ws.cell(row, cols["factor_unit"]).value = item.get("factor_unit") or _format_ccl_factor_unit(item.get("unit"))
+        if cols["factor_unit"] and item.get("unit"):
+            ws.cell(row, cols["factor_unit"]).value = _format_emission_factor_unit(item["unit"])
         matched += 1
         written_rows += 1
-        if progress_callback and (idx == 1 or idx % 500 == 0):
-            progress_callback(40 + int(min(45, idx / total_activity_rows * 45)), "比對原物料並寫入 CCL 係數欄位")
+        if idx == 1 or idx % 500 == 0:
+            elapsed = max(0.1, time.monotonic() - mapping_started_at)
+            rows_per_second = idx / elapsed
+            mapping_remaining = int(max(1, round((total_activity_rows - idx) / rows_per_second))) if rows_per_second > 0 else 30
+            # Add a small buffer for final Excel save/report generation so the frontend receives one simple remaining-seconds value.
+            remaining_seconds = mapping_remaining + 8
+            _emit_progress(progress_callback, 40 + int(min(45, idx / total_activity_rows * 45)), "比對原物料並寫入 CCL 係數欄位", remaining_seconds)
 
-    match_rate = (matched / total_rows) if total_rows else 0
-    summary: Dict[str, Any] = {
+    _emit_progress(progress_callback, 90, "儲存已填入係數的 Bulk 檔", 8)
+    wb.save(output_path)
+    _emit_progress(progress_callback, 100, "CCL 係數對應完成", 0)
+    return {
         "output_filename": output_path.name,
         "download_url": f"/download/{output_path.name}",
-        "report_filename": report_path.name,
-        "report_download_url": f"/download/{report_path.name}",
         "ccl_mapping_rows": len(ccl_map),
-        "total_rows": total_rows,
         "matched_rows": matched,
         "unmatched_rows": unmatched,
         "written_rows": written_rows,
-        "match_rate": f"{match_rate:.2%}",
-        "factor_source": "CCL library",
-        "factor_comment": "無",
-        "country_area": "GLO",
-        "data_quality": "SECONDARY",
-        "factor_unit_rule": "kgCO2e / 係數單位",
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
     }
-
-    if progress_callback:
-        progress_callback(88, "建立 CCL Mapping Report")
-    _create_ccl_mapping_report(report_path, summary, unmatched_records)
-
-    if progress_callback:
-        progress_callback(92, "儲存已填入係數的 Bulk 檔")
-    wb.save(output_path)
-    if progress_callback:
-        progress_callback(100, "CCL 係數對應完成")
-    return summary
 
 
 def _resolve_lcia_target_column(ws) -> int:
@@ -626,7 +535,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_CCL_RESULT_PERFORMANCE_FIX_20260704_V2"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SQLITE_INDEX_V1_20260704"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
