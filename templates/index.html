@@ -1450,7 +1450,6 @@ async function loadModule3FactorFilters() {
 
 let module3FactorSearchTimer = null;
 let module3FactorRequestSeq = 0;
-let module3FactorAbortController = null;
 let module3FactorCurrentPage = 1;
 let module3FactorTotalPages = 0;
 let module3FactorTotalCount = 0;
@@ -1469,7 +1468,7 @@ function scheduleModule3FactorSearch() {
   if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3TypingSearchReady', '偵測到關鍵字，正在準備即時搜尋...');
   module3FactorSearchTimer = window.setTimeout(() => {
     searchModule3Factors({auto: true});
-  }, 450);
+  }, 220);
 }
 
 async function searchModule3Factors(options = {}) {
@@ -1500,11 +1499,7 @@ async function searchModule3Factors(options = {}) {
       geography: module3FactorGeography?.value || 'all',
       process_type: module3FactorProcessType?.value || 'all'
     });
-    if (module3FactorAbortController) {
-      module3FactorAbortController.abort();
-    }
-    module3FactorAbortController = new AbortController();
-    const res = await fetch(`/module3/search-factor-library?${params.toString()}`, { signal: module3FactorAbortController.signal });
+    const res = await fetch(`/module3/search-factor-library?${params.toString()}`);
     const data = await res.json();
     if (requestId !== module3FactorRequestSeq) return;
     if (!data.ok) throw new Error(data.message || cmpT('module3SearchFailed', '係數搜尋失敗'));
@@ -1516,7 +1511,6 @@ async function searchModule3Factors(options = {}) {
     renderModule3FactorRows(results);
     updateModule3FactorPagination(data);
   } catch (err) {
-    if (err && err.name === 'AbortError') return;
     if (requestId !== module3FactorRequestSeq) return;
     module3FactorStatus.textContent = err.message;
     renderModule3FactorRows([]);
@@ -1532,11 +1526,6 @@ async function searchModule3Factors(options = {}) {
 }
 
 function clearModule3FactorFilters() {
-  if (module3FactorAbortController) {
-    module3FactorAbortController.abort();
-    module3FactorAbortController = null;
-  }
-  window.clearTimeout(module3FactorSearchTimer);
   if (module3FactorSource) module3FactorSource.value = 'all';
   if (module3FactorGeography) module3FactorGeography.value = 'all';
   if (module3FactorProcessType) module3FactorProcessType.value = 'all';
