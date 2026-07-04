@@ -68,6 +68,7 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
             message="CCL 係數對應完成。",
             summary=summary,
             download_url=summary.get("download_url", f"/download/{output_path.name}"),
+            report_download_url=summary.get("report_download_url"),
         )
     except Exception as exc:
         traceback.print_exc()
@@ -1818,7 +1819,7 @@ async def module3_apply_ccl_factors(
 
     try:
         summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path)
-        summary["app_version"] = "CMP_MODULE3_STAGE2_V6"
+        summary["app_version"] = "CMP_MODULE3_CCL_RESULT_PERFORMANCE_FIX_20260704_V2"
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
