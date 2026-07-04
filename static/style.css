@@ -2536,24 +2536,19 @@ select:focus {
   }
 }
 
-/* Module 3 V2.1: direct Module 2 raw material bulk source note */
-.module3-source-note {
-  border: 1px solid #d8e3f0;
-  border-radius: 12px;
-  background: #f7fbff;
-  padding: 12px 14px;
-  color: #1f2a37;
+.module3-source-card {
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: rgba(248, 250, 252, 0.92);
+  margin-bottom: 14px;
 }
-.module3-source-note p {
-  margin: 6px 0 0;
-  color: #5f6b7a;
-  font-size: 13px;
-  line-height: 1.5;
+.module3-source-card b {
+  display: block;
+  margin-bottom: 6px;
 }
-.module3-source-note code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  background: #eef4fb;
-  padding: 2px 5px;
-  border-radius: 6px;
+.module3-source-card p {
+  margin: 0;
+  color: #475569;
+  font-size: 0.92rem;
 }

@@ -467,14 +467,14 @@
             <div class="section-title">
               <div>
                 <h2 data-i18n="module3CclZoneTitle">A. CCL 係數對應專區</h2>
-                <p data-i18n="module3CclZoneLead">系統會直接使用 Module 2 最新產出的 raw_material_activity_data_bulk 檔，只需上傳光寶 CCL 係數組配表。</p>
+                <p data-i18n="module3CclZoneLead">第二階段將直接使用 Module 2 最新產出的 Raw Material Bulk，僅需上傳光寶 CCL 係數組配表，並產出已填入係數欄位的覆蓋檔。</p>
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
             <form id="module3CclForm" class="module3-action-panel" enctype="multipart/form-data">
-              <div class="module3-source-note">
+              <div id="module3RawBulkSource" class="module3-source-card">
                 <b>Raw Material Activity Data</b>
-                <p>來源：使用 Module 2 最新產出的 <code>raw_material_activity_data_bulk_latest.xlsx</code>。若尚未產出，請先完成 Module 2 BOM Expansion。</p>
+                <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...</p>
               </div>
 
               <label data-i18n="module3UploadCclMapping">上傳光寶 CCL 係數組配表</label>
@@ -486,8 +486,8 @@
                 <div class="status-header">
                   <div class="spinner"></div>
                   <div>
-                    <b id="module3CclStatusTitle" data-i18n="module3CclReadyTitle">待上傳 CCL 係數組配表</b>
-                    <p id="module3CclStatusText" data-i18n="module3CclReadyText">系統會直接使用 Module 2 最新 Raw Material Bulk，依 Material 對應 CCL Item 與碳係數。</p>
+                    <b id="module3CclStatusTitle" data-i18n="module3CclReadyTitle">待上傳檔案</b>
+                    <p id="module3CclStatusText" data-i18n="module3CclReadyText">系統會依 Material 對應 CCL Item、碳係數與單位，並寫入 Factor 欄位。</p>
                   </div>
                   <span id="module3CclStatusTime" class="status-time">Idle</span>
                 </div>
@@ -902,6 +902,7 @@ const module3CclStatusText = document.getElementById('module3CclStatusText');
 const module3CclStatusTime = document.getElementById('module3CclStatusTime');
 const module3CclProgressBar = document.getElementById('module3CclProgressBar');
 const module3CclDownload = document.getElementById('module3CclDownload');
+const module3RawBulkSourceText = document.getElementById('module3RawBulkSourceText');
 const module3FactorActivityKeyword = document.getElementById('module3FactorActivityKeyword');
 const module3FactorReferenceKeyword = document.getElementById('module3FactorReferenceKeyword');
 const module3FactorSource = document.getElementById('module3FactorSource');
@@ -1312,6 +1313,19 @@ async function readJsonOrThrow(res) {
   return data;
 }
 
+async function refreshModule3RawBulkSource() {
+  if (!module3RawBulkSourceText) return;
+  try {
+    const res = await fetch('/module3/raw-material-bulk-source', { cache: 'no-store' });
+    const data = await readJsonOrThrow(res);
+    const filename = data.filename || 'raw material bulk';
+    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
+    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
+  } catch (err) {
+    module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
+  }
+}
+
 function startModule3CclPolling(jobId, startTime) {
   clearInterval(module3CclPollTimer);
   module3CclPollTimer = setInterval(async () => {
@@ -1320,7 +1334,7 @@ function startModule3CclPolling(jobId, startTime) {
       const data = await readJsonOrThrow(res);
       const job = data.job || {};
       const progress = Number(job.progress || 0);
-      const remaining = Number.isFinite(Number(job.remaining_seconds)) ? Number(job.remaining_seconds) : 30;
+      const remaining = Number.isFinite(Number(job.remaining_seconds)) ? Math.max(0, Number(job.remaining_seconds)) : 30;
       if (job.status === 'success') {
         clearInterval(module3CclPollTimer);
         const summary = job.summary || {};
@@ -1340,9 +1354,7 @@ function startModule3CclPolling(jobId, startTime) {
         setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), job.message || cmpT('module3CclFailed', 'CCL 係數對應失敗'), cmpT('error', 'Error'), 100);
         return;
       }
-      const rawSourceText = job.raw_source === 'module2_latest' ? '來源：Module 2 最新 Raw Material Bulk。' : '';
-      const stepText = `${job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。')} ${rawSourceText}`.trim();
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), stepText, cmpRemainingText(remaining), progress);
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。'), cmpRemainingText(remaining), progress);
     } catch (err) {
       clearInterval(module3CclPollTimer);
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
@@ -1359,19 +1371,21 @@ if (module3CclForm) {
       module3CclDownload.href = '#';
     }
     setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(30), 3);
+    await refreshModule3RawBulkSource();
     const fd = new FormData(module3CclForm);
-    fd.delete('raw_material_file');
     try {
       const res = await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: fd });
       const data = await readJsonOrThrow(res);
       if (!data.job_id) throw new Error('後端未回傳 job_id。');
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), '背景工作已開始，正在讀取 Module 2 最新 Raw Material Bulk。', cmpRemainingText(30), 5);
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(30), 5);
       startModule3CclPolling(data.job_id, Date.now());
     } catch (err) {
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
     }
   });
 }
+
+refreshModule3RawBulkSource();
 
 function formatModule3EmissionFactorUnit(unit) {
   const rawUnit = String(unit || '').trim();
