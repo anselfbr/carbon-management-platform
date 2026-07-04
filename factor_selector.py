@@ -223,13 +223,30 @@ def _resolve_lcia_metadata_columns(ws) -> dict[str, int]:
             raise ValueError(f"LCIA 檔案找不到欄位：{', '.join(names)}")
     return resolved
 
-def _process_type_token(process_type: str | None) -> str:
+def _process_type_mode(process_type: str | None) -> str:
+    """Normalize process type filter.
+
+    Business rule:
+    - production_with_transport: Activity Name must start with ``market for``.
+    - production_only: all non-``market for`` activities are treated as production only.
+    - all: no process-type filtering.
+    """
     value = str(process_type or "all").strip().lower()
-    if value in {"production", "production_only"}:
-        return "production"
     if value in {"market_for", "market", "production_with_transport"}:
-        return "market for"
-    return ""
+        return "market_for"
+    if value in {"production", "production_only"}:
+        return "production_only"
+    return "all"
+
+
+def _matches_process_type(activity_name: str, process_type: str | None) -> bool:
+    activity = str(activity_name or "").strip().lower()
+    mode = _process_type_mode(process_type)
+    if mode == "market_for":
+        return activity.startswith("market for")
+    if mode == "production_only":
+        return not activity.startswith("market for")
+    return True
 
 
 
@@ -346,11 +363,10 @@ def _search_lcia_file(
     total_count = 0
     key = keyword.lower().strip()
     geography_key = str(geography or "all").strip()
-    process_token = _process_type_token(process_type)
     for row in cache["rows"]:
         if geography_key.lower() != "all" and row.get("geography") != geography_key:
             continue
-        if process_token and process_token not in row.get("_activity_lower", ""):
+        if not _matches_process_type(row.get("_activity_lower", ""), process_type):
             continue
         if not _keyword_matches_activity_or_reference(key, row.get("_searchable", "")):
             continue
