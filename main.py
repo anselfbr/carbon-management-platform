@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -41,6 +43,42 @@ FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
 print("===== CMP MAIN VERSION: CMP_V15_0_RULE_MASTER_ENGINE_SITE_PREFIX_WHITELIST =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
+
+MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
+MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
+
+def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
+    job = MODULE3_CCL_JOBS.setdefault(job_id, {})
+    job.update(updates)
+    job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
+    def report(progress: int, step: str) -> None:
+        _set_module3_ccl_job(job_id, status="running", progress=max(0, min(100, int(progress))), step=step)
+
+    try:
+        report(1, "建立 CCL 係數對應工作")
+        summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path, progress_callback=report)
+        summary["app_version"] = "CMP_MODULE3_CCL_JOB_V1"
+        _set_module3_ccl_job(
+            job_id,
+            status="success",
+            progress=100,
+            step="CCL 係數對應完成",
+            message="CCL 係數對應完成。",
+            summary=summary,
+            download_url=summary.get("download_url", f"/download/{output_path.name}"),
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        _set_module3_ccl_job(
+            job_id,
+            status="error",
+            progress=100,
+            step="CCL 係數對應失敗",
+            message=str(exc),
+        )
+
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -1719,6 +1757,46 @@ def download_product_series_master(rule_set: str = DEFAULT_RULE_SET):
 # Module 3 · Carbon Emission Factor Selection
 # CCL Mapping + Factor Library Search
 # =========================================================
+@app.post("/module3/apply-ccl-factors-job")
+async def module3_apply_ccl_factors_job(
+    raw_material_file: UploadFile = File(...),
+    ccl_mapping_file: UploadFile = File(...),
+):
+    token = uuid.uuid4().hex[:10]
+    job_id = token
+
+    for file_obj, label in ((raw_material_file, "Raw Material Bulk"), (ccl_mapping_file, "CCL 係數組配表")):
+        filename = str(getattr(file_obj, "filename", "") or "")
+        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{label} 請上傳 Excel 檔案"}, status_code=400)
+
+    raw_path = UPLOAD_DIR / f"module3_raw_material_{token}_{Path(raw_material_file.filename).name}"
+    ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_mapping_file.filename).name}"
+    output_path = OUTPUT_DIR / f"module3_ccl_factor_filled_{token}.xlsx"
+
+    raw_path.write_bytes(await raw_material_file.read())
+    ccl_path.write_bytes(await ccl_mapping_file.read())
+
+    _set_module3_ccl_job(
+        job_id,
+        status="queued",
+        progress=0,
+        step="工作已建立，等待背景處理",
+        message="CCL 係數對應已開始。",
+        created_at=datetime.now().isoformat(timespec="seconds"),
+    )
+    MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path)
+    return {"ok": True, "job_id": job_id, "message": "CCL 係數對應已開始。"}
+
+
+@app.get("/module3/ccl-job/{job_id}")
+def module3_get_ccl_job(job_id: str):
+    job = MODULE3_CCL_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "message": "找不到 CCL 對應工作，請重新執行。"}, status_code=404)
+    return {"ok": True, "job": job}
+
+
 @app.post("/module3/apply-ccl-factors")
 async def module3_apply_ccl_factors(
     raw_material_file: UploadFile = File(...),
@@ -1781,7 +1859,7 @@ def module3_factor_library_filters():
             "geographies": geographies,
             "sources": ["APOS", "Cut-off"],
             "process_types": ["production", "market_for"],
-            "app_version": "CMP_MODULE3_STAGE2_V22",
+            "app_version": "CMP_MODULE3_STAGE2_V21",
         }
     except Exception as exc:
         traceback.print_exc()
@@ -1816,7 +1894,7 @@ def module3_search_factor_library(
             reference_product_keyword=reference_product_keyword,
         )
         result["ok"] = True
-        result["app_version"] = "CMP_MODULE3_STAGE2_V22"
+        result["app_version"] = "CMP_MODULE3_STAGE2_V20"
         return result
     except Exception as exc:
         traceback.print_exc()

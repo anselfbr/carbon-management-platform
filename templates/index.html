@@ -480,9 +480,18 @@
 
               <button type="submit" class="btn-primary module3-run-btn" data-i18n="module3RunCclMapping">執行 CCL 係數對應</button>
 
-              <div id="module3CclResult" class="module3-result-box idle">
-                <b data-i18n="module3CclReadyTitle">待上傳檔案</b>
-                <span data-i18n="module3CclReadyText">系統會依 Material 對應 CCL Item、碳係數與單位，並寫入 Factor 欄位。</span>
+              <div id="module3CclResult" class="processing-status idle module3-ccl-processing-status">
+                <div class="status-header">
+                  <div class="spinner"></div>
+                  <div>
+                    <b id="module3CclStatusTitle" data-i18n="module3CclReadyTitle">待上傳檔案</b>
+                    <p id="module3CclStatusText" data-i18n="module3CclReadyText">系統會依 Material 對應 CCL Item、碳係數與單位，並寫入 Factor 欄位。</p>
+                  </div>
+                  <span id="module3CclStatusTime" class="status-time">Idle</span>
+                </div>
+                <div class="progress-track">
+                  <div id="module3CclProgressBar" class="progress-bar"></div>
+                </div>
               </div>
 
               <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載已填入係數的 Bulk 檔</span></a>
@@ -539,7 +548,7 @@
                   <input id="module3FactorReferenceKeyword" type="text" placeholder="solder" data-i18n-placeholder="referenceProductSearchPlaceholder">
                 </label>
               </div>
-              <div id="module3FactorStatus" class="module3-empty-result" data-i18n="module3LibraryReady">請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。</div>
+              <div id="module3FactorStatus" class="module3-empty-result" data-i18n="module3LibraryReady">請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。</div>
               <div class="module3-table-wrap">
                 <table id="module3FactorTable" class="module3-factor-table hidden">
                   <thead>
@@ -886,6 +895,10 @@ const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
 const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
+const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
+const module3CclStatusText = document.getElementById('module3CclStatusText');
+const module3CclStatusTime = document.getElementById('module3CclStatusTime');
+const module3CclProgressBar = document.getElementById('module3CclProgressBar');
 const module3CclDownload = document.getElementById('module3CclDownload');
 const module3FactorActivityKeyword = document.getElementById('module3FactorActivityKeyword');
 const module3FactorReferenceKeyword = document.getElementById('module3FactorReferenceKeyword');
@@ -1273,38 +1286,85 @@ bomForm.addEventListener('submit', async (e) => {
 });
 
 
-function setModule3CclResult(mode, title, text) {
+let module3CclPollTimer = null;
+
+function setModule3CclResult(mode, title, text, timeText = 'Idle', progress = 0) {
   if (!module3CclResult) return;
   module3CclResult.classList.remove('idle', 'running', 'success', 'error');
   module3CclResult.classList.add(mode);
-  module3CclResult.innerHTML = `<b>${title}</b><span>${text}</span>`;
+  if (module3CclStatusTitle) module3CclStatusTitle.textContent = title;
+  if (module3CclStatusText) module3CclStatusText.textContent = text;
+  if (module3CclStatusTime) module3CclStatusTime.textContent = timeText;
+  if (module3CclProgressBar) module3CclProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  cmpApplyI18n();
+}
+
+async function readJsonOrThrow(res) {
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const text = await res.text();
+    throw new Error(text && text.trim().startsWith('<') ? '伺服器回傳錯誤頁面，請查看 Render log。' : (text || '伺服器未回傳 JSON。'));
+  }
+  const data = await res.json();
+  if (!res.ok || data.ok === false) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
+}
+
+function startModule3CclPolling(jobId, startTime) {
+  clearInterval(module3CclPollTimer);
+  module3CclPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`/module3/ccl-job/${jobId}`, { cache: 'no-store' });
+      const data = await readJsonOrThrow(res);
+      const job = data.job || {};
+      const progress = Number(job.progress || 0);
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const remaining = progress > 5 && progress < 100 ? Math.max(1, Math.round(elapsed * (100 - progress) / progress)) : 30;
+      if (job.status === 'success') {
+        clearInterval(module3CclPollTimer);
+        const summary = job.summary || {};
+        const text = formatDynamic('module3CclSuccessText', '完成：已寫入 {written} 筆，未對應 {unmatched} 筆。', {
+          written: summary.written_rows ?? 0,
+          unmatched: summary.unmatched_rows ?? 0
+        });
+        setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), text, cmpT('completed', 'Completed'), 100);
+        if (module3CclDownload && job.download_url) {
+          module3CclDownload.href = job.download_url;
+          module3CclDownload.classList.remove('disabled');
+        }
+        return;
+      }
+      if (job.status === 'error') {
+        clearInterval(module3CclPollTimer);
+        setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), job.message || cmpT('module3CclFailed', 'CCL 係數對應失敗'), cmpT('error', 'Error'), 100);
+        return;
+      }
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。'), cmpRemainingText(remaining), progress);
+    } catch (err) {
+      clearInterval(module3CclPollTimer);
+      setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
+    }
+  }, 1500);
 }
 
 if (module3CclForm) {
   module3CclForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    clearInterval(module3CclPollTimer);
     if (module3CclDownload) {
       module3CclDownload.classList.add('disabled');
       module3CclDownload.href = '#';
     }
-    setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。'));
+    setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(30), 3);
     const fd = new FormData(module3CclForm);
     try {
-      const res = await fetch('/module3/apply-ccl-factors', { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.message || cmpT('module3CclFailed', 'CCL 係數對應失敗'));
-      const summary = data.summary || {};
-      const text = formatDynamic('module3CclSuccessText', '完成：已寫入 {written} 筆，未對應 {unmatched} 筆。', {
-        written: summary.written_rows ?? 0,
-        unmatched: summary.unmatched_rows ?? 0
-      });
-      setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), text);
-      if (module3CclDownload && data.download_url) {
-        module3CclDownload.href = data.download_url;
-        module3CclDownload.classList.remove('disabled');
-      }
+      const res = await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: fd });
+      const data = await readJsonOrThrow(res);
+      if (!data.job_id) throw new Error('後端未回傳 job_id。');
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(30), 5);
+      startModule3CclPolling(data.job_id, Date.now());
     } catch (err) {
-      setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message);
+      setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
     }
   });
 }
@@ -1513,7 +1573,7 @@ function scheduleModule3FactorSearch() {
   module3FactorCurrentPage = 1;
   window.clearTimeout(module3FactorSearchTimer);
   if (!hasModule3FactorSearchTerms()) {
-    if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。');
+    if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。');
     renderModule3FactorRows([]);
     resetModule3FactorPagination();
     return;
@@ -1528,7 +1588,7 @@ async function searchModule3Factors(options = {}) {
   const terms = getModule3FactorSearchTerms();
   if (!hasModule3FactorSearchTerms()) {
     module3FactorStatus.textContent = options.auto
-      ? cmpT('module3LibraryReady', '請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。')
+      ? cmpT('module3LibraryReady', '請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。')
       : cmpT('module3KeywordTooShort', '請至少在其中一個欄位輸入 2 個字元。');
     renderModule3FactorRows([]);
     resetModule3FactorPagination();
@@ -1577,7 +1637,7 @@ function clearModule3FactorFilters() {
   if (module3FactorProcessType) module3FactorProcessType.value = 'all';
   if (module3FactorActivityKeyword) module3FactorActivityKeyword.value = '';
   if (module3FactorReferenceKeyword) module3FactorReferenceKeyword.value = '';
-  if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。');
+  if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。');
   renderModule3FactorRows([]);
   resetModule3FactorPagination();
 }

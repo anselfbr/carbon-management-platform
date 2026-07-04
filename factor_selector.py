@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Iterable
+from typing import Any, Callable, Dict, Iterable
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -77,7 +77,9 @@ def _safe_number(value: Any) -> float | None:
         return None
 
 
-def _read_ccl_mapping(ccl_path: str | Path) -> dict[str, Dict[str, Any]]:
+def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[[int, str], None] | None = None) -> dict[str, Dict[str, Any]]:
+    if progress_callback:
+        progress_callback(10, "讀取 CCL 係數組配表")
     wb = load_workbook(ccl_path, read_only=True, data_only=True)
     sheet_name = CCL_SHEET_NAME if CCL_SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
     ws = wb[sheet_name]
@@ -89,7 +91,8 @@ def _read_ccl_mapping(ccl_path: str | Path) -> dict[str, Dict[str, Any]]:
     unit_col = _find_col_in_header_row(ws, header_row, ["單位", "Unit", "Factor Unit", "Emission Factor Unit", "係數單位"], required=False)
 
     mapping: dict[str, Dict[str, Any]] = {}
-    for row in range(header_row + 1, ws.max_row + 1):
+    total_rows = max(1, ws.max_row - header_row)
+    for idx, row in enumerate(range(header_row + 1, ws.max_row + 1), start=1):
         material = _text(ws.cell(row, material_col).value)
         if not material:
             continue
@@ -101,6 +104,10 @@ def _read_ccl_mapping(ccl_path: str | Path) -> dict[str, Dict[str, Any]]:
             "emission_factor": _safe_number(factor_value) if _safe_number(factor_value) is not None else factor_value,
             "unit": _text(ws.cell(row, unit_col).value) if unit_col else "",
         }
+        if progress_callback and (idx == 1 or idx % 1000 == 0):
+            progress_callback(10 + int(min(20, idx / total_rows * 20)), "建立 CCL Material → Factor 對應索引")
+    if progress_callback:
+        progress_callback(32, f"CCL 索引建立完成，共 {len(mapping):,} 筆")
     return mapping
 
 
@@ -108,14 +115,19 @@ def apply_ccl_factors_to_raw_material_bulk(
     raw_material_bulk_path: str | Path,
     ccl_mapping_path: str | Path,
     output_path: str | Path,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> Dict[str, Any]:
     """Fill Module 3 CCL factor fields into a Module 2 raw-material bulk workbook."""
     raw_material_bulk_path = Path(raw_material_bulk_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if progress_callback:
+        progress_callback(3, "複製 raw material bulk 模板")
     shutil.copy2(raw_material_bulk_path, output_path)
 
-    ccl_map = _read_ccl_mapping(ccl_mapping_path)
+    ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
+    if progress_callback:
+        progress_callback(36, "開啟 raw material bulk 檔案")
     wb = load_workbook(output_path)
     if ACTIVITY_SHEET_NAME not in wb.sheetnames:
         raise ValueError(f"找不到分頁：{ACTIVITY_SHEET_NAME}")
@@ -137,7 +149,8 @@ def apply_ccl_factors_to_raw_material_bulk(
     matched = 0
     unmatched = 0
     written_rows = 0
-    for row in range(DATA_START_ROW, ws.max_row + 1):
+    total_activity_rows = max(1, ws.max_row - DATA_START_ROW + 1)
+    for idx, row in enumerate(range(DATA_START_ROW, ws.max_row + 1), start=1):
         material = _text(ws.cell(row, cols["material"]).value)
         if not material:
             continue
@@ -163,8 +176,14 @@ def apply_ccl_factors_to_raw_material_bulk(
             ws.cell(row, cols["factor_unit"]).value = item["unit"]
         matched += 1
         written_rows += 1
+        if progress_callback and (idx == 1 or idx % 500 == 0):
+            progress_callback(40 + int(min(45, idx / total_activity_rows * 45)), "比對原物料並寫入 CCL 係數欄位")
 
+    if progress_callback:
+        progress_callback(90, "儲存已填入係數的 Bulk 檔")
     wb.save(output_path)
+    if progress_callback:
+        progress_callback(100, "CCL 係數對應完成")
     return {
         "output_filename": output_path.name,
         "download_url": f"/download/{output_path.name}",
