@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V14"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V17"
 
 
 def _norm(value: Any) -> str:
@@ -232,6 +232,22 @@ def _process_type_token(process_type: str | None) -> str:
     return ""
 
 
+def _matches_process_type(activity_lower: str, process_type: str | None) -> bool:
+    """Apply process type filtering to Activity Name.
+
+    Production-only results must not include any Activity Name containing
+    "market for". This prevents market datasets from appearing when users
+    choose 僅生產.
+    """
+    value = str(process_type or "all").strip().lower()
+    activity = str(activity_lower or "").lower()
+    if value in {"production", "production_only"}:
+        return "production" in activity and "market for" not in activity
+    if value in {"market_for", "market", "production_with_transport"}:
+        return "market for" in activity
+    return True
+
+
 
 def _format_emission_factor_unit(unit: Any) -> str:
     raw_unit = _text(unit).strip()
@@ -350,7 +366,7 @@ def _search_lcia_file(
     for row in cache["rows"]:
         if geography_key.lower() != "all" and row.get("geography") != geography_key:
             continue
-        if process_token and process_token not in row.get("_activity_lower", ""):
+        if not _matches_process_type(row.get("_activity_lower", ""), process_type):
             continue
         if not _keyword_matches_activity_or_reference(key, row.get("_searchable", "")):
             continue
