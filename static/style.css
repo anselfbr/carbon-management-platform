@@ -2460,3 +2460,40 @@ select:focus {
   .module3-search-row .module3-search-btn,
   .module3-search-row .module3-clear-btn { width: 100% !important; }
 }
+
+/* MODULE3 Stage 2 v20 · split instant-search fields */
+.module3-keyword-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+.module3-keyword-field {
+  display: grid;
+  gap: 10px;
+  font-weight: 900;
+  color: #082f5f;
+}
+.module3-keyword-field input {
+  width: 100%;
+  min-height: 64px;
+  border-radius: 24px;
+  border: 1px solid rgba(24, 83, 130, 0.20);
+  background: #f8fbff;
+  padding: 0 22px;
+  font-size: 1rem;
+  color: #0b2c57;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.module3-keyword-field input:focus {
+  border-color: rgba(14, 165, 233, 0.65);
+  background: #ffffff;
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.12);
+}
+@media (max-width: 900px) {
+  .module3-keyword-grid {
+    grid-template-columns: 1fr;
+  }
+}

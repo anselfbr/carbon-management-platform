@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V14"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V20"
 
 
 def _norm(value: Any) -> str:
@@ -300,8 +300,9 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
         if row_geography:
             geographies.add(row_geography)
         # Keyword search is intentionally limited to Activity Name and Reference Product Name only.
-        searchable_values = [activity_name, reference_product_name]
-        searchable = " ".join(_text(v).lower() for v in searchable_values)
+        activity_searchable = activity_name.lower()
+        reference_searchable = reference_product_name.lower()
+        searchable = f"{activity_searchable} {reference_searchable}"
         rows.append({
             "source": display_source,
             "source_key": source,
@@ -314,6 +315,8 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
             "ipcc2021_gwp100": factor_value,
             "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
             "_activity_lower": activity_name.lower(),
+            "_activity_searchable": activity_searchable,
+            "_reference_searchable": reference_searchable,
             "_searchable": searchable,
         })
 
@@ -357,18 +360,26 @@ def _search_lcia_file(
     limit: int,
     geography: str | None = "all",
     process_type: str | None = "all",
+    activity_name_keyword: str | None = "",
+    reference_product_keyword: str | None = "",
 ) -> tuple[list[Dict[str, Any]], int]:
     cache = _load_lcia_cache(path, source)
     results: list[Dict[str, Any]] = []
     total_count = 0
     key = keyword.lower().strip()
+    activity_key = str(activity_name_keyword or "").lower().strip()
+    reference_key = str(reference_product_keyword or "").lower().strip()
     geography_key = str(geography or "all").strip()
     for row in cache["rows"]:
         if geography_key.lower() != "all" and row.get("geography") != geography_key:
             continue
         if not _matches_process_type(row.get("_activity_lower", ""), process_type):
             continue
-        if not _keyword_matches_activity_or_reference(key, row.get("_searchable", "")):
+        if activity_key and not _keyword_matches_activity_or_reference(activity_key, row.get("_activity_searchable", "")):
+            continue
+        if reference_key and not _keyword_matches_activity_or_reference(reference_key, row.get("_reference_searchable", "")):
+            continue
+        if not activity_key and not reference_key and not _keyword_matches_activity_or_reference(key, row.get("_searchable", "")):
             continue
         total_count += 1
         if len(results) < limit:
@@ -396,10 +407,14 @@ def search_factor_library(
     process_type: str = "all",
     page: int = 1,
     page_size: int = 10,
+    activity_name_keyword: str | None = "",
+    reference_product_keyword: str | None = "",
 ) -> Dict[str, Any]:
     keyword = str(keyword or "").strip()
-    if len(keyword) < 2:
-        raise ValueError("請輸入至少 2 個字元的關鍵字")
+    activity_name_keyword = str(activity_name_keyword or "").strip()
+    reference_product_keyword = str(reference_product_keyword or "").strip()
+    if len(activity_name_keyword) < 2 and len(reference_product_keyword) < 2 and len(keyword) < 2:
+        raise ValueError("請至少在 Activity Name 或 Reference Product Name 輸入 2 個字元")
     page_size = int(page_size or limit or 10)
     if page_size not in {10, 20, 50}:
         page_size = 10
@@ -410,17 +425,17 @@ def search_factor_library(
     ordered_results: list[Dict[str, Any]] = []
     total_count = 0
     if selected_source in {"all", "apos"} and apos_path and Path(apos_path).exists():
-        apos_results, apos_count = _search_lcia_file(apos_path, keyword, "APOS", fetch_limit, geography, process_type)
+        apos_results, apos_count = _search_lcia_file(apos_path, keyword, "APOS", fetch_limit, geography, process_type, activity_name_keyword, reference_product_keyword)
         ordered_results.extend(apos_results)
         total_count += apos_count
     remaining_fetch = max(0, fetch_limit - len(ordered_results))
     if remaining_fetch > 0 and selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
-        cutoff_results, cutoff_count = _search_lcia_file(cutoff_path, keyword, "Cut-off", remaining_fetch, geography, process_type)
+        cutoff_results, cutoff_count = _search_lcia_file(cutoff_path, keyword, "Cut-off", remaining_fetch, geography, process_type, activity_name_keyword, reference_product_keyword)
         ordered_results.extend(cutoff_results)
         total_count += cutoff_count
     elif selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
         # Count Cut-off matches even when the requested page is fully occupied by APOS results.
-        _, cutoff_count = _search_lcia_file(cutoff_path, keyword, "Cut-off", 0, geography, process_type)
+        _, cutoff_count = _search_lcia_file(cutoff_path, keyword, "Cut-off", 0, geography, process_type, activity_name_keyword, reference_product_keyword)
         total_count += cutoff_count
     start = (page - 1) * page_size
     end = start + page_size
@@ -438,6 +453,8 @@ def search_factor_library(
             "source": source or "all",
             "geography": geography or "all",
             "process_type": process_type or "all",
+            "activity_name_keyword": activity_name_keyword,
+            "reference_product_keyword": reference_product_keyword,
         },
         "results": results,
         "factor_selector_version": FACTOR_SELECTOR_VERSION,

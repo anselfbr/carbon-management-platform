@@ -1779,7 +1779,9 @@ def module3_factor_library_filters():
 
 @app.get("/module3/search-factor-library")
 def module3_search_factor_library(
-    keyword: str,
+    keyword: str = "",
+    activity_name_keyword: str = "",
+    reference_product_keyword: str = "",
     limit: int = 10,
     source: str = "all",
     geography: str = "all",
@@ -1799,9 +1801,11 @@ def module3_search_factor_library(
             process_type=process_type,
             page=page,
             page_size=page_size,
+            activity_name_keyword=activity_name_keyword,
+            reference_product_keyword=reference_product_keyword,
         )
         result["ok"] = True
-        result["app_version"] = "CMP_MODULE3_STAGE2_V12"
+        result["app_version"] = "CMP_MODULE3_STAGE2_V20"
         return result
     except Exception as exc:
         traceback.print_exc()
