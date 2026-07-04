@@ -539,7 +539,7 @@
                   <input id="module3FactorReferenceKeyword" type="text" placeholder="solder" data-i18n-placeholder="referenceProductSearchPlaceholder">
                 </label>
               </div>
-              <div id="module3FactorStatus" class="module3-empty-result" data-i18n="module3LibraryReady">請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。</div>
+              <div id="module3FactorStatus" class="module3-empty-result" data-i18n="module3LibraryReady">請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。</div>
               <div class="module3-table-wrap">
                 <table id="module3FactorTable" class="module3-factor-table hidden">
                   <thead>
@@ -1513,7 +1513,7 @@ function scheduleModule3FactorSearch() {
   module3FactorCurrentPage = 1;
   window.clearTimeout(module3FactorSearchTimer);
   if (!hasModule3FactorSearchTerms()) {
-    if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。');
+    if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。');
     renderModule3FactorRows([]);
     resetModule3FactorPagination();
     return;
@@ -1528,7 +1528,7 @@ async function searchModule3Factors(options = {}) {
   const terms = getModule3FactorSearchTerms();
   if (!hasModule3FactorSearchTerms()) {
     module3FactorStatus.textContent = options.auto
-      ? cmpT('module3LibraryReady', '請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。')
+      ? cmpT('module3LibraryReady', '請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。')
       : cmpT('module3KeywordTooShort', '請至少在其中一個欄位輸入 2 個字元。');
     renderModule3FactorRows([]);
     resetModule3FactorPagination();
@@ -1577,7 +1577,7 @@ function clearModule3FactorFilters() {
   if (module3FactorProcessType) module3FactorProcessType.value = 'all';
   if (module3FactorActivityKeyword) module3FactorActivityKeyword.value = '';
   if (module3FactorReferenceKeyword) module3FactorReferenceKeyword.value = '';
-  if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。');
+  if (module3FactorStatus) module3FactorStatus.textContent = cmpT('module3LibraryReady', '請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。');
   renderModule3FactorRows([]);
   resetModule3FactorPagination();
 }

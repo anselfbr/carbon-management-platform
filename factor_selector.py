@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V21"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260704_V22"
 
 
 def _norm(value: Any) -> str:
@@ -332,26 +332,36 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
 
 
 
-def _keyword_matches_activity_or_reference(keyword: str, searchable: str) -> bool:
-    """Match keyword against Activity Name and Reference Product Name.
+def _matches_single_keyword_token(token: str, searchable: str) -> bool:
+    """Match one keyword token against one searchable field.
 
-    English / alphanumeric keywords are matched as complete words or complete
-    phrases, so a query such as "tin" will not match "coating" merely because
-    the letters appear inside another word. Non-English keywords continue to use
-    a direct containment check because word boundaries are less reliable.
+    English / alphanumeric tokens are matched as complete words so a query such
+    as "tin" will not match "coating" merely because the letters appear inside
+    another word. Non-English tokens continue to use direct containment because
+    word boundaries are less reliable.
     """
-    key = str(keyword or "").strip().lower()
+    key = str(token or "").strip().lower()
     text = str(searchable or "").lower()
     if not key:
         return True
-    if re.fullmatch(r"[a-z0-9][a-z0-9\s\-_/.,()+]*", key, flags=re.I):
-        # Treat separators and punctuation as boundaries, but do not match inside
-        # another English/alphanumeric token.
-        escaped = re.escape(key)
-        escaped = escaped.replace(r"\ ", r"\s+")
-        pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
+    if re.fullmatch(r"[a-z0-9][a-z0-9\-_/.,()]*", key, flags=re.I):
+        pattern = rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])"
         return re.search(pattern, text, flags=re.I) is not None
     return key in text
+
+
+def _keyword_matches_activity_or_reference(keyword: str, searchable: str) -> bool:
+    """Match user query against Activity Name or Reference Product Name.
+
+    Spaces represent AND logic. For example, "wafer waste" means the field must
+    contain both complete tokens "wafer" and "waste". Symbols such as +, -, and
+    | are not treated as operators.
+    """
+    query = str(keyword or "").strip().lower()
+    if not query:
+        return True
+    tokens = [part for part in re.split(r"\s+", query) if part]
+    return all(_matches_single_keyword_token(token, searchable) for token in tokens)
 
 def _search_lcia_file(
     path: str | Path,
