@@ -1310,7 +1310,7 @@ async function readJsonOrThrow(res) {
   return data;
 }
 
-function startModule3CclPolling(jobId) {
+function startModule3CclPolling(jobId, startTime) {
   clearInterval(module3CclPollTimer);
   module3CclPollTimer = setInterval(async () => {
     try {
@@ -1318,8 +1318,7 @@ function startModule3CclPolling(jobId) {
       const data = await readJsonOrThrow(res);
       const job = data.job || {};
       const progress = Number(job.progress || 0);
-      const backendRemaining = Number(job.remaining_seconds);
-      const remaining = Number.isFinite(backendRemaining) ? Math.max(0, Math.round(backendRemaining)) : 30;
+      const remaining = Number.isFinite(Number(job.remaining_seconds)) ? Number(job.remaining_seconds) : 30;
       if (job.status === 'success') {
         clearInterval(module3CclPollTimer);
         const summary = job.summary || {};
@@ -1362,7 +1361,7 @@ if (module3CclForm) {
       const data = await readJsonOrThrow(res);
       if (!data.job_id) throw new Error('後端未回傳 job_id。');
       setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(30), 5);
-      startModule3CclPolling(data.job_id);
+      startModule3CclPolling(data.job_id, Date.now());
     } catch (err) {
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
     }

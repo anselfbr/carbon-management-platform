@@ -53,29 +53,36 @@ def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
     job["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
 def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
-    def report(progress: int, step: str, remaining_seconds: int | None = None) -> None:
-        updates = {
-            "status": "running",
-            "progress": max(0, min(100, int(progress))),
-            "step": step,
-        }
-        if remaining_seconds is not None:
-            updates["remaining_seconds"] = max(0, int(remaining_seconds))
-        _set_module3_ccl_job(job_id, **updates)
+    started_at = datetime.now()
+
+    def report(progress: int, step: str) -> None:
+        safe_progress = max(0, min(100, int(progress)))
+        elapsed = max(1, (datetime.now() - started_at).total_seconds())
+        if 5 <= safe_progress < 100:
+            remaining_seconds = max(1, int(round(elapsed * (100 - safe_progress) / safe_progress)))
+        else:
+            remaining_seconds = 30
+        _set_module3_ccl_job(
+            job_id,
+            status="running",
+            progress=safe_progress,
+            step=step,
+            remaining_seconds=remaining_seconds,
+        )
 
     try:
         report(1, "建立 CCL 係數對應工作")
         summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path, progress_callback=report)
-        summary["app_version"] = "CMP_MODULE3_CCL_JOB_V1"
+        summary["app_version"] = "CMP_MODULE3_CCL_JOB_V3"
         _set_module3_ccl_job(
             job_id,
             status="success",
             progress=100,
             step="CCL 係數對應完成",
             message="CCL 係數對應完成。",
-            remaining_seconds=0,
             summary=summary,
             download_url=summary.get("download_url", f"/download/{output_path.name}"),
+            remaining_seconds=0,
         )
     except Exception as exc:
         traceback.print_exc()
@@ -1791,7 +1798,6 @@ async def module3_apply_ccl_factors_job(
         progress=0,
         step="工作已建立，等待背景處理",
         message="CCL 係數對應已開始。",
-        remaining_seconds=30,
         created_at=datetime.now().isoformat(timespec="seconds"),
     )
     MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path)
