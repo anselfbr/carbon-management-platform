@@ -228,7 +228,7 @@ def _process_type_mode(process_type: str | None) -> str:
 
     Business rule:
     - production_with_transport: Activity Name must start with ``market for``.
-    - production_only: Activity Name must contain the keyword ``production``.
+    - production_only: all non-``market for`` activities are treated as production only.
     - all: no process-type filtering.
     """
     value = str(process_type or "all").strip().lower()
@@ -245,7 +245,7 @@ def _matches_process_type(activity_name: str, process_type: str | None) -> bool:
     if mode == "market_for":
         return activity.startswith("market for")
     if mode == "production_only":
-        return "production" in activity
+        return not activity.startswith("market for")
     return True
 
 
@@ -353,18 +353,6 @@ def _keyword_matches_activity_or_reference(keyword: str, searchable: str) -> boo
         return re.search(pattern, text, flags=re.I) is not None
     return key in text
 
-def _keyword_matches_all_terms(keyword: str, searchable: str) -> bool:
-    """AND-search helper: space-separated terms must all match.
-
-    Example: ``wafer waste`` means ``wafer`` AND ``waste``.
-    This avoids special operators (+, -, |, OR, NOT) and keeps the UI rule simple.
-    """
-    terms = [term for term in re.split(r"\s+", str(keyword or "").strip()) if term]
-    if not terms:
-        return True
-    return all(_keyword_matches_activity_or_reference(term, searchable) for term in terms)
-
-
 def _search_lcia_file(
     path: str | Path,
     keyword: str,
@@ -375,94 +363,58 @@ def _search_lcia_file(
     activity_name_keyword: str | None = "",
     reference_product_keyword: str | None = "",
 ) -> tuple[list[Dict[str, Any]], int]:
-    """Stream-search an LCIA workbook without loading the whole database into RAM.
+    cache = _load_lcia_cache(path, source)
+    results: list[Dict[str, Any]] = []
+    total_count = 0
+    key = keyword.lower().strip()
+    activity_key = str(activity_name_keyword or "").lower().strip()
+    reference_key = str(reference_product_keyword or "").lower().strip()
+    geography_key = str(geography or "all").strip()
+    for row in cache["rows"]:
+        if geography_key.lower() != "all" and row.get("geography") != geography_key:
+            continue
+        if not _matches_process_type(row.get("_activity_lower", ""), process_type):
+            continue
+        if activity_key and not _keyword_matches_activity_or_reference(activity_key, row.get("_activity_searchable", "")):
+            continue
+        if reference_key and not _keyword_matches_activity_or_reference(reference_key, row.get("_reference_searchable", "")):
+            continue
+        if not activity_key and not reference_key and not _keyword_matches_activity_or_reference(key, row.get("_searchable", "")):
+            continue
+        total_count += 1
+        if len(results) < limit:
+            clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key"}
+            results.append(clean_row)
+    return results, total_count
 
-    Render free/small instances can be killed when APOS and Cut-off are fully
-    cached in Python dictionaries. This function keeps memory low by scanning
-    rows from openpyxl read_only mode and only retaining the requested page rows.
-    """
-    p = Path(path)
-    wb = load_workbook(p, read_only=True, data_only=True)
-    try:
-        if LCIA_SHEET_NAME not in wb.sheetnames:
-            raise ValueError(f"{p.name} 找不到分頁：{LCIA_SHEET_NAME}")
-        ws = wb[LCIA_SHEET_NAME]
-        value_col = _resolve_lcia_target_column(ws)
-        meta_cols = _resolve_lcia_metadata_columns(ws)
-
-        results: list[Dict[str, Any]] = []
-        total_count = 0
-        key = str(keyword or "").lower().strip()
-        activity_key = str(activity_name_keyword or "").lower().strip()
-        reference_key = str(reference_product_keyword or "").lower().strip()
-        geography_key = str(geography or "all").strip()
-        display_source = _source_display_name(source)
-
-        for values in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
-            activity_name = _text(values[meta_cols["activity_name"] - 1] if len(values) >= meta_cols["activity_name"] else "")
-            row_geography = _text(values[meta_cols["geography"] - 1] if len(values) >= meta_cols["geography"] else "")
-            reference_product_name = _text(values[meta_cols["reference_product_name"] - 1] if len(values) >= meta_cols["reference_product_name"] else "")
-            ref_unit = _text(values[meta_cols["reference_product_unit"] - 1] if len(values) >= meta_cols["reference_product_unit"] else "")
-
-            activity_lower = activity_name.lower()
-            activity_searchable = activity_lower
-            reference_searchable = reference_product_name.lower()
-            searchable = f"{activity_searchable} {reference_searchable}"
-
-            if geography_key.lower() != "all" and row_geography != geography_key:
-                continue
-            if not _matches_process_type(activity_lower, process_type):
-                continue
-            if activity_key and not _keyword_matches_all_terms(activity_key, activity_searchable):
-                continue
-            if reference_key and not _keyword_matches_all_terms(reference_key, reference_searchable):
-                continue
-            if not activity_key and not reference_key and not _keyword_matches_all_terms(key, searchable):
-                continue
-
-            total_count += 1
-            if len(results) < limit:
-                factor_value = values[value_col - 1] if len(values) >= value_col else None
-                results.append({
-                    "source": display_source,
-                    "activity_name": activity_name,
-                    "geography": row_geography,
-                    "emission_factor": factor_value,
-                    "reference_product_unit": ref_unit,
-                    "emission_factor_unit": _format_emission_factor_unit(ref_unit),
-                    "reference_product_name": reference_product_name,
-                    "ipcc2021_gwp100": factor_value,
-                    "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
-                })
-        return results, total_count
-    finally:
-        try:
-            wb.close()
-        except Exception:
-            pass
 
 
 def preload_factor_libraries(apos_path: str | Path | None, cutoff_path: str | Path | None) -> Dict[str, Any]:
-    """Lightweight startup check for Module 3 factor libraries.
+    """Preload APOS and Cut-off LCIA workbooks into memory at application startup.
 
-    The previous implementation loaded APOS and Cut-off workbooks into memory at
-    startup. On Render 2GB instances this can terminate the service before users
-    run BOM Expansion. We now only confirm whether files exist; actual searching
-    uses read-only streaming in _search_lcia_file().
+    This keeps the first user search from paying the Excel read cost. Missing
+    files are skipped so local development can still start without the databases.
     """
-    available: list[str] = []
+    loaded: list[str] = []
     skipped: list[str] = []
+    errors: list[dict[str, str]] = []
     for path, source in ((apos_path, "APOS"), (cutoff_path, "Cut-off")):
-        if path and Path(path).exists():
-            available.append(source)
-        else:
+        if not path:
             skipped.append(source)
+            continue
+        p = Path(path)
+        if not p.exists():
+            skipped.append(source)
+            continue
+        try:
+            _load_lcia_cache(p, source)
+            loaded.append(source)
+        except Exception as exc:  # keep startup robust
+            errors.append({"source": source, "message": str(exc)})
     return {
-        "loaded": [],
-        "available": available,
+        "loaded": loaded,
         "skipped": skipped,
-        "errors": [],
-        "mode": "streaming_no_startup_cache",
+        "errors": errors,
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
     }
 
@@ -535,5 +487,403 @@ def search_factor_library(
             "reference_product_keyword": reference_product_keyword,
         },
         "results": results,
+        "factor_selector_version": FACTOR_SELECTOR_VERSION,
+    }
+
+
+# =========================================================
+# Module 3 Factor Library Search - SQLite index implementation
+# Version 1: keep existing UI/API, replace Excel cache search with SQLite FTS
+# =========================================================
+import sqlite3
+from contextlib import closing
+
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SQLITE_INDEX_V1_20260704"
+FACTOR_DB_FILENAME = "factors.db"
+FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
+
+
+def _resolve_factor_excel_path(path: str | Path | None, source: str) -> Path | None:
+    """Resolve factor workbook path, including ZIP-safe filenames such as (#U9867#U554f)."""
+    if path:
+        p = Path(path)
+        if p.exists():
+            return p
+        base = p.parent if p.parent.exists() else Path(__file__).resolve().parent / "data" / "factor_library"
+    else:
+        base = Path(__file__).resolve().parent / "data" / "factor_library"
+    if not base.exists():
+        return None
+    source_key = str(source or "").lower()
+    patterns = ["*.xlsx", "*.xlsm", "*.xls"]
+    for pattern in patterns:
+        for candidate in sorted(base.glob(pattern)):
+            name = candidate.name.lower()
+            if source_key == "apos" and "apos" in name and "lcia" in name:
+                return candidate
+            if source_key in {"cut-off", "cutoff", "cut off"} and ("cut-off" in name or "cutoff" in name) and "lcia" in name:
+                return candidate
+    return None
+
+
+def _factor_db_path(*paths: str | Path | None) -> Path:
+    for path in paths:
+        if path:
+            parent = Path(path).parent
+            if parent.exists():
+                return parent / FACTOR_DB_FILENAME
+    return Path(__file__).resolve().parent / "data" / "factor_library" / FACTOR_DB_FILENAME
+
+
+def _excel_signature(path: Path | None) -> str:
+    if not path or not path.exists():
+        return "missing"
+    stat = path.stat()
+    return f"{path.name}|{stat.st_size}|{int(stat.st_mtime)}"
+
+
+def _connect_factor_db(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA temp_store=MEMORY")
+    return conn
+
+
+def _init_factor_db(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS factor_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS factor_library (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            source_key TEXT NOT NULL,
+            activity_name TEXT,
+            geography TEXT,
+            emission_factor REAL,
+            emission_factor_text TEXT,
+            reference_product_unit TEXT,
+            emission_factor_unit TEXT,
+            reference_product_name TEXT,
+            ipcc2021_gwp100 REAL,
+            ipcc2021_gwp100_text TEXT,
+            indicator TEXT
+        );
+        CREATE VIRTUAL TABLE IF NOT EXISTS factor_library_fts USING fts5(
+            activity_name,
+            reference_product_name,
+            content='factor_library',
+            content_rowid='id'
+        );
+        CREATE INDEX IF NOT EXISTS idx_factor_source_geo ON factor_library(source_key, geography);
+        CREATE INDEX IF NOT EXISTS idx_factor_activity_lower ON factor_library(activity_name);
+        """
+    )
+    conn.commit()
+
+
+def _get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM factor_meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO factor_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+
+
+def _coerce_float_or_none(value: Any) -> float | None:
+    number = _safe_number(value)
+    return float(number) if number is not None else None
+
+
+def _insert_lcia_rows_to_db(conn: sqlite3.Connection, path: Path, source: str) -> int:
+    wb = load_workbook(path, read_only=True, data_only=True)
+    if LCIA_SHEET_NAME not in wb.sheetnames:
+        raise ValueError(f"{path.name} 找不到分頁：{LCIA_SHEET_NAME}")
+    ws = wb[LCIA_SHEET_NAME]
+    value_col = _resolve_lcia_target_column(ws)
+    meta_cols = _resolve_lcia_metadata_columns(ws)
+    display_source = _source_display_name(source)
+    source_key = "apos" if source.lower() == "apos" else "cut-off"
+    indicator = "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)"
+
+    batch: list[tuple[Any, ...]] = []
+    inserted = 0
+    for values in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
+        activity_name = _text(values[meta_cols["activity_name"] - 1] if len(values) >= meta_cols["activity_name"] else "")
+        reference_product_name = _text(values[meta_cols["reference_product_name"] - 1] if len(values) >= meta_cols["reference_product_name"] else "")
+        if not activity_name and not reference_product_name:
+            continue
+        row_geography = _text(values[meta_cols["geography"] - 1] if len(values) >= meta_cols["geography"] else "")
+        ref_unit = _text(values[meta_cols["reference_product_unit"] - 1] if len(values) >= meta_cols["reference_product_unit"] else "")
+        raw_factor = values[value_col - 1] if len(values) >= value_col else None
+        factor_number = _coerce_float_or_none(raw_factor)
+        factor_text = _text(raw_factor)
+        batch.append((
+            display_source,
+            source_key,
+            activity_name,
+            row_geography,
+            factor_number,
+            factor_text,
+            ref_unit,
+            _format_emission_factor_unit(ref_unit),
+            reference_product_name,
+            factor_number,
+            factor_text,
+            indicator,
+        ))
+        if len(batch) >= 1000:
+            conn.executemany(
+                """
+                INSERT INTO factor_library(
+                    source, source_key, activity_name, geography, emission_factor, emission_factor_text,
+                    reference_product_unit, emission_factor_unit, reference_product_name,
+                    ipcc2021_gwp100, ipcc2021_gwp100_text, indicator
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                batch,
+            )
+            inserted += len(batch)
+            batch.clear()
+    if batch:
+        conn.executemany(
+            """
+            INSERT INTO factor_library(
+                source, source_key, activity_name, geography, emission_factor, emission_factor_text,
+                reference_product_unit, emission_factor_unit, reference_product_name,
+                ipcc2021_gwp100, ipcc2021_gwp100_text, indicator
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            batch,
+        )
+        inserted += len(batch)
+    wb.close()
+    return inserted
+
+
+def ensure_factor_database(apos_path: str | Path | None, cutoff_path: str | Path | None, force_rebuild: bool = False) -> Dict[str, Any]:
+    """Build or reuse SQLite factor index. Excel is read only when the index is missing/outdated."""
+    apos = _resolve_factor_excel_path(apos_path, "APOS")
+    cutoff = _resolve_factor_excel_path(cutoff_path, "Cut-off")
+    db_path = _factor_db_path(apos or apos_path, cutoff or cutoff_path)
+    signature = f"schema={FACTOR_DB_SCHEMA_VERSION};apos={_excel_signature(apos)};cutoff={_excel_signature(cutoff)}"
+
+    with closing(_connect_factor_db(db_path)) as conn:
+        _init_factor_db(conn)
+        existing_signature = _get_meta(conn, "signature")
+        if not force_rebuild and existing_signature == signature:
+            total = conn.execute("SELECT COUNT(*) AS c FROM factor_library").fetchone()["c"]
+            return {
+                "db_path": str(db_path),
+                "rebuilt": False,
+                "rows": int(total),
+                "apos_path": str(apos) if apos else "",
+                "cutoff_path": str(cutoff) if cutoff else "",
+                "factor_selector_version": FACTOR_SELECTOR_VERSION,
+            }
+
+        conn.execute("DELETE FROM factor_library_fts")
+        conn.execute("DELETE FROM factor_library")
+        conn.execute("DELETE FROM factor_meta")
+        rows_by_source: dict[str, int] = {}
+        if apos and apos.exists():
+            rows_by_source["APOS"] = _insert_lcia_rows_to_db(conn, apos, "APOS")
+        if cutoff and cutoff.exists():
+            rows_by_source["Cut-off"] = _insert_lcia_rows_to_db(conn, cutoff, "Cut-off")
+        conn.execute(
+            "INSERT INTO factor_library_fts(rowid, activity_name, reference_product_name) "
+            "SELECT id, activity_name, reference_product_name FROM factor_library"
+        )
+        _set_meta(conn, "schema_version", FACTOR_DB_SCHEMA_VERSION)
+        _set_meta(conn, "signature", signature)
+        _set_meta(conn, "apos_path", str(apos) if apos else "")
+        _set_meta(conn, "cutoff_path", str(cutoff) if cutoff else "")
+        conn.commit()
+        total = conn.execute("SELECT COUNT(*) AS c FROM factor_library").fetchone()["c"]
+        return {
+            "db_path": str(db_path),
+            "rebuilt": True,
+            "rows": int(total),
+            "rows_by_source": rows_by_source,
+            "apos_path": str(apos) if apos else "",
+            "cutoff_path": str(cutoff) if cutoff else "",
+            "factor_selector_version": FACTOR_SELECTOR_VERSION,
+        }
+
+
+def preload_factor_libraries(apos_path: str | Path | None, cutoff_path: str | Path | None) -> Dict[str, Any]:
+    """Compatibility name used by main.py startup. Builds SQLite index without keeping Excel rows in memory."""
+    return ensure_factor_database(apos_path, cutoff_path, force_rebuild=False)
+
+
+def collect_factor_library_geographies(*paths: str | Path | None) -> list[str]:
+    return ["GLO", "RoW", "RER"]
+
+
+def _fts_term_query(text: str) -> str:
+    """Convert user input into a conservative FTS5 AND query."""
+    raw = str(text or "").strip().lower()
+    if not raw:
+        return ""
+    tokens = re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", raw, flags=re.I)
+    return " ".join(tokens[:8])
+
+
+def _sqlite_source_keys(source: str) -> list[str]:
+    selected = str(source or "all").strip().lower()
+    if selected == "apos":
+        return ["apos"]
+    if selected in {"cut-off", "cutoff", "cut off"}:
+        return ["cut-off"]
+    return ["apos", "cut-off"]
+
+
+def _build_sql_conditions(
+    source_keys: list[str],
+    geography: str,
+    process_type: str,
+    keyword: str,
+    activity_name_keyword: str,
+    reference_product_keyword: str,
+) -> tuple[str, list[Any], str, list[Any]]:
+    where = []
+    params: list[Any] = []
+    fts_terms: list[str] = []
+
+    placeholders = ",".join("?" for _ in source_keys)
+    where.append(f"fl.source_key IN ({placeholders})")
+    params.extend(source_keys)
+
+    geography_key = str(geography or "all").strip()
+    if geography_key.lower() != "all":
+        where.append("fl.geography = ?")
+        params.append(geography_key)
+
+    mode = _process_type_mode(process_type)
+    if mode == "market_for":
+        where.append("LOWER(fl.activity_name) LIKE 'market for%'")
+    elif mode == "production_only":
+        # Updated business rule: production-only means Activity Name contains production.
+        where.append("LOWER(fl.activity_name) LIKE '%production%'")
+
+    activity_query = _fts_term_query(activity_name_keyword)
+    reference_query = _fts_term_query(reference_product_keyword)
+    keyword_query = _fts_term_query(keyword)
+    if activity_query:
+        fts_terms.append(f"activity_name : ({activity_query})")
+    if reference_query:
+        fts_terms.append(f"reference_product_name : ({reference_query})")
+    if not activity_query and not reference_query and keyword_query:
+        fts_terms.append(keyword_query)
+
+    join = ""
+    if fts_terms:
+        join = "JOIN factor_library_fts fts ON fts.rowid = fl.id"
+        where.append("factor_library_fts MATCH ?")
+        params.append(" ".join(fts_terms))
+
+    return " AND ".join(where), params, join, params
+
+
+def _row_to_result(row: sqlite3.Row) -> Dict[str, Any]:
+    factor_value = row["emission_factor"]
+    if factor_value is None:
+        factor_value = row["emission_factor_text"]
+    return {
+        "source": row["source"],
+        "activity_name": row["activity_name"] or "",
+        "geography": row["geography"] or "",
+        "emission_factor": factor_value,
+        "reference_product_unit": row["reference_product_unit"] or "",
+        "emission_factor_unit": row["emission_factor_unit"] or "",
+        "reference_product_name": row["reference_product_name"] or "",
+        "ipcc2021_gwp100": row["ipcc2021_gwp100"] if row["ipcc2021_gwp100"] is not None else row["ipcc2021_gwp100_text"],
+        "indicator": row["indicator"] or "",
+    }
+
+
+def search_factor_library(
+    keyword: str,
+    apos_path: str | Path | None,
+    cutoff_path: str | Path | None,
+    limit: int = 10,
+    source: str = "all",
+    geography: str = "all",
+    process_type: str = "all",
+    page: int = 1,
+    page_size: int = 10,
+    activity_name_keyword: str | None = "",
+    reference_product_keyword: str | None = "",
+) -> Dict[str, Any]:
+    keyword = str(keyword or "").strip()
+    activity_name_keyword = str(activity_name_keyword or "").strip()
+    reference_product_keyword = str(reference_product_keyword or "").strip()
+    if len(activity_name_keyword) < 2 and len(reference_product_keyword) < 2 and len(keyword) < 2:
+        raise ValueError("請至少在關鍵字查詢或名稱查詢輸入 2 個字元")
+
+    page_size = int(page_size or limit or 10)
+    if page_size not in {10, 20, 50}:
+        page_size = 10
+    page = max(1, int(page or 1))
+    offset = (page - 1) * page_size
+
+    db_summary = ensure_factor_database(apos_path, cutoff_path, force_rebuild=False)
+    db_path = Path(db_summary["db_path"])
+    source_keys = _sqlite_source_keys(source)
+    where_sql, params, join_sql, _ = _build_sql_conditions(
+        source_keys,
+        geography,
+        process_type,
+        keyword,
+        activity_name_keyword,
+        reference_product_keyword,
+    )
+
+    with closing(_connect_factor_db(db_path)) as conn:
+        count_sql = f"SELECT COUNT(*) AS c FROM factor_library fl {join_sql} WHERE {where_sql}"
+        total_count = int(conn.execute(count_sql, params).fetchone()["c"])
+        rows = conn.execute(
+            f"""
+            SELECT fl.*
+            FROM factor_library fl
+            {join_sql}
+            WHERE {where_sql}
+            ORDER BY CASE fl.source_key WHEN 'apos' THEN 0 ELSE 1 END, fl.id
+            LIMIT ? OFFSET ?
+            """,
+            params + [page_size, offset],
+        ).fetchall()
+
+    results = [_row_to_result(row) for row in rows]
+    total_pages = max(1, (total_count + page_size - 1) // page_size) if total_count else 0
+    return {
+        "keyword": keyword,
+        "count": len(results),
+        "total_count": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "priority": "SQLite index: APOS first, then Cut-off",
+        "filters": {
+            "source": source or "all",
+            "geography": geography or "all",
+            "process_type": process_type or "all",
+            "activity_name_keyword": activity_name_keyword,
+            "reference_product_keyword": reference_product_keyword,
+        },
+        "results": results,
+        "factor_db": {
+            "rows": db_summary.get("rows"),
+            "rebuilt": db_summary.get("rebuilt"),
+        },
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
     }
