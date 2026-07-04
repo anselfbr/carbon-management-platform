@@ -494,7 +494,12 @@
                 </div>
               </div>
 
-              <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載已填入係數的 Bulk 檔</span></a>
+              <div class="module3-ccl-download-row">
+                <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載已填入係數的 Bulk 檔</span></a>
+                <a id="module3CclReportDownload" class="download disabled" href="#">下載 CCL Mapping Report</a>
+              </div>
+
+              <div id="module3CclSummary" class="module3-ccl-summary hidden" aria-live="polite"></div>
             </form>
           </section>
         </section>
@@ -900,6 +905,8 @@ const module3CclStatusText = document.getElementById('module3CclStatusText');
 const module3CclStatusTime = document.getElementById('module3CclStatusTime');
 const module3CclProgressBar = document.getElementById('module3CclProgressBar');
 const module3CclDownload = document.getElementById('module3CclDownload');
+const module3CclReportDownload = document.getElementById('module3CclReportDownload');
+const module3CclSummary = document.getElementById('module3CclSummary');
 const module3FactorActivityKeyword = document.getElementById('module3FactorActivityKeyword');
 const module3FactorReferenceKeyword = document.getElementById('module3FactorReferenceKeyword');
 const module3FactorSource = document.getElementById('module3FactorSource');
@@ -1310,6 +1317,39 @@ async function readJsonOrThrow(res) {
   return data;
 }
 
+function renderModule3CclSummary(summary) {
+  if (!module3CclSummary) return;
+  const matchRate = summary.match_rate_percent ?? (summary.total_rows ? ((summary.matched_rows || 0) / summary.total_rows * 100).toFixed(2) : '0.00');
+  module3CclSummary.classList.remove('hidden');
+  module3CclSummary.innerHTML = `
+    <div class="module3-ccl-summary-grid">
+      <section>
+        <h4>執行紀錄</h4>
+        <p>CCL 對應完成。</p>
+        <p>Raw Material 總筆數：<b>${summary.total_rows ?? 0}</b></p>
+        <p>成功對應：<b>${summary.matched_rows ?? 0}</b></p>
+        <p>未對應：<b>${summary.unmatched_rows ?? 0}</b></p>
+        <p>對應率：<b>${matchRate}%</b></p>
+      </section>
+      <section>
+        <h4>摘要</h4>
+        <p>Factor Source：<b>${summary.factor_source || 'CCL library'}</b></p>
+        <p>Factor Comment：<b>${summary.factor_comment || '無'}</b></p>
+        <p>Country/Area：<b>${summary.country_area || 'GLO'}</b></p>
+        <p>Data Quality：<b>${summary.data_quality || 'SECONDARY'}</b></p>
+        <p>Factor Unit：<b>${summary.factor_unit_rule || 'kgCO2e / 係數單位'}</b></p>
+      </section>
+      <section>
+        <h4>規則</h4>
+        <p>Material 先正規化後，使用 Dictionary Index 與 CCL 對照表完全比對。</p>
+        <p>Factor Name ← CCL Item</p>
+        <p>Emission Factor ← 碳係數</p>
+        <p>Factor Unit ← kgCO2e / 係數單位</p>
+      </section>
+    </div>
+  `;
+}
+
 function startModule3CclPolling(jobId, startTime) {
   clearInterval(module3CclPollTimer);
   module3CclPollTimer = setInterval(async () => {
@@ -1319,19 +1359,21 @@ function startModule3CclPolling(jobId, startTime) {
       const job = data.job || {};
       const progress = Number(job.progress || 0);
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      const remaining = progress > 5 && progress < 100 ? Math.max(1, Math.round(elapsed * (100 - progress) / progress)) : 30;
       if (job.status === 'success') {
         clearInterval(module3CclPollTimer);
         const summary = job.summary || {};
-        const text = formatDynamic('module3CclSuccessText', '完成：已寫入 {written} 筆，未對應 {unmatched} 筆。', {
-          written: summary.written_rows ?? 0,
-          unmatched: summary.unmatched_rows ?? 0
-        });
+        const matchRate = summary.match_rate_percent ?? (summary.total_rows ? ((summary.matched_rows || 0) / summary.total_rows * 100).toFixed(2) : '0.00');
+        const text = `完成：成功對應 ${summary.matched_rows ?? 0} 筆，未對應 ${summary.unmatched_rows ?? 0} 筆，對應率 ${matchRate}%。`;
         setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), text, cmpT('completed', 'Completed'), 100);
         if (module3CclDownload && job.download_url) {
           module3CclDownload.href = job.download_url;
           module3CclDownload.classList.remove('disabled');
         }
+        if (module3CclReportDownload && summary.report_download_url) {
+          module3CclReportDownload.href = summary.report_download_url;
+          module3CclReportDownload.classList.remove('disabled');
+        }
+        renderModule3CclSummary(summary);
         return;
       }
       if (job.status === 'error') {
@@ -1339,7 +1381,7 @@ function startModule3CclPolling(jobId, startTime) {
         setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), job.message || cmpT('module3CclFailed', 'CCL 係數對應失敗'), cmpT('error', 'Error'), 100);
         return;
       }
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。'), cmpRemainingText(remaining), progress);
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。'), `已執行 ${elapsed} 秒`, progress);
     } catch (err) {
       clearInterval(module3CclPollTimer);
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
@@ -1355,13 +1397,21 @@ if (module3CclForm) {
       module3CclDownload.classList.add('disabled');
       module3CclDownload.href = '#';
     }
-    setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(30), 3);
+    if (module3CclReportDownload) {
+      module3CclReportDownload.classList.add('disabled');
+      module3CclReportDownload.href = '#';
+    }
+    if (module3CclSummary) {
+      module3CclSummary.classList.add('hidden');
+      module3CclSummary.innerHTML = '';
+    }
+    setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), '已執行 0 秒', 3);
     const fd = new FormData(module3CclForm);
     try {
       const res = await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: fd });
       const data = await readJsonOrThrow(res);
       if (!data.job_id) throw new Error('後端未回傳 job_id。');
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(30), 5);
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), '已執行 0 秒', 5);
       startModule3CclPolling(data.job_id, Date.now());
     } catch (err) {
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);

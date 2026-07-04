@@ -2535,3 +2535,55 @@ select:focus {
     justify-self: start;
   }
 }
+
+/* Module 3 CCL result summary */
+.module3-ccl-download-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.module3-ccl-summary {
+  margin-top: 14px;
+  border: 1px solid rgba(11, 44, 87, 0.12);
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 16px;
+  box-shadow: 0 10px 24px rgba(11, 44, 87, 0.06);
+}
+
+.module3-ccl-summary.hidden {
+  display: none;
+}
+
+.module3-ccl-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.module3-ccl-summary section {
+  border: 1px solid rgba(11, 44, 87, 0.08);
+  border-radius: 14px;
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.module3-ccl-summary h4 {
+  margin: 0 0 10px;
+  color: #0b2c57;
+  font-size: 14px;
+}
+
+.module3-ccl-summary p {
+  margin: 6px 0;
+  color: #334155;
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .module3-ccl-summary-grid {
+    grid-template-columns: 1fr;
+  }
+}
