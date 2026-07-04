@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
@@ -14,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_CCL_PERFORMANCE_20260704_V3"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_WORKSPACE_V2_1_20260704"
 
 
 def _norm(value: Any) -> str:
@@ -29,6 +28,14 @@ def _text(value: Any) -> str:
     if isinstance(value, float) and pd.isna(value):
         return ""
     return str(value).strip()
+
+def _normalize_material_key(value: Any) -> str:
+    """Normalize material numbers from Excel for stable exact matching."""
+    text = _text(value)
+    if text.endswith(".0") and re.fullmatch(r"[A-Za-z0-9_-]+\.0", text):
+        text = text[:-2]
+    text = text.replace("\n", "").replace("\r", "").replace("\t", "")
+    return text.strip().upper()
 
 
 def _find_header_row(ws, aliases: Iterable[str], max_scan_rows: int = 30) -> int:
@@ -64,29 +71,6 @@ def _find_col_in_header_row(ws, header_row: int, aliases: list[str], required: b
     return None
 
 
-
-
-def _normalize_material_key(value: Any) -> str:
-    """Normalize material number for exact CCL matching while preserving meaningful symbols."""
-    text = _text(value)
-    text = text.replace("\u3000", " ").replace("\n", " ").replace("\r", " ").replace("\t", " ")
-    text = re.sub(r"\s+", "", text).strip().upper()
-    # Excel sometimes turns text-like numbers into 12345.0
-    if re.fullmatch(r"\d+\.0", text):
-        text = text[:-2]
-    return text
-
-
-def _factor_unit_text(unit: Any) -> str:
-    unit_text = _text(unit)
-    if not unit_text:
-        return ""
-    lower = unit_text.lower().replace(" ", "")
-    if lower.startswith("kgco2e/") or lower.startswith("kgco2eq/") or lower.startswith("kgco2-e/"):
-        return unit_text
-    return f"kgCO2e / {unit_text}"
-
-
 def _safe_number(value: Any) -> float | None:
     if value is None:
         return None
@@ -102,22 +86,18 @@ def _safe_number(value: Any) -> float | None:
 
 
 def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[[int, str], None] | None = None) -> dict[str, Dict[str, Any]]:
-    """Read fixed-format CCL mapping sheet into a material-key dictionary.
-
-    Required headers: Material / CCL Item / 碳係數 / 係數單位
-    """
     if progress_callback:
-        progress_callback(8, "讀取 CCL 係數組配表")
+        progress_callback(10, "讀取 CCL 係數組配表")
     wb = load_workbook(ccl_path, read_only=True, data_only=True)
     try:
         sheet_name = CCL_SHEET_NAME if CCL_SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
         ws = wb[sheet_name]
         header_row = _find_header_row(ws, ["Material"])
 
+        # CCL 對照表固定表頭：Material / CCL Item / 碳係數 / 係數單位
         material_col = _find_col_in_header_row(ws, header_row, ["Material"])
         ccl_item_col = _find_col_in_header_row(ws, header_row, ["CCL Item"])
         factor_col = _find_col_in_header_row(ws, header_row, ["碳係數"])
-        unit_col = _find_col_in_header_row(ws, header_row, ["係數單位"])
 
         mapping: dict[str, Dict[str, Any]] = {}
         total_rows = max(1, ws.max_row - header_row)
@@ -127,17 +107,15 @@ def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[[int, st
             if not key:
                 continue
             factor_value = ws.cell(row, factor_col).value
-            parsed_factor = _safe_number(factor_value)
             mapping[key] = {
                 "material": material,
                 "ccl_item": _text(ws.cell(row, ccl_item_col).value),
-                "emission_factor": parsed_factor if parsed_factor is not None else factor_value,
-                "unit": _text(ws.cell(row, unit_col).value),
+                "emission_factor": _safe_number(factor_value) if _safe_number(factor_value) is not None else factor_value,
             }
-            if progress_callback and (idx == 1 or idx % 2000 == 0):
-                progress_callback(8 + int(min(18, idx / total_rows * 18)), "建立 CCL Material 索引")
+            if progress_callback and (idx == 1 or idx % 1000 == 0):
+                progress_callback(10 + int(min(20, idx / total_rows * 20)), "建立 CCL Material → Factor 對應索引")
         if progress_callback:
-            progress_callback(28, f"CCL 索引建立完成，共 {len(mapping):,} 筆")
+            progress_callback(32, f"CCL 索引建立完成，共 {len(mapping):,} 筆")
         return mapping
     finally:
         wb.close()
@@ -154,12 +132,12 @@ def apply_ccl_factors_to_raw_material_bulk(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if progress_callback:
-        progress_callback(3, "準備 raw material bulk 檔案")
+        progress_callback(3, "複製 raw material bulk 模板")
     shutil.copy2(raw_material_bulk_path, output_path)
 
     ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
     if progress_callback:
-        progress_callback(30, "開啟 raw material bulk 檔案")
+        progress_callback(36, "開啟 raw material bulk 檔案")
     wb = load_workbook(output_path)
     if ACTIVITY_SHEET_NAME not in wb.sheetnames:
         raise ValueError(f"找不到分頁：{ACTIVITY_SHEET_NAME}")
@@ -175,7 +153,6 @@ def apply_ccl_factors_to_raw_material_bulk(
         "country": _find_col(ws, ["Country/Area", "Country Area", "Country", "Area", "國家地區"], required=False),
         "enabled_date": _find_col(ws, ["Enabled Date", "Effective Date", "啟用日期"], required=False),
         "data_quality": _find_col(ws, ["Data Quality", "資料品質"], required=False),
-        "factor_unit": _find_col(ws, ["Factor Unit", "Emission Factor Unit", "CF Unit", "係數單位"], required=False),
     }
 
     matched = 0
@@ -204,12 +181,10 @@ def apply_ccl_factors_to_raw_material_bulk(
             ws.cell(row, cols["enabled_date"]).number_format = "yyyy/mm/dd"
         if cols["data_quality"]:
             ws.cell(row, cols["data_quality"]).value = "SECONDARY"
-        if cols["factor_unit"] and item.get("unit"):
-            ws.cell(row, cols["factor_unit"]).value = _factor_unit_text(item["unit"])
         matched += 1
         written_rows += 1
-        if progress_callback and (idx == 1 or idx % 1000 == 0):
-            progress_callback(32 + int(min(55, idx / total_activity_rows * 55)), "比對原物料並寫入 CCL 係數欄位")
+        if progress_callback and (idx == 1 or idx % 500 == 0):
+            progress_callback(40 + int(min(45, idx / total_activity_rows * 45)), "比對原物料並寫入 CCL 係數欄位")
 
     if progress_callback:
         progress_callback(90, "儲存已填入係數的 Bulk 檔")
@@ -549,7 +524,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_CCL_PERFORMANCE_20260704_V3"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_WORKSPACE_V2_1_20260704"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 

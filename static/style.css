@@ -2536,41 +2536,24 @@ select:focus {
   }
 }
 
-/* Module 3 CCL result area - aligned with other module result cards */
-.module3-ccl-downloads {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
+/* Module 3 V2.1: direct Module 2 raw material bulk source note */
+.module3-source-note {
+  border: 1px solid #d8e3f0;
+  border-radius: 12px;
+  background: #f7fbff;
+  padding: 12px 14px;
+  color: #1f2a37;
 }
-.module3-ccl-summary.hidden {
-  display: none;
-}
-.module3-ccl-summary {
-  margin-top: 14px;
-}
-.module3-ccl-result-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-}
-.module3-ccl-result-card {
-  border: 1px solid rgba(16, 24, 40, 0.10);
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.82);
-  padding: 14px 16px;
-  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.05);
-}
-.module3-ccl-result-card h4 {
-  margin: 0 0 8px;
-  font-size: 14px;
-  font-weight: 700;
-}
-.module3-ccl-result-card p {
-  margin: 4px 0;
+.module3-source-note p {
+  margin: 6px 0 0;
+  color: #5f6b7a;
   font-size: 13px;
-  color: var(--muted, #667085);
+  line-height: 1.5;
 }
-.module3-ccl-result-card b {
-  color: var(--text, #101828);
+.module3-source-note code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  background: #eef4fb;
+  padding: 2px 5px;
+  border-radius: 6px;
 }

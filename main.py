@@ -25,6 +25,7 @@ RULE_LIBRARY_DIR = BASE_DIR / "rule_library"
 FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
+LATEST_RAW_MATERIAL_BULK_PATH = OUTPUT_DIR / "raw_material_activity_data_bulk_latest.xlsx"
 
 RULE_SET_MAP = {
     "IPS": "LiteOn_IPS",
@@ -50,30 +51,30 @@ MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
 def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
     job = MODULE3_CCL_JOBS.setdefault(job_id, {})
     job.update(updates)
+    # 後台統一估算剩餘秒數；前台只顯示 remaining_seconds。
+    progress = int(job.get("progress") or 0)
+    started_at = job.get("started_at")
+    if started_at and 5 < progress < 100:
+        try:
+            start_dt = datetime.fromisoformat(started_at)
+            elapsed = max(1.0, (datetime.now() - start_dt).total_seconds())
+            job["remaining_seconds"] = max(1, int(round(elapsed * (100 - progress) / progress)))
+        except Exception:
+            job["remaining_seconds"] = job.get("remaining_seconds", 30)
+    elif progress >= 100:
+        job["remaining_seconds"] = 0
+    else:
+        job.setdefault("remaining_seconds", 30)
     job["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
 def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
-    started_at = datetime.now()
-
     def report(progress: int, step: str) -> None:
-        safe_progress = max(0, min(100, int(progress)))
-        elapsed = max(1, (datetime.now() - started_at).total_seconds())
-        if 5 <= safe_progress < 100:
-            remaining_seconds = max(1, int(round(elapsed * (100 - safe_progress) / safe_progress)))
-        else:
-            remaining_seconds = 30
-        _set_module3_ccl_job(
-            job_id,
-            status="running",
-            progress=safe_progress,
-            step=step,
-            remaining_seconds=remaining_seconds,
-        )
+        _set_module3_ccl_job(job_id, status="running", progress=max(0, min(100, int(progress))), step=step)
 
     try:
         report(1, "建立 CCL 係數對應工作")
         summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path, progress_callback=report)
-        summary["app_version"] = "CMP_MODULE3_CCL_JOB_V3"
+        summary["app_version"] = "CMP_MODULE3_CCL_JOB_V1"
         _set_module3_ccl_job(
             job_id,
             status="success",
@@ -82,7 +83,6 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
             message="CCL 係數對應完成。",
             summary=summary,
             download_url=summary.get("download_url", f"/download/{output_path.name}"),
-            remaining_seconds=0,
         )
     except Exception as exc:
         traceback.print_exc()
@@ -1772,24 +1772,51 @@ def download_product_series_master(rule_set: str = DEFAULT_RULE_SET):
 # Module 3 · Carbon Emission Factor Selection
 # CCL Mapping + Factor Library Search
 # =========================================================
+
+@app.get("/module3/latest-raw-material-bulk")
+def module3_latest_raw_material_bulk():
+    if not LATEST_RAW_MATERIAL_BULK_PATH.exists():
+        return {"ok": True, "available": False, "message": "尚未找到 Module 2 最新產出的 raw_material_activity_data_bulk 檔案。"}
+    stat = LATEST_RAW_MATERIAL_BULK_PATH.stat()
+    return {
+        "ok": True,
+        "available": True,
+        "filename": LATEST_RAW_MATERIAL_BULK_PATH.name,
+        "size": stat.st_size,
+        "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "download_url": f"/download/{LATEST_RAW_MATERIAL_BULK_PATH.name}",
+    }
+
 @app.post("/module3/apply-ccl-factors-job")
 async def module3_apply_ccl_factors_job(
-    raw_material_file: UploadFile = File(...),
     ccl_mapping_file: UploadFile = File(...),
+    raw_material_file: UploadFile | None = File(None),
 ):
     token = uuid.uuid4().hex[:10]
     job_id = token
 
-    for file_obj, label in ((raw_material_file, "Raw Material Bulk"), (ccl_mapping_file, "CCL 係數組配表")):
-        filename = str(getattr(file_obj, "filename", "") or "")
-        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse({"ok": False, "message": f"{label} 請上傳 Excel 檔案"}, status_code=400)
+    ccl_filename = str(getattr(ccl_mapping_file, "filename", "") or "")
+    if not ccl_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "CCL 係數組配表 請上傳 Excel 檔案"}, status_code=400)
 
-    raw_path = UPLOAD_DIR / f"module3_raw_material_{token}_{Path(raw_material_file.filename).name}"
-    ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_mapping_file.filename).name}"
+    if raw_material_file is not None and getattr(raw_material_file, "filename", None):
+        raw_filename = str(getattr(raw_material_file, "filename", "") or "")
+        if not raw_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": "Raw Material Bulk 請上傳 Excel 檔案"}, status_code=400)
+        raw_path = UPLOAD_DIR / f"module3_raw_material_{token}_{Path(raw_filename).name}"
+        raw_path.write_bytes(await raw_material_file.read())
+        raw_source = "uploaded"
+    else:
+        raw_path = LATEST_RAW_MATERIAL_BULK_PATH
+        raw_source = "module2_latest"
+        if not raw_path.exists():
+            return JSONResponse(
+                {"ok": False, "message": "找不到 Module 2 最新產出的 raw_material_activity_data_bulk 檔案，請先完成 Module 2 BOM Expansion。"},
+                status_code=400,
+            )
+
+    ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_filename).name}"
     output_path = OUTPUT_DIR / f"module3_ccl_factor_filled_{token}.xlsx"
-
-    raw_path.write_bytes(await raw_material_file.read())
     ccl_path.write_bytes(await ccl_mapping_file.read())
 
     _set_module3_ccl_job(
@@ -1799,9 +1826,13 @@ async def module3_apply_ccl_factors_job(
         step="工作已建立，等待背景處理",
         message="CCL 係數對應已開始。",
         created_at=datetime.now().isoformat(timespec="seconds"),
+        started_at=datetime.now().isoformat(timespec="seconds"),
+        remaining_seconds=30,
+        raw_source=raw_source,
+        raw_material_filename=raw_path.name,
     )
     MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path)
-    return {"ok": True, "job_id": job_id, "message": "CCL 係數對應已開始。"}
+    return {"ok": True, "job_id": job_id, "message": "CCL 係數對應已開始。", "raw_source": raw_source, "raw_material_filename": raw_path.name}
 
 
 @app.get("/module3/ccl-job/{job_id}")
@@ -1814,26 +1845,36 @@ def module3_get_ccl_job(job_id: str):
 
 @app.post("/module3/apply-ccl-factors")
 async def module3_apply_ccl_factors(
-    raw_material_file: UploadFile = File(...),
     ccl_mapping_file: UploadFile = File(...),
+    raw_material_file: UploadFile | None = File(None),
 ):
     token = uuid.uuid4().hex[:10]
 
-    for file_obj, label in ((raw_material_file, "Raw Material Bulk"), (ccl_mapping_file, "CCL 係數組配表")):
-        filename = str(getattr(file_obj, "filename", "") or "")
-        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse({"ok": False, "message": f"{label} 請上傳 Excel 檔案"}, status_code=400)
+    ccl_filename = str(getattr(ccl_mapping_file, "filename", "") or "")
+    if not ccl_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "CCL 係數組配表 請上傳 Excel 檔案"}, status_code=400)
 
-    raw_path = UPLOAD_DIR / f"module3_raw_material_{token}_{Path(raw_material_file.filename).name}"
-    ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_mapping_file.filename).name}"
+    if raw_material_file is not None and getattr(raw_material_file, "filename", None):
+        raw_filename = str(getattr(raw_material_file, "filename", "") or "")
+        if not raw_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": "Raw Material Bulk 請上傳 Excel 檔案"}, status_code=400)
+        raw_path = UPLOAD_DIR / f"module3_raw_material_{token}_{Path(raw_filename).name}"
+        raw_path.write_bytes(await raw_material_file.read())
+        raw_source = "uploaded"
+    else:
+        raw_path = LATEST_RAW_MATERIAL_BULK_PATH
+        raw_source = "module2_latest"
+        if not raw_path.exists():
+            return JSONResponse({"ok": False, "message": "找不到 Module 2 最新產出的 raw_material_activity_data_bulk 檔案，請先完成 Module 2 BOM Expansion。"}, status_code=400)
+
+    ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_filename).name}"
     output_path = OUTPUT_DIR / f"module3_ccl_factor_filled_{token}.xlsx"
-
-    raw_path.write_bytes(await raw_material_file.read())
     ccl_path.write_bytes(await ccl_mapping_file.read())
 
     try:
         summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path)
-        summary["app_version"] = "CMP_MODULE3_STAGE2_V6"
+        summary["app_version"] = "CMP_MODULE3_CCL_SYNC_V2_1"
+        summary["raw_source"] = raw_source
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -2063,6 +2104,19 @@ async def process_bom_expansion(request: Request):
                 supplier_bulk_template_path=supplier_bulk_template_path,
                 supplier_bulk_output_path=supplier_bulk_output_path,
             )
+        # 供 Module 3 直接串接使用：保留 Module 2 最新產出的 Raw Material Bulk。
+        try:
+            if output_path.exists() and output_path.suffix.lower() in {".xlsx", ".xlsm"}:
+                import shutil as _shutil
+                _shutil.copy2(output_path, LATEST_RAW_MATERIAL_BULK_PATH)
+                summary["raw_material_bulk_latest"] = LATEST_RAW_MATERIAL_BULK_PATH.name
+                summary["raw_material_bulk_latest_download_url"] = f"/download/{LATEST_RAW_MATERIAL_BULK_PATH.name}"
+            else:
+                summary["raw_material_bulk_latest"] = ""
+        except Exception as _latest_exc:
+            summary["raw_material_bulk_latest"] = ""
+            summary["raw_material_bulk_latest_error"] = str(_latest_exc)
+
         bom_structure_summary = export_bom_structure_file(
             bom_path=bom_paths,
             output_path=LATEST_BOM_STRUCTURE_PATH,
