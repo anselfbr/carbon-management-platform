@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260704_V22"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V21"
 
 
 def _norm(value: Any) -> str:
@@ -228,7 +228,7 @@ def _process_type_mode(process_type: str | None) -> str:
 
     Business rule:
     - production_with_transport: Activity Name must start with ``market for``.
-    - production_only: all non-``market for`` activities are treated as production only.
+    - production_only: Activity Name must contain the keyword ``production``.
     - all: no process-type filtering.
     """
     value = str(process_type or "all").strip().lower()
@@ -245,7 +245,7 @@ def _matches_process_type(activity_name: str, process_type: str | None) -> bool:
     if mode == "market_for":
         return activity.startswith("market for")
     if mode == "production_only":
-        return not activity.startswith("market for")
+        return "production" in activity
     return True
 
 
@@ -332,36 +332,38 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
 
 
 
-def _matches_single_keyword_token(token: str, searchable: str) -> bool:
-    """Match one keyword token against one searchable field.
+def _keyword_matches_activity_or_reference(keyword: str, searchable: str) -> bool:
+    """Match keyword against Activity Name and Reference Product Name.
 
-    English / alphanumeric tokens are matched as complete words so a query such
-    as "tin" will not match "coating" merely because the letters appear inside
-    another word. Non-English tokens continue to use direct containment because
-    word boundaries are less reliable.
+    English / alphanumeric keywords are matched as complete words or complete
+    phrases, so a query such as "tin" will not match "coating" merely because
+    the letters appear inside another word. Non-English keywords continue to use
+    a direct containment check because word boundaries are less reliable.
     """
-    key = str(token or "").strip().lower()
+    key = str(keyword or "").strip().lower()
     text = str(searchable or "").lower()
     if not key:
         return True
-    if re.fullmatch(r"[a-z0-9][a-z0-9\-_/.,()]*", key, flags=re.I):
-        pattern = rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])"
+    if re.fullmatch(r"[a-z0-9][a-z0-9\s\-_/.,()+]*", key, flags=re.I):
+        # Treat separators and punctuation as boundaries, but do not match inside
+        # another English/alphanumeric token.
+        escaped = re.escape(key)
+        escaped = escaped.replace(r"\ ", r"\s+")
+        pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
         return re.search(pattern, text, flags=re.I) is not None
     return key in text
 
+def _keyword_matches_all_terms(keyword: str, searchable: str) -> bool:
+    """AND-search helper: space-separated terms must all match.
 
-def _keyword_matches_activity_or_reference(keyword: str, searchable: str) -> bool:
-    """Match user query against Activity Name or Reference Product Name.
-
-    Spaces represent AND logic. For example, "wafer waste" means the field must
-    contain both complete tokens "wafer" and "waste". Symbols such as +, -, and
-    | are not treated as operators.
+    Example: ``wafer waste`` means ``wafer`` AND ``waste``.
+    This avoids special operators (+, -, |, OR, NOT) and keeps the UI rule simple.
     """
-    query = str(keyword or "").strip().lower()
-    if not query:
+    terms = [term for term in re.split(r"\s+", str(keyword or "").strip()) if term]
+    if not terms:
         return True
-    tokens = [part for part in re.split(r"\s+", query) if part]
-    return all(_matches_single_keyword_token(token, searchable) for token in tokens)
+    return all(_keyword_matches_activity_or_reference(term, searchable) for term in terms)
+
 
 def _search_lcia_file(
     path: str | Path,
@@ -373,58 +375,94 @@ def _search_lcia_file(
     activity_name_keyword: str | None = "",
     reference_product_keyword: str | None = "",
 ) -> tuple[list[Dict[str, Any]], int]:
-    cache = _load_lcia_cache(path, source)
-    results: list[Dict[str, Any]] = []
-    total_count = 0
-    key = keyword.lower().strip()
-    activity_key = str(activity_name_keyword or "").lower().strip()
-    reference_key = str(reference_product_keyword or "").lower().strip()
-    geography_key = str(geography or "all").strip()
-    for row in cache["rows"]:
-        if geography_key.lower() != "all" and row.get("geography") != geography_key:
-            continue
-        if not _matches_process_type(row.get("_activity_lower", ""), process_type):
-            continue
-        if activity_key and not _keyword_matches_activity_or_reference(activity_key, row.get("_activity_searchable", "")):
-            continue
-        if reference_key and not _keyword_matches_activity_or_reference(reference_key, row.get("_reference_searchable", "")):
-            continue
-        if not activity_key and not reference_key and not _keyword_matches_activity_or_reference(key, row.get("_searchable", "")):
-            continue
-        total_count += 1
-        if len(results) < limit:
-            clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key"}
-            results.append(clean_row)
-    return results, total_count
+    """Stream-search an LCIA workbook without loading the whole database into RAM.
 
+    Render free/small instances can be killed when APOS and Cut-off are fully
+    cached in Python dictionaries. This function keeps memory low by scanning
+    rows from openpyxl read_only mode and only retaining the requested page rows.
+    """
+    p = Path(path)
+    wb = load_workbook(p, read_only=True, data_only=True)
+    try:
+        if LCIA_SHEET_NAME not in wb.sheetnames:
+            raise ValueError(f"{p.name} 找不到分頁：{LCIA_SHEET_NAME}")
+        ws = wb[LCIA_SHEET_NAME]
+        value_col = _resolve_lcia_target_column(ws)
+        meta_cols = _resolve_lcia_metadata_columns(ws)
+
+        results: list[Dict[str, Any]] = []
+        total_count = 0
+        key = str(keyword or "").lower().strip()
+        activity_key = str(activity_name_keyword or "").lower().strip()
+        reference_key = str(reference_product_keyword or "").lower().strip()
+        geography_key = str(geography or "all").strip()
+        display_source = _source_display_name(source)
+
+        for values in ws.iter_rows(min_row=5, max_row=ws.max_row, values_only=True):
+            activity_name = _text(values[meta_cols["activity_name"] - 1] if len(values) >= meta_cols["activity_name"] else "")
+            row_geography = _text(values[meta_cols["geography"] - 1] if len(values) >= meta_cols["geography"] else "")
+            reference_product_name = _text(values[meta_cols["reference_product_name"] - 1] if len(values) >= meta_cols["reference_product_name"] else "")
+            ref_unit = _text(values[meta_cols["reference_product_unit"] - 1] if len(values) >= meta_cols["reference_product_unit"] else "")
+
+            activity_lower = activity_name.lower()
+            activity_searchable = activity_lower
+            reference_searchable = reference_product_name.lower()
+            searchable = f"{activity_searchable} {reference_searchable}"
+
+            if geography_key.lower() != "all" and row_geography != geography_key:
+                continue
+            if not _matches_process_type(activity_lower, process_type):
+                continue
+            if activity_key and not _keyword_matches_all_terms(activity_key, activity_searchable):
+                continue
+            if reference_key and not _keyword_matches_all_terms(reference_key, reference_searchable):
+                continue
+            if not activity_key and not reference_key and not _keyword_matches_all_terms(key, searchable):
+                continue
+
+            total_count += 1
+            if len(results) < limit:
+                factor_value = values[value_col - 1] if len(values) >= value_col else None
+                results.append({
+                    "source": display_source,
+                    "activity_name": activity_name,
+                    "geography": row_geography,
+                    "emission_factor": factor_value,
+                    "reference_product_unit": ref_unit,
+                    "emission_factor_unit": _format_emission_factor_unit(ref_unit),
+                    "reference_product_name": reference_product_name,
+                    "ipcc2021_gwp100": factor_value,
+                    "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
+                })
+        return results, total_count
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
 
 
 def preload_factor_libraries(apos_path: str | Path | None, cutoff_path: str | Path | None) -> Dict[str, Any]:
-    """Preload APOS and Cut-off LCIA workbooks into memory at application startup.
+    """Lightweight startup check for Module 3 factor libraries.
 
-    This keeps the first user search from paying the Excel read cost. Missing
-    files are skipped so local development can still start without the databases.
+    The previous implementation loaded APOS and Cut-off workbooks into memory at
+    startup. On Render 2GB instances this can terminate the service before users
+    run BOM Expansion. We now only confirm whether files exist; actual searching
+    uses read-only streaming in _search_lcia_file().
     """
-    loaded: list[str] = []
+    available: list[str] = []
     skipped: list[str] = []
-    errors: list[dict[str, str]] = []
     for path, source in ((apos_path, "APOS"), (cutoff_path, "Cut-off")):
-        if not path:
+        if path and Path(path).exists():
+            available.append(source)
+        else:
             skipped.append(source)
-            continue
-        p = Path(path)
-        if not p.exists():
-            skipped.append(source)
-            continue
-        try:
-            _load_lcia_cache(p, source)
-            loaded.append(source)
-        except Exception as exc:  # keep startup robust
-            errors.append({"source": source, "message": str(exc)})
     return {
-        "loaded": loaded,
+        "loaded": [],
+        "available": available,
         "skipped": skipped,
-        "errors": errors,
+        "errors": [],
+        "mode": "streaming_no_startup_cache",
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
     }
 
