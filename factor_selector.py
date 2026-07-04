@@ -13,7 +13,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V17"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_STAGE2_20260703_V18"
 
 
 def _norm(value: Any) -> str:
@@ -265,10 +265,19 @@ _SOURCE_DISPLAY_NAMES = {
 }
 
 _LCIA_CACHE: dict[str, Dict[str, Any]] = {}
+_FILTER_RESULT_CACHE: dict[tuple, list[int]] = {}
+_FILTER_RESULT_CACHE_MAX = 256
 
 
 def _source_display_name(source: str) -> str:
     return _SOURCE_DISPLAY_NAMES.get(source, source)
+
+
+def _keyword_word_text(value: Any) -> str:
+    """Normalize searchable text for fast whole-word / whole-phrase matching."""
+    text = _text(value).lower()
+    tokens = re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", text, flags=re.I)
+    return " " + " ".join(tokens) + " "
 
 
 def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
@@ -298,9 +307,9 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
         factor_value = values[value_col - 1] if len(values) >= value_col else None
         if row_geography:
             geographies.add(row_geography)
-        # Keyword search is intentionally limited to Activity Name and Reference Product Name only.
-        searchable_values = [activity_name, reference_product_name]
-        searchable = " ".join(_text(v).lower() for v in searchable_values)
+
+        search_word_text = _keyword_word_text(activity_name + " " + reference_product_name)
+        activity_lower = activity_name.lower()
         rows.append({
             "source": display_source,
             "source_key": source,
@@ -312,11 +321,19 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
             "reference_product_name": reference_product_name,
             "ipcc2021_gwp100": factor_value,
             "indicator": "IPCC 2021 | climate change: total (excl. biogenic CO2) | global warming potential (GWP100)",
-            "_activity_lower": activity_name.lower(),
-            "_searchable": searchable,
+            "_activity_lower": activity_lower,
+            "_has_market_for": "market for" in activity_lower,
+            "_has_production": "production" in activity_lower,
+            "_search_word_text": search_word_text,
         })
 
+    # Database file changed or was first loaded; remove old filter-result cache entries for this path.
+    for key in list(_FILTER_RESULT_CACHE.keys()):
+        if key and key[0] == cache_key:
+            _FILTER_RESULT_CACHE.pop(key, None)
+
     cached = {
+        "cache_key": cache_key,
         "mtime": stat.st_mtime,
         "size": stat.st_size,
         "source": source,
@@ -327,53 +344,91 @@ def _load_lcia_cache(path: str | Path, source: str) -> Dict[str, Any]:
     return cached
 
 
+def _keyword_matches_activity_or_reference(keyword: str, search_word_text: str) -> bool:
+    """Match keyword only against Activity Name and Reference Product Name.
 
-def _keyword_matches_activity_or_reference(keyword: str, searchable: str) -> bool:
-    """Match keyword against Activity Name and Reference Product Name.
-
-    English / alphanumeric keywords are matched as complete words or complete
-    phrases, so a query such as "tin" will not match "coating" merely because
-    the letters appear inside another word. Non-English keywords continue to use
-    a direct containment check because word boundaries are less reliable.
+    English/alphanumeric input is matched by complete words or complete phrases.
+    Example: "resin" matches "epoxy resin" but not "resinous"; "market for"
+    matches the phrase. Non-English input continues to use containment.
     """
     key = str(keyword or "").strip().lower()
-    text = str(searchable or "").lower()
     if not key:
         return True
     if re.fullmatch(r"[a-z0-9][a-z0-9\s\-_/.,()+]*", key, flags=re.I):
-        # Treat separators and punctuation as boundaries, but do not match inside
-        # another English/alphanumeric token.
-        escaped = re.escape(key)
-        escaped = escaped.replace(r"\ ", r"\s+")
-        pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
-        return re.search(pattern, text, flags=re.I) is not None
-    return key in text
+        key_text = _keyword_word_text(key)
+        return key_text in str(search_word_text or "")
+    return key in str(search_word_text or "").lower()
+
+
+def _filter_cache_key(cache: Dict[str, Any], keyword: str, geography: str | None, process_type: str | None) -> tuple:
+    return (
+        cache.get("cache_key"),
+        cache.get("mtime"),
+        cache.get("size"),
+        str(keyword or "").strip().lower(),
+        str(geography or "all").strip(),
+        str(process_type or "all").strip().lower(),
+    )
+
+
+def _get_matching_indices(cache: Dict[str, Any], keyword: str, geography: str | None, process_type: str | None) -> list[int]:
+    key = _filter_cache_key(cache, keyword, geography, process_type)
+    cached = _FILTER_RESULT_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    geography_key = str(geography or "all").strip()
+    geography_all = geography_key.lower() == "all"
+    process_value = str(process_type or "all").strip().lower()
+    keyword_key = str(keyword or "").strip().lower()
+
+    indices: list[int] = []
+    for idx, row in enumerate(cache["rows"]):
+        if not geography_all and row.get("geography") != geography_key:
+            continue
+
+        if process_value in {"production", "production_only"}:
+            # 僅生產：只允許 production，且只要 Activity Name 含 market for 就排除。
+            if row.get("_has_market_for") or not row.get("_has_production"):
+                continue
+        elif process_value in {"market_for", "market", "production_with_transport"}:
+            if not row.get("_has_market_for"):
+                continue
+        elif not _matches_process_type(row.get("_activity_lower", ""), process_type):
+            continue
+
+        if not _keyword_matches_activity_or_reference(keyword_key, row.get("_search_word_text", "")):
+            continue
+        indices.append(idx)
+
+    if len(_FILTER_RESULT_CACHE) >= _FILTER_RESULT_CACHE_MAX:
+        _FILTER_RESULT_CACHE.pop(next(iter(_FILTER_RESULT_CACHE)), None)
+    _FILTER_RESULT_CACHE[key] = indices
+    return indices
+
 
 def _search_lcia_file(
     path: str | Path,
     keyword: str,
     source: str,
-    limit: int,
+    offset: int = 0,
+    limit: int = 10,
     geography: str | None = "all",
     process_type: str | None = "all",
 ) -> tuple[list[Dict[str, Any]], int]:
     cache = _load_lcia_cache(path, source)
+    indices = _get_matching_indices(cache, keyword, geography, process_type)
+    total_count = len(indices)
+    if limit <= 0:
+        return [], total_count
+
+    rows = cache["rows"]
+    selected_indices = indices[max(0, offset): max(0, offset) + limit]
     results: list[Dict[str, Any]] = []
-    total_count = 0
-    key = keyword.lower().strip()
-    geography_key = str(geography or "all").strip()
-    process_token = _process_type_token(process_type)
-    for row in cache["rows"]:
-        if geography_key.lower() != "all" and row.get("geography") != geography_key:
-            continue
-        if not _matches_process_type(row.get("_activity_lower", ""), process_type):
-            continue
-        if not _keyword_matches_activity_or_reference(key, row.get("_searchable", "")):
-            continue
-        total_count += 1
-        if len(results) < limit:
-            clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key"}
-            results.append(clean_row)
+    for idx in selected_indices:
+        row = rows[idx]
+        clean_row = {k: v for k, v in row.items() if not k.startswith("_") and k != "source_key"}
+        results.append(clean_row)
     return results, total_count
 
 
@@ -404,28 +459,45 @@ def search_factor_library(
     if page_size not in {10, 20, 50}:
         page_size = 10
     page = max(1, int(page or 1))
-    # Load enough rows to slice the requested page after APOS -> Cut-off priority ordering.
-    fetch_limit = page * page_size
     selected_source = str(source or "all").strip().lower()
-    ordered_results: list[Dict[str, Any]] = []
-    total_count = 0
-    if selected_source in {"all", "apos"} and apos_path and Path(apos_path).exists():
-        apos_results, apos_count = _search_lcia_file(apos_path, keyword, "APOS", fetch_limit, geography, process_type)
-        ordered_results.extend(apos_results)
-        total_count += apos_count
-    remaining_fetch = max(0, fetch_limit - len(ordered_results))
-    if remaining_fetch > 0 and selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
-        cutoff_results, cutoff_count = _search_lcia_file(cutoff_path, keyword, "Cut-off", remaining_fetch, geography, process_type)
-        ordered_results.extend(cutoff_results)
-        total_count += cutoff_count
-    elif selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
-        # Count Cut-off matches even when the requested page is fully occupied by APOS results.
-        _, cutoff_count = _search_lcia_file(cutoff_path, keyword, "Cut-off", 0, geography, process_type)
-        total_count += cutoff_count
     start = (page - 1) * page_size
-    end = start + page_size
-    results = ordered_results[start:end]
+
+    results: list[Dict[str, Any]] = []
+    total_count = 0
+
+    apos_count = 0
+    cutoff_count = 0
+
+    if selected_source in {"all", "apos"} and apos_path and Path(apos_path).exists():
+        # APOS is always prioritized. Fetch only the requested slice, not all matches.
+        apos_results, apos_count = _search_lcia_file(
+            apos_path, keyword, "APOS", offset=start, limit=page_size, geography=geography, process_type=process_type
+        )
+        results.extend(apos_results)
+        total_count += apos_count
+
+    if selected_source in {"all", "cut-off", "cutoff", "cut off"} and cutoff_path and Path(cutoff_path).exists():
+        if selected_source == "all":
+            # Page across APOS first, then Cut-off.
+            if start < apos_count:
+                cutoff_offset = 0
+                cutoff_limit = max(0, page_size - len(results))
+            else:
+                cutoff_offset = start - apos_count
+                cutoff_limit = page_size
+        else:
+            cutoff_offset = start
+            cutoff_limit = page_size
+        cutoff_results, cutoff_count = _search_lcia_file(
+            cutoff_path, keyword, "Cut-off", offset=cutoff_offset, limit=cutoff_limit, geography=geography, process_type=process_type
+        )
+        results.extend(cutoff_results[:max(0, page_size - len(results))])
+        total_count += cutoff_count
+
     total_pages = max(1, (total_count + page_size - 1) // page_size) if total_count else 0
+    if total_pages and page > total_pages:
+        page = total_pages
+
     return {
         "keyword": keyword,
         "count": len(results),
