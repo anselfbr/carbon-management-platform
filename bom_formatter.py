@@ -1720,7 +1720,9 @@ def _apply_supplier_mapping_to_exploded(
             new_row["transport_destination"] = destination
             supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
             supplier_code = info.get("supplier_code", "") or info.get("vendor_code", "")
-            supplier_name = _select_supplier_name_option(supplier_options, destination, supplier_code)
+            supplier_name = info.get("supplier_master_name", "").strip()
+            if not supplier_name:
+                supplier_name = _select_supplier_name_option(supplier_options, destination, supplier_code)
             new_row["transport_origin"] = supplier_address
             new_row["supplier_code"] = supplier_code
             new_row["supplier_master_name"] = info.get("supplier_master_name", "") or _supplier_name_from_option(supplier_name)
@@ -2083,4 +2085,4 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V17_2_RAW_MATERIAL_WEIGHT_FIELDS"
+BOM_FORMATTER_VERSION = "CMP_V17_3_SUPPLIER_NAME_VENDORNAME"
