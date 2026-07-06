@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -26,6 +27,7 @@ FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
+APP_TIMEZONE = ZoneInfo("Asia/Taipei")
 
 
 RULE_SET_MAP = {
@@ -43,7 +45,7 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: DIP_V15_1_STEP2_AUTO_MODULE1_STEP1 =====")
+print("===== CMP MAIN VERSION: CMP_V15_0_RULE_MASTER_ENGINE_SITE_PREFIX_WHITELIST =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -1564,8 +1566,8 @@ def index(request: Request):
 def debug_version():
     return {
         "ok": True,
-        "app": "Data Integration Platform",
-        "version": "PROCESS_MANUAL_FORM_V6_STEP2_AUTO_STEP1",
+        "app": "Carbon Management Platform",
+        "version": "PROCESS_MANUAL_FORM_V6_STEP2_AUTO_STEP1_TW_TIME",
         "process_endpoint": "manual form compatible",
         "supports": ["files multi-upload", "file single-upload", "Module 2 multi-BOM upload", "blank year", "BU rule library"],
     }
@@ -1652,34 +1654,28 @@ async def process(request: Request):
     return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
 
 
-@app.get("/step2/step1-output-source")
-def step2_step1_output_source():
-    return module2_step1_output_source()
-
-
 # =========================================================
 # Step 2 · Batch Data Formatting
 # Step1 Output + Bulk Template -> Formatted Product Activity Bulk
 # =========================================================
 @app.post("/generate-bulk-file")
 async def generate_bulk_file(
+    step1_file: UploadFile = File(...),
     template_file: UploadFile = File(...),
     working_hour_source: str = Form("direct"),
 ):
-    step1_path = _find_latest_module1_step1_output()
-    if step1_path is None:
-        return JSONResponse(
-            {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"},
-            status_code=400,
-        )
+    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
 
     if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
         return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
 
     token = uuid.uuid4().hex[:10]
 
+    step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(step1_file.filename).name}"
     template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
 
+    step1_path.write_bytes(await step1_file.read())
     template_path.write_bytes(await template_file.read())
 
     working_hour_source = str(working_hour_source or "direct").strip()
@@ -1704,8 +1700,6 @@ async def generate_bulk_file(
             bom_structure_path=bom_structure_path,
             working_hour_rollup_path=working_hour_rollup_path,
         )
-        summary["module1_step1_source_filename"] = step1_path.name
-        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -1802,25 +1796,39 @@ def module2_step1_output_source():
         "ok": True,
         "filename": step1_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=APP_TIMEZONE).isoformat(timespec="seconds"),
         "download_url": f"/download/{step1_path.name}",
     }
 
 
 def _find_latest_module2_raw_material_bulk() -> Path | None:
-    """Return the most recent Module 2 raw material bulk output without creating a duplicate latest file."""
+    """Return the newest Module 2 raw material bulk output.
+
+    Important:
+    Do not return the cached global path directly. Module 2 may generate a newer
+    raw_material_activity_data_bulk_*.xlsx after the page has already loaded, so
+    this function always compares file modified time and refreshes the cache.
+    """
     global MODULE2_RAW_MATERIAL_BULK_PATH
+    candidates: list[Path] = []
+
     if MODULE2_RAW_MATERIAL_BULK_PATH and MODULE2_RAW_MATERIAL_BULK_PATH.exists():
-        return MODULE2_RAW_MATERIAL_BULK_PATH
-    candidates = []
+        candidates.append(MODULE2_RAW_MATERIAL_BULK_PATH)
+
     for path in OUTPUT_DIR.glob("raw_material_activity_data_bulk_*.xlsx"):
         name = path.name.lower()
-        if "by_site" in name or name.endswith("_latest.xlsx"):
+        if name.endswith("_latest.xlsx"):
+            continue
+        if path.name.startswith("~$"):
             continue
         candidates.append(path)
-    if not candidates:
+
+    unique_candidates = list({p.resolve(): p for p in candidates if p.exists()}.values())
+    if not unique_candidates:
+        MODULE2_RAW_MATERIAL_BULK_PATH = None
         return None
-    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+
+    latest = max(unique_candidates, key=lambda p: p.stat().st_mtime)
     MODULE2_RAW_MATERIAL_BULK_PATH = latest
     return latest
 
@@ -1838,7 +1846,7 @@ def module3_raw_material_bulk_source():
         "ok": True,
         "filename": raw_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=APP_TIMEZONE).isoformat(timespec="seconds"),
         "download_url": f"/download/{raw_path.name}",
     }
 
@@ -2181,6 +2189,20 @@ async def process_bom_expansion(request: Request):
             MODULE2_RAW_MATERIAL_BULK_PATH = output_path
             summary["raw_material_bulk_filename"] = output_path.name
             summary["raw_material_bulk_download_url"] = f"/download/{output_path.name}"
+        else:
+            generated_raw_files: list[Path] = []
+            for item in summary.get("production_site_files", []) or []:
+                filename = str(item.get("filename", "") or "")
+                candidate = OUTPUT_DIR / filename
+                if filename and candidate.exists() and candidate.suffix.lower() == ".xlsx":
+                    generated_raw_files.append(candidate)
+            if generated_raw_files:
+                latest_generated_raw = max(generated_raw_files, key=lambda p: p.stat().st_mtime)
+                MODULE2_RAW_MATERIAL_BULK_PATH = latest_generated_raw
+                summary["raw_material_bulk_filename"] = latest_generated_raw.name
+                summary["raw_material_bulk_download_url"] = f"/download/{latest_generated_raw.name}"
+                summary["module3_raw_material_source_filename"] = latest_generated_raw.name
+                summary["module3_raw_material_source_download_url"] = f"/download/{latest_generated_raw.name}"
 
         summary["supplier_upload_files"] = len(supplier_paths)
         if not supplier_paths:
@@ -2192,7 +2214,7 @@ async def process_bom_expansion(request: Request):
         else:
             summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
             summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
-        summary["app_version"] = "CMP_V16_2_SUPPLIER_BULK_OPTIONAL"
+        summary["app_version"] = "DIP_V16_3_MODULE3_SOURCE_REFRESH_TW_TIME"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -2204,7 +2226,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V16_2_SUPPLIER_BULK_OPTIONAL",
+        "app_version": "DIP_V16_3_MODULE3_SOURCE_REFRESH_TW_TIME",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
