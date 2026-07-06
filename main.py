@@ -27,7 +27,7 @@ LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_V18_1_MODULE1_STEP1_FAST_OUTPUT"
+CMP_MAIN_VERSION = "CMP_V19_0_MODULE1_CPU_OPT"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -519,6 +519,56 @@ def parse_product_series(description: object, masters: Optional[dict] = None) ->
         return candidate, "全文 Regex Prefix Search 解析產品系列"
 
     # fallback：若 rule_master 沒有涵蓋 prefix，仍保留舊邏輯，但同樣套用截斷
+    parts = raw_text.replace("_", ",").replace(";", ",").split(",")
+    for idx, part in enumerate(parts, start=1):
+        compact = re.sub(r"\s+", "", part)
+        compact = trim_series_candidate(compact)
+        if not compact or compact in GENERIC_WORDS:
+            continue
+        match = SERIES_RE.match(compact)
+        if match:
+            series = trim_series_candidate(match.group(0))
+            if series and re.search(r"\d", series) and len(series) >= 5:
+                return series, "fallback：逗號分段解析產品系列" if idx == 1 else f"fallback：前段非系列，取第{idx}段"
+
+    return "", "未找到符合產品系列格式的英數碼"
+
+
+
+def build_product_series_parser(masters: Optional[dict] = None) -> re.Pattern:
+    """Build the Product Series regex once per Step 1 run.
+
+    CMP V19.0 CPU optimization:
+    parse_product_series() used to rebuild the same prefix regex for every row.
+    With large work-order files this can compile regex tens of thousands of times.
+    """
+    prefixes = get_series_prefixes(masters)
+    prefix_pattern = "|".join(prefixes)
+    return re.compile(rf"({prefix_pattern})[A-Z0-9]{{3,40}}")
+
+
+def parse_product_series_fast(description: object, pattern: re.Pattern) -> tuple[str, str]:
+    """Fast row parser using a precompiled series-prefix pattern.
+
+    Logic intentionally mirrors parse_product_series() so output stays compatible.
+    """
+    if pd.isna(description):
+        return "", "Material description 空白"
+
+    raw_text = str(description).upper()
+
+    segments = [seg for seg in re.split(r"[,;_]+", raw_text) if str(seg).strip()]
+    for idx, segment in enumerate(segments, start=1):
+        candidate = _series_candidate_from_text(segment, pattern)
+        if candidate:
+            if idx == 1:
+                return candidate, "標點切段解析產品系列"
+            return candidate, f"標點切段解析產品系列：取第{idx}段"
+
+    candidate = _series_candidate_from_text(raw_text, pattern)
+    if candidate:
+        return candidate, "全文 Regex Prefix Search 解析產品系列"
+
     parts = raw_text.replace("_", ",").replace(";", ",").split(",")
     for idx, part in enumerate(parts, start=1):
         compact = re.sub(r"\s+", "", part)
@@ -1217,17 +1267,25 @@ def process_files(
     if year:
         out = out[out["Year"] == int(year)].copy()
 
-    parsed = out["Material description"].apply(lambda desc: parse_product_series(desc, masters))
-    out["Product series"] = parsed.apply(lambda x: x[0])
-    out["解析說明"] = parsed.apply(lambda x: x[1])
+    # CMP V19.0 CPU optimization: compile the Product Series regex once per run.
+    series_pattern = build_product_series_parser(masters)
+    parsed = out["Material description"].apply(lambda desc: parse_product_series_fast(desc, series_pattern))
+    out["Product series"] = parsed.str[0]
+    out["解析說明"] = parsed.str[1]
 
     # Resolve Plant -> Production Site before classification.
     # This makes Rule Master classification plant-aware:
     # - site-specific rules only apply to the same Production Site
     # - blank-site rules remain generic and can be used by both 越南海防廠-IPS and 廣州石碣廠-IPS
-    initial_plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
-    out["_Plant Production Site"] = initial_plant_site_rules.apply(lambda x: x[0])
-    out["_Plant Production Site Rule"] = initial_plant_site_rules.apply(lambda x: x[1])
+    # CMP V19.0 CPU optimization: resolve Plant -> Production Site once per unique Plant.
+    unique_plants = pd.Series(out["Plant"].dropna().astype(str).unique())
+    plant_site_cache = {
+        plant: resolve_plant_production_site_from_rule_master(plant, masters)
+        for plant in unique_plants
+    }
+    initial_plant_site_rules = out["Plant"].astype(str).map(plant_site_cache).fillna("")
+    out["_Plant Production Site"] = initial_plant_site_rules.apply(lambda x: x[0] if isinstance(x, tuple) else "")
+    out["_Plant Production Site Rule"] = initial_plant_site_rules.apply(lambda x: x[1] if isinstance(x, tuple) else "")
 
     classified = out.apply(
         lambda r: classify(
@@ -1335,9 +1393,9 @@ def process_files(
     # Plant Rule Master override:
     # Production Site may be controlled directly by Plant Exact / Plant Prefix rules in rule_master.csv.
     # This only updates Production Site and does not change Product Type / Product Line / WIP status.
-    plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
-    plant_sites = plant_site_rules.apply(lambda x: x[0])
-    plant_rule_hits = plant_site_rules.apply(lambda x: x[1])
+    plant_site_rules = out["Plant"].astype(str).map(plant_site_cache).fillna("")
+    plant_sites = plant_site_rules.apply(lambda x: x[0] if isinstance(x, tuple) else "")
+    plant_rule_hits = plant_site_rules.apply(lambda x: x[1] if isinstance(x, tuple) else "")
 
     plant_site_mask = plant_sites.astype(str).str.strip().ne("")
     if plant_site_mask.any():
@@ -1394,69 +1452,11 @@ def process_files(
     )
 
 
-    source_summary = (
-        out.groupby(["判斷來源", "規則判定結果", "命中規則"], dropna=False, as_index=False)["Delivered quantity"]
-        .agg(筆數="count", 生產量="sum")
-    )
-
-    file_summary = (
-        out.groupby(["Source file"], dropna=False, as_index=False)["Delivered quantity"]
-        .agg(筆數="count", 生產量="sum")
-        .sort_values(["Source file"])
-    )
-
-    # Labor source file summary: helps verify whether each labor file was loaded and how many hours were read.
-    if labor is not None and not labor.empty:
-        labor_source_summary = (
-            labor.copy()
-            .assign(**{
-                "Labor HR.Act": pd.to_numeric(labor["Labor HR.Act"], errors="coerce").fillna(0),
-                "FOH-Others.Act": pd.to_numeric(labor["FOH-Others.Act"], errors="coerce").fillna(0),
-                "Selected Hours": pd.to_numeric(labor["Selected Hours"], errors="coerce").fillna(0),
-            })
-            .groupby(["Labor Source files"], dropna=False, as_index=False)
-            .agg({
-                "Order Merge Key": "count",
-                "Labor HR.Act": "sum",
-                "FOH-Others.Act": "sum",
-                "Selected Hours": "sum",
-            })
-            .rename(columns={
-                "Labor Source files": "Labor Source file",
-                "Order Merge Key": "工時Order數",
-                "Labor HR.Act": "Labor HR.Act合計",
-                "FOH-Others.Act": "FOH-Others.Act合計",
-                "Selected Hours": "Selected Hours合計",
-            })
-        )
-    else:
-        labor_source_summary = pd.DataFrame(columns=[
-            "Labor Source file", "工時Order數", "Labor HR.Act合計", "FOH-Others.Act合計", "Selected Hours合計"
-        ])
-
-    # Labor matching diagnostics: shows how production Orders matched labor Order Numbers.
-    diagnostic_cols = [
-        "Source file", "Order", "Order Merge Key", "Matched Labor Order Number",
-        "Labor Match Status", "Material Number", "Material description",
-        "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
-    ]
-    for c in diagnostic_cols:
-        if c not in out.columns:
-            out[c] = ""
-    labor_match_diagnostics = out[diagnostic_cols].copy()
-    for c in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
-        labor_match_diagnostics[c] = pd.to_numeric(labor_match_diagnostics[c], errors="coerce").fillna(0)
-    labor_match_diagnostics = labor_match_diagnostics.rename(columns={
-        "Selected Hours": "Total working hours"
-    })
-
-    labor_match_summary = (
-        labor_match_diagnostics.groupby(["Labor Match Status"], dropna=False, as_index=False)["Order"]
-        .count()
-        .rename(columns={"Order": "筆數"})
-    )
-
-    wip = out[out["Is_WIP"] == "Y"].copy()
+    # CMP V19.0 CPU optimization:
+    # The following diagnostic DataFrames were not written to the Step 1 Excel output
+    # and were not returned in the API summary. Skipping them avoids several groupby/copy
+    # operations on large work-order datasets.
+    wip_rows_count = int((out["Is_WIP"] == "Y").sum())
 
     file_id = uuid.uuid4().hex[:10]
     output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
@@ -1499,12 +1499,13 @@ def process_files(
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
         "total_hours": float(out["Selected Hours"].sum()) if "Selected Hours" in out.columns else 0.0,
-        "wip_rows": int(len(wip)),
+        "wip_rows": int(wip_rows_count),
         "strict_site_excluded_rows": int(strict_site_excluded_rows),
         "output_filename": output_path.name,
         "year": year or "ALL",
         "include_detail_output": bool(include_detail_output),
         "fast_output_mode": not bool(include_detail_output),
+        "app_version": CMP_MAIN_VERSION,
     }
     return output_path, summary
 
