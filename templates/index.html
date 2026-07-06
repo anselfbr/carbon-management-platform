@@ -352,8 +352,8 @@
             </div>
 
             <form id="bulkForm" class="form-panel">
-              <label data-i18n="uploadStep1OutputFile">Upload Step 1 Output File</label>
-              <input id="step1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+              <label data-i18n="step1SourceAuto">Step 1 Output Source</label>
+              <div class="source-pill" id="bulkStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</div>
 
               <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
               <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
@@ -378,7 +378,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="bulkStatusTitle">Ready for batch formatting</b>
-                  <p id="bulkStatusText">Upload Step 1 output and bulk template to generate formatted bulk file.</p>
+                  <p id="bulkStatusText">Use latest Step 1 output and upload the bulk template to generate formatted bulk file.</p>
                 </div>
                 <span id="bulkStatusTime" class="status-time">Idle</span>
               </div>
@@ -873,6 +873,7 @@ const bulkStatusText = document.getElementById('bulkStatusText');
 const bulkStatusTime = document.getElementById('bulkStatusTime');
 const bulkProgressBar = document.getElementById('bulkProgressBar');
 const bulkDownload = document.getElementById('bulkDownload');
+const bulkStep1SourceText = document.getElementById('bulkStep1SourceText');
 const bulkWorkingHourSource = document.getElementById('bulkWorkingHourSource');
 const processingStatus = document.getElementById('processingStatus');
 const statusTitle = document.getElementById('statusTitle');
@@ -1158,9 +1159,6 @@ function activateFactorPage(pageId = 'factor-selection') {
   setDynamicI18n(pageLead, leadKey, '');
   pageLead.style.display = pageLead.textContent ? 'block' : 'none';
   cmpApplyI18n();
-  if (pageId === 'module3-ccl-mapping') {
-    refreshModule3RawBulkSource();
-  }
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
 }
 
@@ -1203,10 +1201,23 @@ async function refreshBomStep1Source() {
     const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'Module 1 Step 1 output';
-    const modified = formatSourceTimestamp(data.modified_at);
+    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
     bomStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
   } catch (err) {
     bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
+  }
+}
+
+async function refreshStep2Step1Source() {
+  if (!bulkStep1SourceText) return;
+  try {
+    const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
+    const data = await readJsonOrThrow(res);
+    const filename = data.filename || 'Module 1 Step 1 output';
+    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
+    bulkStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
+  } catch (err) {
+    bulkStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
   }
 }
 
@@ -1336,7 +1347,6 @@ bomForm.addEventListener('submit', async (e) => {
       supplierBulkDownload.href = data.summary.supplier_bulk_download_url;
       supplierBulkDownload.classList.remove('disabled');
     }
-    await refreshModule3RawBulkSource();
     stopBomProgressSuccess(data.summary);
   } catch (err) {
     stopBomProgressError(err.message);
@@ -1368,27 +1378,16 @@ async function readJsonOrThrow(res) {
   return data;
 }
 
-function formatSourceTimestamp(value) {
-  if (!value) return '';
-  return String(value).replace('T', ' ').replace(/\+08:00$/, '');
-}
-
 async function refreshModule3RawBulkSource() {
   if (!module3RawBulkSourceText) return;
   try {
     const res = await fetch('/module3/raw-material-bulk-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'raw material bulk';
-    const modified = formatSourceTimestamp(data.modified_at);
-    if (cmpLang && cmpLang() === 'zh') {
-      module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
-    } else {
-      module3RawBulkSourceText.textContent = `Source: Latest Module 2 output | File: ${filename}${modified ? ` | Created: ${modified}` : ''}`;
-    }
+    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
+    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
   } catch (err) {
-    const messageZh = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
-    const messageEn = 'Module 2 raw material bulk was not found. Please complete Module 2 first.';
-    module3RawBulkSourceText.textContent = (cmpLang && cmpLang() === 'zh') ? messageZh : messageEn;
+    module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
   }
 }
 
@@ -1942,6 +1941,8 @@ form.onsubmit = async (e) => {
     download.href = data.download_url;
     download.classList.remove('disabled');
     stopEstimatedProgressSuccess();
+    refreshStep2Step1Source();
+    refreshBomStep1Source();
   } catch (err) {
     log.textContent = 'Error: ' + err.message;
     stopEstimatedProgressError(err.message);
@@ -2122,6 +2123,8 @@ ruleForm.onsubmit = async (e) => {
     ruleLog.textContent = cmpT('errorPrefix', 'Error: ') + err.message;
   }
 };
+refreshStep2Step1Source();
+refreshBomStep1Source();
 </script>
 <script src="/static/i18n.js"></script>
 </body>

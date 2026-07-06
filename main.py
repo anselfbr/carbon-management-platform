@@ -1659,22 +1659,34 @@ async def process(request: Request):
 # =========================================================
 @app.post("/generate-bulk-file")
 async def generate_bulk_file(
-    step1_file: UploadFile = File(...),
     template_file: UploadFile = File(...),
+    step1_file: Optional[UploadFile] = File(None),
     working_hour_source: str = Form("direct"),
 ):
-    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
+    # Step 2 should reuse the latest Module 1 Step 1 output by default.
+    # Keeping step1_file optional preserves backward compatibility for manual uploads.
+    step1_path: Path | None = None
+    if step1_file is not None and getattr(step1_file, "filename", None):
+        if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
+    else:
+        step1_path = _find_latest_module1_step1_output()
+        if step1_path is None:
+            return JSONResponse(
+                {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"},
+                status_code=400,
+            )
 
     if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
         return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
 
     token = uuid.uuid4().hex[:10]
 
-    step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(step1_file.filename).name}"
-    template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
+    if step1_path is None:
+        step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(step1_file.filename).name}"
+        step1_path.write_bytes(await step1_file.read())
 
-    step1_path.write_bytes(await step1_file.read())
+    template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
     template_path.write_bytes(await template_file.read())
 
     working_hour_source = str(working_hour_source or "direct").strip()
