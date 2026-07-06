@@ -925,7 +925,10 @@ function formatRuleSetLabel(value) {
 }
 
 function cmpLang() {
-  return localStorage.getItem('cmp_lang') || 'en';
+  if (window.CMPI18N && typeof window.CMPI18N.current === 'function') {
+    return window.CMPI18N.current();
+  }
+  return localStorage.getItem('dip_lang') || localStorage.getItem('cmp_lang') || 'en';
 }
 
 function cmpT(key, fallback) {

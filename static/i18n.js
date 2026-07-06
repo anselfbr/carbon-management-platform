@@ -10,6 +10,10 @@
   let currentLang = localStorage.getItem(STORAGE_KEY) || localStorage.getItem("cmp_lang") || "en";
   let isApplying = false;
 
+  if (localStorage.getItem(STORAGE_KEY)) {
+    localStorage.setItem("cmp_lang", localStorage.getItem(STORAGE_KEY));
+  }
+
   const keyed = {
     "logoTitle": {
         "en": "Data Integration Platform (DIP)",
@@ -1105,6 +1109,7 @@
 
     currentLang = targetLang || currentLang;
     localStorage.setItem(STORAGE_KEY, currentLang);
+    localStorage.setItem("cmp_lang", currentLang);
     document.documentElement.lang = currentLang === "zh" ? "zh-Hant" : "en";
     button.textContent = currentLang === "zh" ? "EN" : "中";
 
