@@ -1336,6 +1336,7 @@ bomForm.addEventListener('submit', async (e) => {
       supplierBulkDownload.href = data.summary.supplier_bulk_download_url;
       supplierBulkDownload.classList.remove('disabled');
     }
+    await refreshModule3RawBulkSource();
     stopBomProgressSuccess(data.summary);
   } catch (err) {
     stopBomProgressError(err.message);

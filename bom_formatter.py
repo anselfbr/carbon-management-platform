@@ -1,6 +1,27 @@
 from __future__ import annotations
 
+
+def _bom_memory_mb() -> float:
+    try:
+        import psutil  # type: ignore
+        return float(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024)
+    except Exception:
+        try:
+            import resource
+            rss = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            if rss > 10_000_000:
+                return rss / 1024 / 1024
+            return rss / 1024
+        except Exception:
+            return -1.0
+
+def _bom_mem(stage: str, extra: str = "") -> None:
+    suffix = f" | {extra}" if extra else ""
+    print(f"[BOM_FORMATTER][MEM] {stage}: {_bom_memory_mb():.1f} MB{suffix}", flush=True)
+
 import re
+import os
+import gc
 import shutil
 import tempfile
 import zipfile
@@ -861,6 +882,8 @@ def generate_raw_material_bulk_file(
     summary["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
     summary["bom_rows_after_dedup"] = int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0
     summary["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
+    gc.collect()
+    _bom_mem('generate_raw_material_bulk_files_by_site_zip - before return')
     return summary
 
 
