@@ -27,7 +27,7 @@ LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_V19_1_MODULE1_CPU_OPT_DETAIL_OUTPUT"
+CMP_MAIN_VERSION = "CMP_V19_2_DETAIL_ALWAYS_OUTPUT_UI_CLEAN"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -1475,7 +1475,7 @@ def process_files(
         out_export = out_export.drop(columns=["Labor HR.Act"], errors="ignore")
         annual_export = annual_export.drop(columns=["年度人員工時"], errors="ignore")
 
-    # CMP V19.1 Step1 Output:
+    # CMP V19.2 Step1 Output:
     # Always include 工單明細_已分類 while keeping V19 CPU optimizations and fixed-width export.
     include_detail_output = True
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
@@ -1629,7 +1629,7 @@ async def process(request: Request):
     labor_mode = normalize_labor_mode(form.get("labor_mode") or "both")
     rule_set = normalize_rule_set(form.get("rule_set") or DEFAULT_RULE_SET)
     year = form.get("year")
-    # V19.1: Always export 工單明細_已分類. Keep form compatibility but ignore the optional flag.
+    # V19.2: Always export 工單明細_已分類. Frontend no longer shows or sends an optional detail-output flag.
     include_detail_output = True
 
     saved_paths: list[Path] = []

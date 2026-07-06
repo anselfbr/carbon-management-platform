@@ -302,11 +302,7 @@
               <label data-i18n="reportingYear">Reporting Year</label>
               <input id="year" name="year" type="number" placeholder="e.g. 2024；blank = all years" data-i18n-placeholder="yearPlaceholder" />
 
-              <label class="checkbox-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                <input id="includeDetailOutput" name="include_detail_output" type="checkbox" />
-                <span>輸出工單明細_已分類（檔案較大，處理時間較長）</span>
-              </label>
-              <p class="hint">預設使用快速輸出，只產生 Module 2 所需的年度彙總分頁。</p>
+              <p class="hint">Step 1 會固定輸出工單明細_已分類、Plant_Material年度產量與 Plant_產品類型年度產量三個分頁。</p>
 
               <button type="submit" class="btn-primary">
                 <span class="btn-icon">▶</span>
@@ -1900,7 +1896,6 @@ form.onsubmit = async (e) => {
   const laborInput = document.getElementById('laborFiles');
   const laborModeInput = document.getElementById('laborMode');
   const yearInput = document.getElementById('year');
-  const includeDetailOutputInput = document.getElementById('includeDetailOutput');
 
   const quantityFileCount = quantityInput ? quantityInput.files.length : 0;
   const laborFileCount = laborInput ? laborInput.files.length : 0;
@@ -1926,7 +1921,6 @@ form.onsubmit = async (e) => {
   fd.append('labor_mode', laborModeInput ? laborModeInput.value : 'both');
   fd.append('rule_set', ruleSetInput ? ruleSetInput.value : 'IPS');
   fd.append('year', yearInput ? yearInput.value : '');
-  fd.append('include_detail_output', includeDetailOutputInput && includeDetailOutputInput.checked ? 'true' : 'false');
 
   try {
     const res = await fetch('/process', {method: 'POST', body: fd});
