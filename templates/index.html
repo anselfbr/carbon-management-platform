@@ -121,30 +121,6 @@
       from { transform: translateY(-8px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
-
-    .checkbox-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin: 8px 0 12px;
-      color: var(--navy, #0f2f4d);
-      font-weight: 600;
-    }
-    .checkbox-row input {
-      width: 16px;
-      height: 16px;
-    }
-    .manual-source-wrap.hidden {
-      display: none;
-    }
-    .manual-source-wrap {
-      border: 1px dashed rgba(14, 116, 144, 0.35);
-      border-radius: 14px;
-      padding: 12px 14px;
-      margin: 8px 0 14px;
-      background: #f8fafc;
-    }
-
     @media (max-width: 900px) {
       .rule-import-meta { grid-template-columns: 1fr; }
       .toast-container { left: 16px; right: 16px; top: 16px; }
@@ -376,17 +352,8 @@
             </div>
 
             <form id="bulkForm" class="form-panel">
-              <label data-i18n="step1SourceAuto">Step 1 Output Source</label>
-              <div class="source-pill" id="bulkStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</div>
-              <label class="checkbox-row">
-                <input id="bulkUseLatestStep1" type="checkbox" checked />
-                <span>使用最新 Module 1 Step 1 Output（預設）</span>
-              </label>
-              <div id="bulkManualStep1Wrap" class="manual-source-wrap hidden">
-                <label for="bulkStep1File">Manual Step 1 Output</label>
-                <input id="bulkStep1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" />
-                <p class="form-hint">若 Render 重啟導致 outputs 清空，請取消勾選並手動指定 Step 1 Output。</p>
-              </div>
+              <label data-i18n="uploadStep1OutputFile">Upload Step 1 Output File</label>
+              <input id="step1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
               <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
@@ -411,7 +378,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="bulkStatusTitle">Ready for batch formatting</b>
-                  <p id="bulkStatusText">Use latest Step 1 output and upload the bulk template to generate formatted bulk file.</p>
+                  <p id="bulkStatusText">Upload Step 1 output and bulk template to generate formatted bulk file.</p>
                 </div>
                 <span id="bulkStatusTime" class="status-time">Idle</span>
               </div>
@@ -631,17 +598,8 @@
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <div id="bomStep1Source" class="module3-source-card">
-                <b data-i18n="uploadStep1OutputForRollup">Annual Product Output & Classification Result</b>
+                <b data-i18n="uploadStep1OutputForRollup">Upload Annual Product Output & Classification Result</b>
                 <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
-              </div>
-              <label class="checkbox-row">
-                <input id="bomUseLatestStep1" type="checkbox" checked />
-                <span>使用最新 Module 1 Step 1 Output（預設）</span>
-              </label>
-              <div id="bomManualStep1Wrap" class="manual-source-wrap hidden">
-                <label for="bomStep1File">Manual Step 1 Output</label>
-                <input id="bomStep1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" />
-                <p class="form-hint">若系統找不到最新 Step 1 Output，可在此手動指定。</p>
               </div>
 
               <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
@@ -915,10 +873,6 @@ const bulkStatusText = document.getElementById('bulkStatusText');
 const bulkStatusTime = document.getElementById('bulkStatusTime');
 const bulkProgressBar = document.getElementById('bulkProgressBar');
 const bulkDownload = document.getElementById('bulkDownload');
-const bulkStep1SourceText = document.getElementById('bulkStep1SourceText');
-const bulkUseLatestStep1 = document.getElementById('bulkUseLatestStep1');
-const bulkManualStep1Wrap = document.getElementById('bulkManualStep1Wrap');
-const bulkStep1File = document.getElementById('bulkStep1File');
 const bulkWorkingHourSource = document.getElementById('bulkWorkingHourSource');
 const processingStatus = document.getElementById('processingStatus');
 const statusTitle = document.getElementById('statusTitle');
@@ -944,9 +898,6 @@ const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
 const bomStep1SourceText = document.getElementById('bomStep1SourceText');
-const bomUseLatestStep1 = document.getElementById('bomUseLatestStep1');
-const bomManualStep1Wrap = document.getElementById('bomManualStep1Wrap');
-const bomStep1File = document.getElementById('bomStep1File');
 const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
 const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
@@ -1256,63 +1207,6 @@ async function refreshBomStep1Source() {
   }
 }
 
-async function refreshStep2Step1Source() {
-  if (!bulkStep1SourceText) return;
-  try {
-    const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
-    const data = await readJsonOrThrow(res);
-    const filename = data.filename || 'Module 1 Step 1 output';
-    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    bulkStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
-  } catch (err) {
-    bulkStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
-  }
-}
-
-function setupHybridStep1Controls() {
-  function syncBulkManualStep1() {
-    if (!bulkUseLatestStep1 || !bulkManualStep1Wrap || !bulkStep1File) return;
-    const useLatest = bulkUseLatestStep1.checked;
-    bulkManualStep1Wrap.classList.toggle('hidden', useLatest);
-    bulkStep1File.required = !useLatest;
-    if (useLatest) bulkStep1File.value = '';
-    if (bulkStep1SourceText) {
-      if (useLatest) {
-        refreshStep2Step1Source();
-      } else {
-        bulkStep1SourceText.textContent = '來源：手動指定 Step 1 Output';
-      }
-    }
-  }
-
-  function syncBomManualStep1() {
-    if (!bomUseLatestStep1 || !bomManualStep1Wrap || !bomStep1File) return;
-    const useLatest = bomUseLatestStep1.checked;
-    bomManualStep1Wrap.classList.toggle('hidden', useLatest);
-    bomStep1File.required = !useLatest;
-    if (useLatest) bomStep1File.value = '';
-    if (bomStep1SourceText) {
-      if (useLatest) {
-        refreshBomStep1Source();
-      } else {
-        bomStep1SourceText.textContent = '來源：手動指定 Step 1 Output';
-      }
-    }
-  }
-
-  if (bulkUseLatestStep1) {
-    bulkUseLatestStep1.addEventListener('change', syncBulkManualStep1);
-    syncBulkManualStep1();
-  }
-  if (bomUseLatestStep1) {
-    bomUseLatestStep1.addEventListener('change', syncBomManualStep1);
-    syncBomManualStep1();
-  }
-}
-
-setupHybridStep1Controls();
-
-
 function startBomEstimatedProgress() {
   clearInterval(progressTimer);
 
@@ -1421,15 +1315,7 @@ bomForm.addEventListener('submit', async (e) => {
   startBomEstimatedProgress();
   await refreshBomStep1Source();
 
-  if (bomUseLatestStep1 && !bomUseLatestStep1.checked && bomStep1File && !bomStep1File.files.length) {
-    stopBomProgressError('請選擇 Step 1 Output，或勾選使用最新 Module 1 Step 1 Output。');
-    return;
-  }
-
   const fd = new FormData(bomForm);
-  if (bomUseLatestStep1 && bomUseLatestStep1.checked) {
-    fd.delete('step1_file');
-  }
 
   try {
     const res = await fetch('/process-bom-expansion', { method: 'POST', body: fd });
@@ -2041,8 +1927,6 @@ form.onsubmit = async (e) => {
     download.href = data.download_url;
     download.classList.remove('disabled');
     stopEstimatedProgressSuccess();
-    refreshStep2Step1Source();
-    refreshBomStep1Source();
   } catch (err) {
     log.textContent = 'Error: ' + err.message;
     stopEstimatedProgressError(err.message);
@@ -2145,15 +2029,7 @@ bulkForm.addEventListener('submit', async (e) => {
 
   startBulkEstimatedProgress();
 
-  if (bulkUseLatestStep1 && !bulkUseLatestStep1.checked && bulkStep1File && !bulkStep1File.files.length) {
-    stopBulkProgressError('請選擇 Step 1 Output，或勾選使用最新 Module 1 Step 1 Output。');
-    return;
-  }
-
   const fd = new FormData(bulkForm);
-  if (bulkUseLatestStep1 && bulkUseLatestStep1.checked) {
-    fd.delete('step1_file');
-  }
   const workingHourSource = bulkWorkingHourSource ? bulkWorkingHourSource.value : 'direct';
   if (workingHourSource === 'include_semi') {
     bulkStatusText.textContent = cmpT('checkingSemiWorkingHour', 'Checking latest BOM Expansion result for semi-finished working hours.');
@@ -2231,8 +2107,6 @@ ruleForm.onsubmit = async (e) => {
     ruleLog.textContent = cmpT('errorPrefix', 'Error: ') + err.message;
   }
 };
-refreshStep2Step1Source();
-refreshBomStep1Source();
 </script>
 <script src="/static/i18n.js"></script>
 </body>
