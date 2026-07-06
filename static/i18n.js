@@ -1,4 +1,4 @@
-/* CMP i18n MODULE3 stage2 20260703 v14
+/* DIP i18n MODULE3 stage2 20260703 v14
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */
@@ -6,22 +6,22 @@
   const button = document.getElementById("langToggle");
   if (!button) return;
 
-  const STORAGE_KEY = "cmp_lang";
-  let currentLang = localStorage.getItem(STORAGE_KEY) || "en";
+  const STORAGE_KEY = "dip_lang";
+  let currentLang = localStorage.getItem(STORAGE_KEY) || localStorage.getItem("cmp_lang") || "en";
   let isApplying = false;
 
   const keyed = {
     "logoTitle": {
-        "en": "Carbon Management Platform",
-        "zh": "碳管理平台"
+        "en": "Data Integration Platform (DIP)",
+        "zh": "資料整合平台 (Data Integration Platform, DIP)"
     },
     "logoSubtitle": {
         "en": "Manufacturing Data Layer",
         "zh": "製造資料層"
     },
     "eyebrowCarbonManagementPlatform": {
-        "en": "Carbon Management Platform",
-        "zh": "碳管理平台"
+        "en": "Data Integration Platform (DIP)",
+        "zh": "資料整合平台 (Data Integration Platform, DIP)"
     },
     "modules": {
         "en": "Modules",
@@ -53,40 +53,40 @@
         "zh": "模組 3 · 碳排放係數選擇"
     },
     "module3Stage1Placeholder": {
-        "en": "Stage 2 entry page. Choose CCL Mapping or Factor Library to enter each workspace.",
-        "zh": "第二階段入口頁面。請選擇 CCL 係數對應或係數資料庫，進入各自專區。"
+        "en": "Module 3 Entry. Select either CCL factor import or the Ecoinvent emission factor database to enter the corresponding workspace.",
+        "zh": "模組3 入口頁面。請選擇以CCL 係數帶入或查詢Ecoinvent係數資料庫，進入各自專區。"
     },
     "stage1": {
         "en": "Stage 1",
         "zh": "第一階段"
     },
     "cclMapping": {
-        "en": "CCL Mapping",
-        "zh": "CCL 係數對應"
+        "en": "CCLibrary Emission Factor Database",
+        "zh": "CCL係數資料庫"
     },
     "cclMappingStage1Desc": {
-        "en": "Upload Module 2 raw material bulk output and Lite-On CCL mapping table, then write Factor fields by column name.",
-        "zh": "上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。"
+        "en": "Section A provides the CCLibrary emission factor database and imports CCL factors by raw material number.",
+        "zh": "A專區為CCLibrary係數資料庫，並以原物料料號帶入CCL係數。"
     },
     "factorLibrary": {
-        "en": "Factor Library",
-        "zh": "係數資料庫"
+        "en": "Ecoinvent Emission Factor Database",
+        "zh": "Ecoinvent係數資料庫"
     },
     "factorLibraryStage1Desc": {
-        "en": "Search factors by keyword, prioritize APOS, then Cut-off; display Activity Name and IPCC 2021 GWP100 factor values.",
-        "zh": "以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。"
+        "en": "Section B provides the Ecoinvent emission factor database for keyword-based factor search.",
+        "zh": "B專區為Ecoinvent係數資料庫，提供係數查詢功能。"
     },
     "enterWorkspace": {
         "en": "Enter Workspace",
         "zh": "進入專區"
     },
     "module3CclZoneTitle": {
-        "en": "A. CCL Mapping Workspace",
-        "zh": "A. CCL 係數對應專區"
+        "en": "A. CCLibrary Emission Factor Database",
+        "zh": "A. CCL係數資料庫"
     },
     "module3CclZoneLead": {
-        "en": "Upload the raw material bulk file and Lite-On CCL mapping table here, then export the bulk file with factor fields populated.",
-        "zh": "在此上傳原物料 Bulk 檔與光寶 CCL 係數組配表，後續將輸出已填入係數欄位的 Bulk 檔。"
+        "en": "Use the latest Raw Material Bulk from Module 2 and the Lite-On CCL mapping table to import CCL Items and emission factors.",
+        "zh": "直接使用 Module 2 最新產出的 Raw Material Bulk，並依光寶 CCL 係數組配表帶入 CCL Item 與碳係數。"
     },
     "backToModule3Menu": {
         "en": "Back to Module 3 Menu",
@@ -109,12 +109,12 @@
         "zh": "依 Material 對應 CCL Item、碳係數與單位"
     },
     "module3LibraryZoneTitle": {
-        "en": "B. Factor Library Workspace",
-        "zh": "B. 係數資料庫專區"
+        "en": "B. Ecoinvent Emission Factor Database",
+        "zh": "B. Ecoinvent係數資料庫"
     },
     "module3LibraryZoneLead": {
-        "en": "Build keyword search here, prioritizing APOS and then Cut-off.",
-        "zh": "在此建立關鍵字搜尋，優先查詢 APOS，再查詢 Cut-off。"
+        "en": "Search the Ecoinvent factor database by keyword and review factor details.",
+        "zh": "以關鍵字查詢 Ecoinvent 係數資料庫，並檢視係數詳細資訊。"
     },
     "keywordSearch": {
         "en": "Keyword Search",
@@ -130,16 +130,16 @@
     },
     "module3UploadRawBulk": {"en": "Upload raw material bulk file from Module 2", "zh": "上傳 MODULE2 產出的 raw material bulk 檔"},
     "module3UploadCclMapping": {"en": "Upload Lite-On CCL mapping table", "zh": "上傳光寶 CCL 係數組配表"},
-    "module3RunCclMapping": {"en": "Run CCL Mapping", "zh": "執行 CCL 係數對應"},
+    "module3RunCclMapping": {"en": "Run CCL Mapping", "zh": "執行 CCL係數資料庫"},
     "module3CclReadyTitle": {"en": "Ready for upload", "zh": "待上傳檔案"},
     "module3CclReadyText": {"en": "The system maps Material to CCL Item, emission factor, and unit, then fills Factor fields.", "zh": "系統會依 Material 對應 CCL Item、碳係數與單位，並寫入 Factor 欄位。"},
     "module3DownloadFilledBulk": {"en": "Download factor-filled Bulk file", "zh": "下載已填入係數的 Bulk 檔"},
     "module3ProcessingTitle": {"en": "Processing", "zh": "處理中"},
     "module3ProcessingText": {"en": "Writing CCL factor fields. Please wait.", "zh": "正在寫入 CCL 係數欄位，請稍候。"},
-    "module3CclSuccessTitle": {"en": "CCL Mapping Completed", "zh": "CCL 係數對應完成"},
+    "module3CclSuccessTitle": {"en": "CCL Mapping Completed", "zh": "CCL係數資料庫完成"},
     "module3CclSuccessText": {"en": "Completed: {written} rows written, {unmatched} rows unmatched.", "zh": "完成：已寫入 {written} 筆，未對應 {unmatched} 筆。"},
-    "module3CclFailed": {"en": "CCL Mapping failed", "zh": "CCL 係數對應失敗"},
-    "module3LibraryReady": {"en": "Type keyword search or name search terms to search APOS / Cut-off factor databases automatically.", "zh": "請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 APOS / Cut-off 係數資料庫。"},
+    "module3CclFailed": {"en": "CCL Mapping failed", "zh": "CCL係數資料庫失敗"},
+    "module3LibraryReady": {"en": "Type keyword search or name search terms to search the Ecoinvent factor database automatically.", "zh": "請輸入關鍵字查詢或名稱查詢內容後將自動搜尋 Ecoinvent 係數資料庫。"},
     "module3SearchFactor": {"en": "Search", "zh": "搜尋"},
     "allItems": {"en": "All", "zh": "全部"},
     "processType": {"en": "Process Type", "zh": "製程類型"},
@@ -178,21 +178,22 @@
         "zh": "模組 3 整合原則"
     },
     "module3IntegrationPolicyDesc": {
-        "en": "This version only creates the A/B workspace entry points and does not call any backend API yet. Module 1 and Module 2 routes, forms, Excel logic, and outputs remain unchanged.",
-        "zh": "此版本只建立 A/B 專區入口，不呼叫任何後端 API，且不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。"
+        "en": "The CCLibrary workspace maps raw material numbers to CCL Items and automatically imports emission factors. The Ecoinvent workspace is primarily designed for factor searching and will support recommended factor selection in future releases.",
+        "zh": "CCLEcoinvent係數資料庫專區以原物料料號對應，帶入CCL Item和碳係數；EcoinventEcoinvent係數資料庫專區主要為查詢功能，未來將導入建議係數功能。"
     },
     "module3PageLead": {
-        "en": "Stage 2: A/B workspaces are available for CCL Mapping and Factor Library implementation.",
-        "zh": "第二階段：已建立 A/B 專區入口，供 CCL 係數對應與係數資料庫功能實裝。"
+        "en": "Section A provides the CCLibrary emission factor database, while Section B provides the Ecoinvent emission factor database.",
+        "zh": "A專區為CCLibrary係數資料庫，B專區為Ecoinvent係數資料庫。"
     },
     "module3NoticeTitle": {
         "en": "3. Carbon Emission Factor Selection",
         "zh": "3. 碳排放係數選擇"
     },
     "module3NoticeText": {
-        "en": "Stage 1 page is ready. CCL Mapping and Factor Library will be added in separate versions.",
-        "zh": "第一階段頁面已建立。CCL 係數對應與係數資料庫會在後續版本分別加入。"
+        "en": "Section A provides the CCLibrary emission factor database, while Section B provides the Ecoinvent emission factor database.",
+        "zh": "A專區為CCLibrary係數資料庫，B專區為Ecoinvent係數資料庫。"
     },
+    "bomExpansionPageLead": {"en": "Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.", "zh": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。"},
     "pcfCalculation": {
         "en": "PCF Calculation",
         "zh": "產品碳足跡計算"
@@ -390,8 +391,8 @@
         "zh": "上傳標準 BOM 檔案"
     },
     "uploadStep1OutputForRollup": {
-        "en": "Upload Step 1 Output File for Working Hour Roll-up",
-        "zh": "上傳 Step 1 輸出檔（用於工時 Roll-up）"
+        "en": "Upload Annual Product Output & Classification Result",
+        "zh": "上傳年度產品產量與分類結果"
     },
     "downloadWorkingHourRollup": {
         "en": "Download Working Hour Roll-up",
@@ -708,7 +709,7 @@
 };
 
   const phraseZh = {
-    "Carbon Management Platform": "碳管理平台",
+    "Carbon Management Platform": "資料整合平台 (Data Integration Platform, DIP)",
     "Manufacturing Data Layer": "製造資料層",
     "Modules": "模組",
     "Module": "模組",
@@ -980,13 +981,31 @@
     "Checking latest BOM Expansion result for semi-finished working hours.": "正在檢查最新 BOM Expansion 結果以納入半品工時。"
   });
 
+
+  Object.assign(phraseZh, {
+    "Carbon Management Platform": "資料整合平台 (Data Integration Platform, DIP)",
+    "Data Integration Platform (DIP)": "資料整合平台 (Data Integration Platform, DIP)",
+    "資料整合平台 (Data Integration Platform, DIP)": "資料整合平台 (Data Integration Platform, DIP)",
+    "CCL Mapping": "CCL係數資料庫",
+    "CCL係數資料庫": "CCL係數資料庫",
+    "Factor Library": "Ecoinvent係數資料庫",
+    "係數資料庫": "Ecoinvent係數資料庫",
+    "Stage 2 entry page. Choose CCL Mapping or Factor Library to enter each workspace.": "模組3 入口頁面。請選擇以CCL 係數帶入或查詢Ecoinvent係數資料庫，進入各自專區。",
+    "Stage 2: A/B workspaces are available for CCL Mapping and Factor Library implementation.": "A專區為CCLibrary係數資料庫，B專區為Ecoinvent係數資料庫。",
+    "This version only creates the A/B workspace entry points and does not call any backend API yet. Module 1 and Module 2 routes, forms, Excel logic, and outputs remain unchanged.": "CCLEcoinvent係數資料庫專區以原物料料號對應，帶入CCL Item和碳係數；EcoinventEcoinvent係數資料庫專區主要為查詢功能，未來將導入建議係數功能。",
+    "Upload Step 1 Output File for Working Hour Roll-up": "上傳年度產品產量與分類結果",
+    "Expand multi-level BOM structures, roll up raw material quantities, and generate raw material bulk files.": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。",
+    "Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。",
+    "Prepare manufacturing data, expand BOM structures, select emission factors, and calculate product carbon footprints.": "整合製造資料、展開 BOM 結構、選擇碳排放係數，並支援產品碳足跡流程。"
+  });
+
   const phraseEn = {};
   Object.keys(phraseZh).forEach(function (en) {
     phraseEn[phraseZh[en]] = en;
   });
 
   const preserveExact = new Set([
-    "CMP", "SAP", "BOM", "PCF", "WIP", "NB", "TP", "SCMC", "SN", "SP", "SM", "SK",
+    "DIP", "SAP", "BOM", "PCF", "WIP", "NB", "TP", "SCMC", "SN", "SP", "SM", "SK",
     "IPS", "AE", "PC&CE", "PC_CE", "-",
     "Order、Plant、Material Number、Material description、Delivered quantity (GMEIN)、Actual finish date",
     "Priority、Rule Type、Key、Product Type、Product Line、Production Site、Customer、Customer Code Logic、Is_WIP、Enabled",
@@ -1151,7 +1170,7 @@
     try {
       applyLanguage(currentLang === "en" ? "zh" : "en");
     } catch (err) {
-      console.error("CMP i18n toggle failed:", err);
+      console.error("DIP i18n toggle failed:", err);
     }
   });
 

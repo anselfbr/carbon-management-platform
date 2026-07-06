@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Carbon Management Platform | Product Data Preparation</title>
+  <title>Data Integration Platform (DIP)</title>
   <link rel="stylesheet" href="/static/style.css" />
 
   <style>
@@ -146,9 +146,9 @@
       </div>
 
       <div class="logo-block" id="homeLogo" role="button" tabindex="0">
-        <div class="logo-mark">CMP</div>
+        <div class="logo-mark">DIP</div>
         <div>
-          <div class="logo-title" data-i18n="logoTitle">Carbon Management Platform</div>
+          <div class="logo-title" data-i18n="logoTitle">Data Integration Platform (DIP)</div>
           <div class="logo-subtitle" data-i18n="logoSubtitle">Manufacturing Data Layer</div>
         </div>
       </div>
@@ -184,11 +184,11 @@
         <div class="sub-nav module3-sub-nav">
           <button class="sub-nav-item" type="button" data-page="module3-ccl-mapping">
             <span class="sub-dot"></span>
-            <span data-i18n="cclMapping">CCL 係數對應</span>
+            <span data-i18n="cclMapping">CCL係數資料庫</span>
           </button>
           <button class="sub-nav-item" type="button" data-page="module3-factor-library">
             <span class="sub-dot"></span>
-            <span data-i18n="factorLibrary">係數資料庫</span>
+            <span data-i18n="factorLibrary">Ecoinvent係數資料庫</span>
           </button>
         </div>
 
@@ -211,8 +211,8 @@
     <main class="content">
       <header class="topbar">
         <div>
-          <p class="eyebrow" data-i18n="eyebrowCarbonManagementPlatform">Carbon Management Platform</p>
-          <h1 id="pageTitle">Carbon Management Platform</h1>
+          <p class="eyebrow" data-i18n="eyebrowCarbonManagementPlatform">Data Integration Platform (DIP)</p>
+          <h1 id="pageTitle">Data Integration Platform (DIP)</h1>
           <p class="lead" id="pageLead">
             Prepare manufacturing data, expand BOM structures, select emission factors,
             and calculate product carbon footprints.
@@ -428,7 +428,7 @@
             <div class="section-title">
               <div>
                 <h2 data-i18n="module3Title">模組 3 · 碳排放係數選擇</h2>
-                <p data-i18n="module3Stage1Placeholder">第一階段預留頁面。此頁面保留給 CCL 係數對應與係數資料庫查詢功能。</p>
+                <p data-i18n="module3Stage1Placeholder">模組3 入口頁面。請選擇以CCL 係數帶入或查詢Ecoinvent係數資料庫，進入各自專區。</p>
               </div>
               <span class="step-chip" data-i18n="stage1">第一階段</span>
             </div>
@@ -437,7 +437,7 @@
               <button class="module3-placeholder-card module3-entry-card" type="button" data-module3-page="module3-ccl-mapping" role="listitem">
                 <span class="module3-placeholder-icon">A</span>
                 <div>
-                  <h3 data-i18n="cclMapping">CCL 係數對應</h3>
+                  <h3 data-i18n="cclMapping">CCL係數資料庫</h3>
                   <p data-i18n="cclMappingStage1Desc">上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。</p>
                   <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
                 </div>
@@ -446,7 +446,7 @@
               <button class="module3-placeholder-card module3-entry-card" type="button" data-module3-page="module3-factor-library" role="listitem">
                 <span class="module3-placeholder-icon">B</span>
                 <div>
-                  <h3 data-i18n="factorLibrary">係數資料庫</h3>
+                  <h3 data-i18n="factorLibrary">Ecoinvent係數資料庫</h3>
                   <p data-i18n="factorLibraryStage1Desc">以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。</p>
                   <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
                 </div>
@@ -456,7 +456,7 @@
 
           <section class="card insight-card module3-policy-card">
             <h2 data-i18n="module3IntegrationPolicy">模組 3 整合原則</h2>
-            <p data-i18n="module3IntegrationPolicyDesc">此頁面目前只建立 A/B 專區入口，不呼叫任何後端 API。此版本不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。</p>
+            <p data-i18n="module3IntegrationPolicyDesc">CCL係數資料庫專區以原物料料號對應，帶入CCL Item和碳係數；Ecoinvent係數資料庫專區主要為查詢功能，未來將導入建議係數功能。</p>
           </section>
         </section>
       </section>
@@ -466,7 +466,7 @@
           <section class="card module3-zone-card">
             <div class="section-title">
               <div>
-                <h2 data-i18n="module3CclZoneTitle">A. CCL 係數對應專區</h2>
+                <h2 data-i18n="module3CclZoneTitle">A. CCL係數資料庫</h2>
                 <p data-i18n="module3CclZoneLead">第二階段將直接使用 Module 2 最新產出的 Raw Material Bulk，僅需上傳光寶 CCL 係數組配表，並產出已填入係數欄位的覆蓋檔。</p>
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
@@ -507,7 +507,7 @@
           <section class="card module3-zone-card">
             <div class="section-title">
               <div>
-                <h2 data-i18n="module3LibraryZoneTitle">B. 係數資料庫專區</h2>
+                <h2 data-i18n="module3LibraryZoneTitle">B. Ecoinvent係數資料庫</h2>
                 <p data-i18n="module3LibraryZoneLead">第三階段將在此建立關鍵字搜尋，優先查詢 APOS，再查詢 Cut-off。</p>
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
@@ -598,7 +598,7 @@
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <div id="bomStep1Source" class="module3-source-card">
-                <b>Step 1 Output for Working Hour Roll-up</b>
+                <b data-i18n="uploadStep1OutputForRollup">上傳年度產品產量與分類結果</b>
                 <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
               </div>
 
@@ -1025,7 +1025,7 @@ const moduleMessages = {
   factor: {
     title: '3. Carbon Emission Factor Selection',
     titleKey: 'module3NoticeTitle',
-    text: 'Stage 1 page is ready. CCL Mapping and 係數資料庫 will be added in separate versions.',
+    text: 'Section A provides the CCLibrary emission factor database, while Section B provides the Ecoinvent emission factor database.',
     textKey: 'module3NoticeText'
   },
   pcf: {
@@ -1036,8 +1036,8 @@ const moduleMessages = {
 
 const pageMessages = {
   "dashboard": {
-    title: "Carbon Management Platform",
-    lead: "Prepare manufacturing data, expand BOM structures, select emission factors, and calculate product carbon footprints."
+    title: "Data Integration Platform (DIP)",
+    lead: "Integrate manufacturing data, expand BOM structures, select emission factors, and support product carbon footprint workflows."
   },
   "product-data": {
     title: "Product Data Preparation",
@@ -1148,7 +1148,7 @@ function activateBomPage() {
 
   moduleNotice.classList.add('hidden');
   pageTitle.textContent = 'BOM Expansion';
-  pageLead.textContent = 'Expand multi-level BOM structures, roll up raw material quantities, and generate raw material bulk files.';
+  pageLead.textContent = cmpT('bomExpansionPageLead', 'Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.');
   pageLead.style.display = 'block';
   cmpApplyI18n();
   refreshBomStep1Source();
@@ -1396,7 +1396,7 @@ if (module3CclForm) {
     }
     setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(30), 3);
     await refreshModule3RawBulkSource();
-refreshBomStep1Source();
+    refreshBomStep1Source();
     const fd = new FormData(module3CclForm);
     try {
       const res = await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: fd });
