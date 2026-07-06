@@ -2960,3 +2960,563 @@ select:focus {
     align-items: center !important;
   }
 }
+
+/* =========================================================
+   CMP_V21_0_UI_DESIGN_SYSTEM
+   Clean UI scale and sidebar design-system override
+   - Balances left sidebar and main content typography
+   - Keeps V20 responsive sidebar behavior
+   - Prevents footer overlap by keeping navigation scrollable
+   ========================================================= */
+
+:root {
+  --cmp-font-xs: 12px;
+  --cmp-font-sm: 13px;
+  --cmp-font-md: 15px;
+  --cmp-font-lg: 16px;
+  --cmp-font-xl: 20px;
+  --cmp-font-2xl: 28px;
+  --cmp-font-hero: 36px;
+}
+
+html,
+body {
+  font-size: 15px !important;
+}
+
+.app-shell.sidebar-expanded {
+  grid-template-columns: 320px minmax(0, 1fr) !important;
+}
+
+.sidebar {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  padding: 20px 18px !important;
+  gap: 16px !important;
+}
+
+.sidebar-top-actions,
+.logo-block,
+.system-card {
+  flex: 0 0 auto !important;
+}
+
+.side-nav {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-right: 6px !important;
+  padding-bottom: 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px !important;
+  overscroll-behavior: contain !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(183, 199, 216, .55) transparent !important;
+}
+
+.side-nav::-webkit-scrollbar {
+  width: 7px !important;
+}
+
+.side-nav::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+.side-nav::-webkit-scrollbar-thumb {
+  background: rgba(183, 199, 216, .42) !important;
+  border-radius: 999px !important;
+}
+
+.logo-block {
+  min-height: 64px !important;
+  gap: 14px !important;
+}
+
+.logo-mark {
+  width: 56px !important;
+  height: 56px !important;
+  min-width: 56px !important;
+  min-height: 56px !important;
+  border-radius: 16px !important;
+  font-size: 17px !important;
+}
+
+.logo-title {
+  font-size: 18px !important;
+  line-height: 1.22 !important;
+  font-weight: 800 !important;
+}
+
+.logo-subtitle {
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+
+.nav-label {
+  font-size: 12px !important;
+  letter-spacing: .10em !important;
+  margin: 4px 12px 8px !important;
+}
+
+.nav-item {
+  min-height: 62px !important;
+  max-height: none !important;
+  padding: 11px 12px !important;
+  grid-template-columns: 28px 44px minmax(0, 1fr) !important;
+  gap: 11px !important;
+  border-radius: 16px !important;
+  flex-shrink: 0 !important;
+}
+
+.module-index {
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  font-size: 13px !important;
+}
+
+.nav-icon {
+  width: 44px !important;
+  height: 44px !important;
+  min-width: 44px !important;
+  min-height: 44px !important;
+  border-radius: 14px !important;
+  font-size: 19px !important;
+}
+
+.nav-text b {
+  font-size: 16px !important;
+  line-height: 1.25 !important;
+  font-weight: 800 !important;
+  overflow-wrap: anywhere !important;
+}
+
+.sub-nav,
+.sidebar-expanded .sub-nav,
+.sidebar-expanded .module3-sub-nav {
+  margin-left: 76px !important;
+  padding-left: 12px !important;
+  border-left: 1px solid rgba(255,255,255,.14) !important;
+  gap: 7px !important;
+  flex-shrink: 0 !important;
+}
+
+.sub-nav-item,
+.sidebar-expanded .sub-nav .sub-nav-item,
+.sidebar-expanded .module3-sub-nav .sub-nav-item {
+  min-height: 38px !important;
+  padding: 8px 10px !important;
+  font-size: 14px !important;
+  line-height: 1.32 !important;
+  font-weight: 700 !important;
+  width: calc(100% - 10px) !important;
+  flex-shrink: 0 !important;
+}
+
+.sub-nav-item span {
+  overflow-wrap: anywhere !important;
+}
+
+.sub-dot {
+  width: 9px !important;
+  height: 9px !important;
+  flex-basis: 9px !important;
+}
+
+.system-card {
+  align-self: stretch !important;
+  margin-top: 0 !important;
+  min-height: 76px !important;
+  max-height: none !important;
+  padding: 13px 14px !important;
+  border-radius: 16px !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+.system-card b {
+  font-size: 16px !important;
+  line-height: 1.25 !important;
+  font-weight: 800 !important;
+}
+
+.system-card p {
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+
+.status-dot {
+  width: 11px !important;
+  height: 11px !important;
+}
+
+.content {
+  padding: 28px !important;
+}
+
+.topbar {
+  min-height: 178px !important;
+  padding: 28px 34px !important;
+  border-radius: 26px !important;
+}
+
+.topbar::after {
+  width: 330px !important;
+  height: 330px !important;
+  right: -98px !important;
+  top: -108px !important;
+}
+
+.eyebrow,
+.content.is-dashboard .eyebrow {
+  font-size: 12px !important;
+  margin-bottom: 10px !important;
+  letter-spacing: .12em !important;
+}
+
+h1,
+.content.is-dashboard h1 {
+  font-size: var(--cmp-font-hero) !important;
+  line-height: 1.14 !important;
+  max-width: 820px !important;
+  font-weight: 800 !important;
+}
+
+.lead,
+.content.is-dashboard .lead {
+  font-size: 15px !important;
+  line-height: 1.6 !important;
+  max-width: 860px !important;
+  margin-top: 14px !important;
+}
+
+.badge,
+.content.is-dashboard .badge {
+  font-size: 13px !important;
+  padding: 8px 13px !important;
+}
+
+.section-title h2,
+.insight-card h2 {
+  font-size: 20px !important;
+  line-height: 1.28 !important;
+  font-weight: 800 !important;
+}
+
+.section-title p,
+.insight-card p,
+.insight-card li,
+.hint,
+label,
+input[type="file"],
+input[type="number"],
+select {
+  font-size: 15px !important;
+  line-height: 1.55 !important;
+}
+
+.card {
+  border-radius: 22px !important;
+  padding: 24px !important;
+}
+
+.step-chip {
+  font-size: 13px !important;
+  padding: 7px 13px !important;
+}
+
+.btn-primary,
+.btn-secondary,
+.download,
+.link-button,
+button {
+  font-size: 15px !important;
+}
+
+input[type="file"],
+input[type="number"],
+select {
+  min-height: 50px !important;
+}
+
+.kpi-card strong {
+  font-size: 18px !important;
+}
+
+.kpi-card small {
+  font-size: 14px !important;
+}
+
+#dashboard .dashboard-module-card {
+  min-height: 142px !important;
+  padding: 22px 26px !important;
+  grid-template-columns: 94px minmax(0, 1fr) !important;
+  gap: 22px !important;
+  border-radius: 22px !important;
+}
+
+#dashboard .module-number-box {
+  width: 86px !important;
+  height: 86px !important;
+  border-radius: 20px !important;
+}
+
+#dashboard .module-number-box em {
+  font-size: 12px !important;
+}
+
+#dashboard .module-number-box b {
+  font-size: 34px !important;
+}
+
+#dashboard .module-card-copy strong {
+  font-size: 20px !important;
+  line-height: 1.25 !important;
+}
+
+#dashboard .module-card-copy small {
+  font-size: 13px !important;
+}
+
+/* Collapsed sidebar scale */
+.app-shell:not(.sidebar-expanded) .sidebar {
+  align-items: center !important;
+  padding: 18px 16px !important;
+}
+
+.app-shell:not(.sidebar-expanded) .side-nav {
+  align-items: center !important;
+  gap: 12px !important;
+  overflow-y: auto !important;
+  padding-right: 0 !important;
+}
+
+.app-shell:not(.sidebar-expanded) .nav-item {
+  width: 58px !important;
+  min-width: 58px !important;
+  height: 58px !important;
+  min-height: 58px !important;
+  padding: 8px !important;
+  grid-template-columns: 1fr !important;
+}
+
+.app-shell:not(.sidebar-expanded) .nav-icon {
+  width: 42px !important;
+  height: 42px !important;
+  min-width: 42px !important;
+  min-height: 42px !important;
+}
+
+/* Responsive balance */
+@media (max-width: 1380px) {
+  h1,
+  .content.is-dashboard h1 {
+    font-size: 32px !important;
+  }
+
+  .lead,
+  .content.is-dashboard .lead {
+    font-size: 14px !important;
+  }
+
+  .topbar {
+    min-height: auto !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .app-shell.sidebar-expanded {
+    grid-template-columns: 300px minmax(0, 1fr) !important;
+  }
+
+  .app-shell:not(.sidebar-expanded) {
+    grid-template-columns: 84px minmax(0, 1fr) !important;
+  }
+
+  .content {
+    padding: 18px !important;
+  }
+
+  h1,
+  .content.is-dashboard h1 {
+    font-size: 30px !important;
+  }
+
+  .section-title h2,
+  .insight-card h2 {
+    font-size: 19px !important;
+  }
+}
+
+@media (max-height: 820px) {
+  .sidebar {
+    padding: 14px 16px !important;
+    gap: 10px !important;
+  }
+
+  .logo-block {
+    min-height: 54px !important;
+  }
+
+  .logo-mark {
+    width: 50px !important;
+    height: 50px !important;
+    min-width: 50px !important;
+    min-height: 50px !important;
+  }
+
+  .logo-title {
+    font-size: 16px !important;
+  }
+
+  .logo-subtitle {
+    font-size: 12px !important;
+  }
+
+  .side-nav {
+    gap: 6px !important;
+  }
+
+  .nav-item {
+    min-height: 52px !important;
+    padding: 8px 10px !important;
+    grid-template-columns: 24px 38px minmax(0, 1fr) !important;
+  }
+
+  .module-index {
+    width: 24px !important;
+    height: 24px !important;
+    min-width: 24px !important;
+    min-height: 24px !important;
+    font-size: 12px !important;
+  }
+
+  .nav-icon {
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+  }
+
+  .nav-text b {
+    font-size: 14px !important;
+  }
+
+  .sub-nav,
+  .sidebar-expanded .sub-nav,
+  .sidebar-expanded .module3-sub-nav {
+    margin-left: 66px !important;
+    gap: 4px !important;
+  }
+
+  .sub-nav-item,
+  .sidebar-expanded .sub-nav .sub-nav-item,
+  .sidebar-expanded .module3-sub-nav .sub-nav-item {
+    min-height: 30px !important;
+    font-size: 12.5px !important;
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+  }
+
+  .system-card {
+    min-height: 58px !important;
+    padding: 9px 10px !important;
+  }
+
+  .system-card b {
+    font-size: 14px !important;
+  }
+
+  .system-card p {
+    font-size: 12px !important;
+  }
+}
+
+@media (max-height: 700px) {
+  .sidebar {
+    padding: 10px 14px !important;
+    gap: 7px !important;
+  }
+
+  .sidebar-top-actions {
+    gap: 8px !important;
+  }
+
+  .menu-toggle,
+  .home-toggle,
+  .lang-toggle {
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+  }
+
+  .logo-block {
+    min-height: 42px !important;
+  }
+
+  .logo-mark {
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+  }
+
+  .nav-item {
+    min-height: 42px !important;
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+    grid-template-columns: 20px 32px minmax(0, 1fr) !important;
+  }
+
+  .nav-icon {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    min-height: 32px !important;
+  }
+
+  .nav-text b {
+    font-size: 12px !important;
+  }
+
+  .sub-nav,
+  .sidebar-expanded .sub-nav,
+  .sidebar-expanded .module3-sub-nav {
+    margin-left: 56px !important;
+  }
+
+  .sub-nav-item,
+  .sidebar-expanded .sub-nav .sub-nav-item,
+  .sidebar-expanded .module3-sub-nav .sub-nav-item {
+    min-height: 26px !important;
+    font-size: 11.5px !important;
+  }
+
+  .system-card {
+    min-height: 46px !important;
+  }
+}
+
+@media (max-height: 560px) {
+  .logo-block {
+    display: none !important;
+  }
+
+  .system-card p {
+    display: none !important;
+  }
+
+  .system-card {
+    min-height: 40px !important;
+    align-items: center !important;
+  }
+}
