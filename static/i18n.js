@@ -193,6 +193,11 @@
         "en": "Section A provides the CCLibrary emission factor database, while Section B provides the Ecoinvent emission factor database.",
         "zh": "A專區為CCLibrary係數資料庫，B專區為Ecoinvent係數資料庫。"
     },
+    "dashboardLead": {"en": "Integrate manufacturing data, expand BOM structures, select emission factors, and support product carbon footprint workflows.", "zh": "整合製造資料、展開 BOM 結構、選擇碳排放係數，並支援產品碳足跡流程。"},
+    "productDataLead": {"en": "Prepare production output and batch data for product carbon footprint workflows.", "zh": "準備產品碳足跡流程所需的生產產出與批次資料。"},
+    "ruleManagementLead": {"en": "Maintain Product Data Preparation Rules, including Rule Master and Product Series Master.", "zh": "維護產品資料準備規則，包含 Rule Master 與 Product Series Master。"},
+    "modulePrepNoticeText": {"en": "Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.", "zh": "完成 Step 1 工單處理、Step 2 批次資料格式化與規則管理。"},
+    "modulePcfNoticeText": {"en": "Reserved module. This area can be extended for product carbon footprint calculation.", "zh": "預留模組。此區可延伸為產品碳足跡計算。"},
     "bomExpansionPageLead": {"en": "Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.", "zh": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。"},
     "pcfCalculation": {
         "en": "PCF Calculation",
@@ -983,8 +988,6 @@
 
 
   Object.assign(phraseZh, {
-    "Carbon Management Platform": "資料整合平台",
-    "Data Integration Platform (DIP)": "資料整合平台",
     "CCL Mapping": "CCL係數資料庫",
     "Factor Library": "Ecoinvent係數資料庫",
     "Stage 2 entry page. Choose CCL Mapping or Factor Library to enter each workspace.": "模組3 入口頁面。請選擇以CCL 係數帶入或查詢Ecoinvent係數資料庫，進入各自專區。",
@@ -995,9 +998,6 @@
   });
 
   const phraseEn = {};
-  Object.keys(phraseZh).forEach(function (en) {
-    phraseEn[phraseZh[en]] = en;
-  });
 
   const preserveExact = new Set([
     "DIP", "SAP", "BOM", "PCF", "WIP", "NB", "TP", "SCMC", "SN", "SP", "SM", "SK",
@@ -1035,10 +1035,9 @@
 
   function translateString(input, targetLang) {
     if (!input || isSkippableText(input)) return input;
-
     if (targetLang === "zh" && (/Ecoinvent.*係數資料庫/.test(input) || /CCLibrary.*係數資料庫/.test(input) || /資料整合平台/.test(input))) return input;
 
-    const dict = targetLang === "zh" ? phraseZh : phraseEn;
+    const dict = targetLang === "zh" ? phraseZh : {};
     let output = String(input);
 
     const normalized = output.replace(/\s+/g, " ").trim();
@@ -1180,7 +1179,7 @@
           if (node.nodeType === Node.TEXT_NODE) {
             node.nodeValue = translateString(node.nodeValue, currentLang);
           } else if (node.nodeType === Node.ELEMENT_NODE) {
-            if (!node.closest || !node.closest(".processing-status")) {
+            if (!node.closest || (!node.closest(".processing-status") && !node.closest("[data-i18n-dynamic]"))) {
               translateKeyedElements(currentLang);
               translateTextNodes(node, currentLang);
             }

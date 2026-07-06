@@ -184,11 +184,11 @@
         <div class="sub-nav module3-sub-nav">
           <button class="sub-nav-item" type="button" data-page="module3-ccl-mapping">
             <span class="sub-dot"></span>
-            <span data-i18n="cclMapping">CCL係數資料庫</span>
+            <span data-i18n="cclMapping">CCLibrary Emission Factor Database</span>
           </button>
           <button class="sub-nav-item" type="button" data-page="module3-factor-library">
             <span class="sub-dot"></span>
-            <span data-i18n="factorLibrary">Ecoinvent係數資料庫</span>
+            <span data-i18n="factorLibrary">Ecoinvent Emission Factor Database</span>
           </button>
         </div>
 
@@ -428,7 +428,7 @@
             <div class="section-title">
               <div>
                 <h2 data-i18n="module3Title">模組 3 · 碳排放係數選擇</h2>
-                <p data-i18n="module3Stage1Placeholder">第一階段預留頁面。此頁面保留給 CCL 係數對應與係數資料庫查詢功能。</p>
+                <p data-i18n="module3Stage1Placeholder">Module 3 Entry. Select either CCL factor import or the Ecoinvent emission factor database to enter the corresponding workspace.</p>
               </div>
               <span class="step-chip" data-i18n="stage1">第一階段</span>
             </div>
@@ -437,8 +437,8 @@
               <button class="module3-placeholder-card module3-entry-card" type="button" data-module3-page="module3-ccl-mapping" role="listitem">
                 <span class="module3-placeholder-icon">A</span>
                 <div>
-                  <h3 data-i18n="cclMapping">CCL係數資料庫</h3>
-                  <p data-i18n="cclMappingStage1Desc">上傳模組 2 的原物料批次輸出檔與光寶 CCL 係數組配表，並依欄位名稱寫入係數相關欄位。</p>
+                  <h3 data-i18n="cclMapping">CCLibrary Emission Factor Database</h3>
+                  <p data-i18n="cclMappingStage1Desc">Section A provides the CCLibrary emission factor database and imports CCL factors by raw material number.</p>
                   <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
                 </div>
               </button>
@@ -446,8 +446,8 @@
               <button class="module3-placeholder-card module3-entry-card" type="button" data-module3-page="module3-factor-library" role="listitem">
                 <span class="module3-placeholder-icon">B</span>
                 <div>
-                  <h3 data-i18n="factorLibrary">Ecoinvent係數資料庫</h3>
-                  <p data-i18n="factorLibraryStage1Desc">以關鍵字查詢係數，優先使用 APOS，再使用 Cut-off；顯示活動名稱與 IPCC 2021 百年全球暖化潛勢係數值。</p>
+                  <h3 data-i18n="factorLibrary">Ecoinvent Emission Factor Database</h3>
+                  <p data-i18n="factorLibraryStage1Desc">Section B provides the Ecoinvent emission factor database for keyword-based factor search.</p>
                   <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
                 </div>
               </button>
@@ -456,7 +456,7 @@
 
           <section class="card insight-card module3-policy-card">
             <h2 data-i18n="module3IntegrationPolicy">模組 3 整合原則</h2>
-            <p data-i18n="module3IntegrationPolicyDesc">此頁面目前只建立 A/B 專區入口，不呼叫任何後端 API。此版本不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。</p>
+            <p data-i18n="module3IntegrationPolicyDesc">The CCLibrary workspace maps raw material numbers to CCL Items and automatically imports emission factors. The Ecoinvent workspace is primarily designed for factor searching and will support recommended factor selection in future releases.</p>
           </section>
         </section>
       </section>
@@ -466,8 +466,8 @@
           <section class="card module3-zone-card">
             <div class="section-title">
               <div>
-                <h2 data-i18n="module3CclZoneTitle">A. CCL係數資料庫</h2>
-                <p data-i18n="module3CclZoneLead">第二階段將直接使用 Module 2 最新產出的 Raw Material Bulk，僅需上傳光寶 CCL 係數組配表，並產出已填入係數欄位的覆蓋檔。</p>
+                <h2 data-i18n="module3CclZoneTitle">A. CCLibrary Emission Factor Database</h2>
+                <p data-i18n="module3CclZoneLead">Use the latest Raw Material Bulk from Module 2 and the Lite-On CCL mapping table to import CCL Items and emission factors.</p>
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
@@ -507,8 +507,8 @@
           <section class="card module3-zone-card">
             <div class="section-title">
               <div>
-                <h2 data-i18n="module3LibraryZoneTitle">B. Ecoinvent係數資料庫</h2>
-                <p data-i18n="module3LibraryZoneLead">第三階段將在此建立關鍵字搜尋，優先查詢 APOS，再查詢 Cut-off。</p>
+                <h2 data-i18n="module3LibraryZoneTitle">B. Ecoinvent Emission Factor Database</h2>
+                <p data-i18n="module3LibraryZoneLead">Search the Ecoinvent factor database by keyword and review factor details.</p>
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
@@ -598,7 +598,7 @@
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <div id="bomStep1Source" class="module3-source-card">
-                <b data-i18n="uploadStep1OutputForRollup">上傳年度產品產量與分類結果</b>
+                <b data-i18n="uploadStep1OutputForRollup">Upload Annual Product Output & Classification Result</b>
                 <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
               </div>
 
@@ -941,6 +941,18 @@ function cmpApplyI18n() {
   }
 }
 
+
+function setDynamicI18n(el, key, fallback) {
+  if (!el) return;
+  el.setAttribute('data-i18n-dynamic', key);
+  el.textContent = cmpT(key, fallback);
+}
+
+function clearDynamicI18n(el) {
+  if (!el) return;
+  el.removeAttribute('data-i18n-dynamic');
+}
+
 function setText(el, key, fallback) {
   if (!el) return;
   el.setAttribute('data-i18n-dynamic', key);
@@ -1015,36 +1027,48 @@ let progressTimer = null;
 
 const moduleMessages = {
   prep: {
+    titleKey: 'productDataPreparation',
     title: '1. Product Data Preparation',
+    textKey: 'modulePrepNoticeText',
     text: 'Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.'
   },
   bom: {
+    titleKey: 'bomExpansion',
     title: '2. BOM Expansion',
-    text: 'Reserved module. This area can be extended for multi-level BOM explosion.'
+    textKey: 'bomExpansionPageLead',
+    text: 'Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.'
   },
   factor: {
+    titleKey: 'carbonEmissionFactorSelection',
     title: '3. Carbon Emission Factor Selection',
-    titleKey: 'module3NoticeTitle',
-    text: 'Section A provides the CCLibrary emission factor database, while Section B provides the Ecoinvent emission factor database.',
-    textKey: 'module3NoticeText'
+    textKey: 'module3NoticeText',
+    text: 'Section A provides the CCLibrary emission factor database, while Section B provides the Ecoinvent emission factor database.'
   },
   pcf: {
+    titleKey: 'pcfCalculation',
     title: '4. PCF Calculation',
+    textKey: 'modulePcfNoticeText',
     text: 'Reserved module. This area can be extended for product carbon footprint calculation.'
   }
 };
 
 const pageMessages = {
   "dashboard": {
+    titleKey: "logoTitle",
     title: "Data Integration Platform (DIP)",
+    leadKey: "dashboardLead",
     lead: "Integrate manufacturing data, expand BOM structures, select emission factors, and support product carbon footprint workflows."
   },
   "product-data": {
+    titleKey: "productDataPreparation",
     title: "Product Data Preparation",
+    leadKey: "productDataLead",
     lead: "Prepare production output and batch data for product carbon footprint workflows."
   },
   "rule-management": {
+    titleKey: "ruleManagement",
     title: "Rule Management",
+    leadKey: "ruleManagementLead",
     lead: "Maintain Product Data Preparation Rules, including Rule Master and Product Series Master."
   }
 };
@@ -1058,8 +1082,8 @@ function activateDashboard() {
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
 
   moduleNotice.classList.add('hidden');
-  pageTitle.textContent = pageMessages.dashboard.title;
-  pageLead.textContent = pageMessages.dashboard.lead;
+  setDynamicI18n(pageTitle, pageMessages.dashboard.titleKey, pageMessages.dashboard.title);
+  setDynamicI18n(pageLead, pageMessages.dashboard.leadKey, pageMessages.dashboard.lead);
   pageLead.style.display = 'block';
   cmpApplyI18n();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
@@ -1083,8 +1107,8 @@ function activatePrepPage(pageId) {
   document.querySelector('[data-main="prep"]').classList.add('active');
 
   moduleNotice.classList.add('hidden');
-  pageTitle.textContent = pageMessages[pageId].title;
-  pageLead.textContent = pageMessages[pageId].lead;
+  setDynamicI18n(pageTitle, pageMessages[pageId].titleKey, pageMessages[pageId].title);
+  setDynamicI18n(pageLead, pageMessages[pageId].leadKey, pageMessages[pageId].lead);
   pageLead.style.display = pageMessages[pageId].lead ? 'block' : 'none';
   cmpApplyI18n();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
@@ -1127,8 +1151,8 @@ function activateFactorPage(pageId = 'factor-selection') {
   moduleNotice.classList.add('hidden');
   const titleKey = pageId === 'module3-ccl-mapping' ? 'module3CclZoneTitle' : (pageId === 'module3-factor-library' ? 'module3LibraryZoneTitle' : 'carbonEmissionFactorSelection');
   const leadKey = pageId === 'module3-ccl-mapping' ? 'module3CclZoneLead' : (pageId === 'module3-factor-library' ? 'module3LibraryZoneLead' : 'module3PageLead');
-  pageTitle.textContent = window.CMPI18N ? window.CMPI18N.t(titleKey, 'Carbon Emission Factor Selection') : 'Carbon Emission Factor Selection';
-  pageLead.textContent = window.CMPI18N ? window.CMPI18N.t(leadKey, '') : '';
+  setDynamicI18n(pageTitle, titleKey, 'Carbon Emission Factor Selection');
+  setDynamicI18n(pageLead, leadKey, '');
   pageLead.style.display = pageLead.textContent ? 'block' : 'none';
   cmpApplyI18n();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
@@ -1147,8 +1171,8 @@ function activateBomPage() {
   document.querySelector('[data-main="bom"]').classList.add('active');
 
   moduleNotice.classList.add('hidden');
-  pageTitle.textContent = 'BOM Expansion';
-  pageLead.textContent = cmpT('bomExpansionPageLead', 'Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.');
+  setDynamicI18n(pageTitle, 'bomExpansion', 'BOM Expansion');
+  setDynamicI18n(pageLead, 'bomExpansionPageLead', 'Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.');
   pageLead.style.display = 'block';
   cmpApplyI18n();
   refreshBomStep1Source();
@@ -1759,11 +1783,11 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     }
 
     document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
-    moduleNoticeTitle.textContent = moduleMessages[key].title;
-    moduleNoticeText.textContent = moduleMessages[key].text;
+    setDynamicI18n(moduleNoticeTitle, moduleMessages[key].titleKey, moduleMessages[key].title);
+    setDynamicI18n(moduleNoticeText, moduleMessages[key].textKey, moduleMessages[key].text);
     moduleNotice.classList.remove('hidden');
-    pageTitle.textContent = moduleMessages[key].title.replace(/^\d+\.\s*/, '');
-    pageLead.textContent = moduleMessages[key].text;
+    setDynamicI18n(pageTitle, moduleMessages[key].titleKey, moduleMessages[key].title.replace(/^\d+\.\s*/, ''));
+    setDynamicI18n(pageLead, moduleMessages[key].textKey, moduleMessages[key].text);
     pageLead.style.display = 'block';
     document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
   };
