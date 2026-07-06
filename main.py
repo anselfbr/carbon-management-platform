@@ -44,7 +44,7 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V15_0_RULE_MASTER_ENGINE_SITE_PREFIX_WHITELIST =====")
+print("===== CMP MAIN VERSION: CMP_V17_6_MODULE2_HYBRID_UI_MEMORY_OPT =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -2100,9 +2100,23 @@ async def process_bom_expansion(request: Request):
     supplier_paths: list[Path] = []
 
     template_path.write_bytes(await template_file.read())
+
+    # V17.6 Hybrid Step1 source:
+    # 1) If user manually uploads Step1 Output, use the uploaded file.
+    # 2) Otherwise auto-use the latest Module 1 Step 1 output in outputs/.
+    if step1_file is not None and getattr(step1_file, "filename", None):
+        step1_filename = str(getattr(step1_file, "filename", "") or "")
+        if not step1_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse(
+                {"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"},
+                status_code=400,
+            )
+        step1_path = UPLOAD_DIR / f"module2_step1_output_{token}_{Path(step1_filename).name}"
+        step1_path.write_bytes(await step1_file.read())
+
     if step1_path is None:
         return JSONResponse(
-            {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"},
+            {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1，或在 Module 2 手動指定 Step 1 Output。"},
             status_code=400,
         )
 
@@ -2164,7 +2178,7 @@ async def process_bom_expansion(request: Request):
         else:
             summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
             summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
-        summary["app_version"] = "CMP_V17_4_MODULE2_MEMORY_OPT_V1"
+        summary["app_version"] = "CMP_V17_6_MODULE2_HYBRID_UI_MEMORY_OPT"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -2176,7 +2190,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V17_4_MODULE2_MEMORY_OPT_V1",
+        "app_version": "CMP_V17_6_MODULE2_HYBRID_UI_MEMORY_OPT",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
