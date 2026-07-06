@@ -186,9 +186,9 @@
             <span class="sub-dot"></span>
             <span data-i18n="cclMapping">CCLibrary Emission Factor Database</span>
           </button>
-          <button class="sub-nav-item" type="button" data-page="module3-factor-library">
+          <button class="sub-nav-item" type="button" data-page="module3-factor-library" disabled title="Temporarily disabled" style="opacity:0.45; cursor:not-allowed;">
             <span class="sub-dot"></span>
-            <span data-i18n="factorLibrary">Ecoinvent Emission Factor Database</span>
+            <span>B. Ecoinvent Emission Factor Database（暫停）</span>
           </button>
         </div>
 
@@ -443,12 +443,12 @@
                 </div>
               </button>
 
-              <button class="module3-placeholder-card module3-entry-card" type="button" data-module3-page="module3-factor-library" role="listitem">
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module3-page="module3-factor-library" role="listitem" disabled title="Temporarily disabled" style="opacity:0.55; cursor:not-allowed;">
                 <span class="module3-placeholder-icon">B</span>
                 <div>
-                  <h3 data-i18n="factorLibrary">Ecoinvent Emission Factor Database</h3>
-                  <p data-i18n="factorLibraryStage1Desc">Section B provides the Ecoinvent emission factor database for keyword-based factor search.</p>
-                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
+                  <h3>B. Ecoinvent Emission Factor Database（暫停）</h3>
+                  <p>此功能已暫時停用以降低系統記憶體負載；之後可由後端功能開關恢復。</p>
+                  <span class="module3-entry-action">Maintenance</span>
                 </div>
               </button>
             </div>
@@ -507,8 +507,8 @@
           <section class="card module3-zone-card">
             <div class="section-title">
               <div>
-                <h2 data-i18n="module3LibraryZoneTitle">B. Ecoinvent Emission Factor Database</h2>
-                <p data-i18n="module3LibraryZoneLead">Search the Ecoinvent factor database by keyword and review factor details.</p>
+                <h2>B. Ecoinvent Emission Factor Database（暫停）</h2>
+                <p>此功能已暫時停用，不會載入 APOS / Cut-off 資料庫；需恢復時將 main.py 的 ENABLE_MODULE3_ECOINVENT_DATABASE 改為 True。</p>
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
@@ -516,7 +516,7 @@
               <div class="module3-filter-grid">
                 <label class="module3-filter-field" for="module3FactorSource">
                   <span data-i18n="factorSource">來源</span>
-                  <select id="module3FactorSource">
+                  <select id="module3FactorSource" disabled>
                     <option value="all" data-i18n="allItems">全部</option>
                     <option value="APOS">APOS</option>
                     <option value="Cut-off">Cut-off</option>
@@ -524,7 +524,7 @@
                 </label>
                 <label class="module3-filter-field" for="module3FactorGeography">
                   <span data-i18n="geography">Geography</span>
-                  <select id="module3FactorGeography">
+                  <select id="module3FactorGeography" disabled>
                     <option value="all" data-i18n="allItems">全部</option>
                     <option value="GLO">GLO</option>
                     <option value="RoW">RoW</option>
@@ -533,7 +533,7 @@
                 </label>
                 <label class="module3-filter-field" for="module3FactorProcessType">
                   <span data-i18n="processType">製程類型</span>
-                  <select id="module3FactorProcessType">
+                  <select id="module3FactorProcessType" disabled>
                     <option value="all" data-i18n="allItems">全部</option>
                     <option value="production" data-i18n="productionOnly">僅生產</option>
                     <option value="market_for" data-i18n="productionWithTransport">生產(含運輸)</option>
@@ -543,14 +543,14 @@
               <div class="module3-keyword-grid">
                 <label class="module3-keyword-field" for="module3FactorActivityKeyword">
                   <span data-i18n="activityKeywordSearch">關鍵字查詢</span>
-                  <input id="module3FactorActivityKeyword" type="text" placeholder="market for solder" data-i18n-placeholder="activityNameSearchPlaceholder">
+                  <input id="module3FactorActivityKeyword" type="text" placeholder="暫停使用" disabled>
                 </label>
                 <label class="module3-keyword-field" for="module3FactorReferenceKeyword">
                   <span data-i18n="referenceNameSearch">名稱查詢</span>
-                  <input id="module3FactorReferenceKeyword" type="text" placeholder="solder" data-i18n-placeholder="referenceProductSearchPlaceholder">
+                  <input id="module3FactorReferenceKeyword" type="text" placeholder="暫停使用" disabled>
                 </label>
               </div>
-              <div id="module3FactorStatus" class="module3-empty-result" data-i18n="module3LibraryReady">請輸入 Activity Name 或 Reference Product Name 關鍵字後將自動搜尋 APOS / Cut-off 係數資料庫。</div>
+              <div id="module3FactorStatus" class="module3-empty-result">B. ecoinvent 資料庫目前暫停使用。</div>
               <div class="module3-table-wrap">
                 <table id="module3FactorTable" class="module3-factor-table hidden">
                   <thead>
@@ -919,6 +919,11 @@ const module3FactorPrevPage = document.getElementById('module3FactorPrevPage');
 const module3FactorNextPage = document.getElementById('module3FactorNextPage');
 const module3FactorPageInfo = document.getElementById('module3FactorPageInfo');
 
+const ENABLE_MODULE3_ECOINVENT_DATABASE = false;
+function module3EcoinventDisabledMessage() {
+  return 'B. ecoinvent 資料庫目前暫停使用。';
+}
+
 function formatRuleSetLabel(value) {
   if (value === 'PC_CE') return 'PC&CE';
   return value || 'IPS';
@@ -1143,6 +1148,10 @@ function setModule3ActiveSub(pageId) {
 }
 
 function activateFactorPage(pageId = 'factor-selection') {
+  if (pageId === 'module3-factor-library' && !ENABLE_MODULE3_ECOINVENT_DATABASE) {
+    showRuleToast('error', '功能暫停', module3EcoinventDisabledMessage());
+    pageId = 'factor-selection';
+  }
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
   const targetPage = document.getElementById(pageId) || document.getElementById('factor-selection');
   targetPage.classList.add('active');
@@ -1656,6 +1665,11 @@ function scheduleModule3FactorSearch() {
 }
 
 async function searchModule3Factors(options = {}) {
+  if (!ENABLE_MODULE3_ECOINVENT_DATABASE) {
+    if (module3FactorStatus) module3FactorStatus.textContent = module3EcoinventDisabledMessage();
+    clearModule3FactorResults();
+    return;
+  }
   const terms = getModule3FactorSearchTerms();
   if (!hasModule3FactorSearchTerms()) {
     module3FactorStatus.textContent = options.auto
