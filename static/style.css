@@ -2791,3 +2791,172 @@ select:focus {
 .app-shell:not(.sidebar-expanded) .nav-item {
   flex-shrink: 0;
 }
+
+/* =========================================================
+   CMP_V20_0_SIDEBAR_LAYOUT_REFACTOR
+   True responsive sidebar refactor:
+   - Sidebar uses flex layout instead of grid.
+   - Header/logo stay at top.
+   - Navigation is the only scrollable area.
+   - Environment card stays at bottom and never overlays modules.
+   ========================================================= */
+
+.sidebar {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  padding: 20px 18px !important;
+  gap: 16px !important;
+}
+
+.sidebar-top-actions,
+.logo-block {
+  flex: 0 0 auto !important;
+}
+
+.side-nav {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-right: 6px !important;
+  padding-bottom: 14px !important;
+  overscroll-behavior: contain !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(183, 199, 216, .55) transparent !important;
+}
+
+.side-nav::-webkit-scrollbar {
+  width: 7px !important;
+}
+
+.side-nav::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+
+.side-nav::-webkit-scrollbar-thumb {
+  background: rgba(183, 199, 216, .42) !important;
+  border-radius: 999px !important;
+}
+
+.system-card {
+  flex: 0 0 auto !important;
+  align-self: stretch !important;
+  margin-top: 0 !important;
+  position: relative !important;
+  z-index: 1 !important;
+}
+
+.nav-item,
+.sub-nav,
+.sub-nav-item {
+  flex-shrink: 0 !important;
+}
+
+/* Prevent long disabled Module 3 item from being hidden behind footer */
+.sub-nav-item span,
+.nav-text b {
+  overflow-wrap: anywhere !important;
+}
+
+/* Collapsed sidebar: keep icons scrollable when viewport is short */
+.app-shell:not(.sidebar-expanded) .sidebar {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+}
+
+.app-shell:not(.sidebar-expanded) .side-nav {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  align-items: center !important;
+  padding-right: 0 !important;
+  padding-bottom: 10px !important;
+}
+
+.app-shell:not(.sidebar-expanded) .nav-item {
+  flex: 0 0 auto !important;
+}
+
+/* Zoom / short-height compact mode */
+@media (max-height: 820px) {
+  .sidebar {
+    padding: 14px 16px !important;
+    gap: 10px !important;
+  }
+  .side-nav {
+    gap: 5px !important;
+    padding-bottom: 10px !important;
+  }
+  .system-card {
+    min-height: 56px !important;
+    max-height: none !important;
+    padding: 9px 10px !important;
+  }
+}
+
+@media (max-height: 700px) {
+  .sidebar {
+    padding: 10px 14px !important;
+    gap: 7px !important;
+  }
+  .sidebar-top-actions {
+    gap: 8px !important;
+  }
+  .menu-toggle,
+  .home-toggle,
+  .lang-toggle {
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    min-height: 38px !important;
+  }
+  .logo-block {
+    min-height: 42px !important;
+  }
+  .logo-mark {
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    min-height: 42px !important;
+  }
+  .nav-label {
+    margin-top: 0 !important;
+    margin-bottom: 2px !important;
+  }
+  .nav-item {
+    min-height: 40px !important;
+    padding-top: 5px !important;
+    padding-bottom: 5px !important;
+  }
+  .sub-nav-item,
+  .sidebar-expanded .sub-nav .sub-nav-item,
+  .sidebar-expanded .module3-sub-nav .sub-nav-item {
+    min-height: 26px !important;
+    padding-top: 4px !important;
+    padding-bottom: 4px !important;
+  }
+  .system-card {
+    min-height: 48px !important;
+    padding: 8px 10px !important;
+  }
+}
+
+@media (max-height: 560px) {
+  .logo-block {
+    display: none !important;
+  }
+  .system-card p {
+    display: none !important;
+  }
+  .system-card {
+    min-height: 40px !important;
+    align-items: center !important;
+  }
+}
