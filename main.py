@@ -4,7 +4,7 @@ import re
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,14 +27,9 @@ LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_V19_3_TIMEZONE_FIX"
+CMP_MAIN_VERSION = "CMP_V19_0_MODULE1_CPU_OPT"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
-
-
-def format_file_mtime_utc(path: Path) -> str:
-    """Return file modified time as UTC ISO-8601 with timezone for browser conversion."""
-    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 RULE_SET_MAP = {
@@ -1245,7 +1240,7 @@ def process_files(
     labor_paths: Optional[list[Path]] = None,
     labor_mode: str = "both",
     rule_set: str = DEFAULT_RULE_SET,
-    include_detail_output: bool = True,
+    include_detail_output: bool = False,
 ) -> tuple[Path, dict]:
     rule_set = normalize_rule_set(rule_set)
     masters = build_masters(rule_set)
@@ -1480,13 +1475,14 @@ def process_files(
         out_export = out_export.drop(columns=["Labor HR.Act"], errors="ignore")
         annual_export = annual_export.drop(columns=["年度人員工時"], errors="ignore")
 
-    # CMP V19.2 Step1 Output:
-    # Always include 工單明細_已分類 while keeping V19 CPU optimizations and fixed-width export.
-    include_detail_output = True
+    # CMP V18.1 Step1 Fast Output:
+    # Default export skips the large detail sheet to reduce openpyxl write time and memory usage.
+    # Module 2 only requires Plant_Material年度產量, so the operational output remains compatible.
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual_export.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
         type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
+        if include_detail_output:
+            out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
 
         # Avoid scanning thousands of cells for auto-width. Fixed widths are much faster.
         for sheet in writer.book.worksheets:
@@ -1508,14 +1504,14 @@ def process_files(
         "output_filename": output_path.name,
         "year": year or "ALL",
         "include_detail_output": bool(include_detail_output),
-        "fast_output_mode": False,
+        "fast_output_mode": not bool(include_detail_output),
         "app_version": CMP_MAIN_VERSION,
     }
     return output_path, summary
 
 def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     """Backward-compatible wrapper for single-file processing."""
-    return process_files([path], year, None, "both", DEFAULT_RULE_SET, True)
+    return process_files([path], year, None, "both", DEFAULT_RULE_SET, False)
 
 
 def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
@@ -1634,8 +1630,7 @@ async def process(request: Request):
     labor_mode = normalize_labor_mode(form.get("labor_mode") or "both")
     rule_set = normalize_rule_set(form.get("rule_set") or DEFAULT_RULE_SET)
     year = form.get("year")
-    # V19.2: Always export 工單明細_已分類. Frontend no longer shows or sends an optional detail-output flag.
-    include_detail_output = True
+    include_detail_output = str(form.get("include_detail_output") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
     saved_paths: list[Path] = []
     for upload in upload_files:
@@ -1810,7 +1805,7 @@ def module2_step1_output_source():
         "ok": True,
         "filename": step1_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": format_file_mtime_utc(step1_path),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         "download_url": f"/download/{step1_path.name}",
     }
 
@@ -1846,7 +1841,7 @@ def module3_raw_material_bulk_source():
         "ok": True,
         "filename": raw_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": format_file_mtime_utc(raw_path),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         "download_url": f"/download/{raw_path.name}",
     }
 
