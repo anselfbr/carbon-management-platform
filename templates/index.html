@@ -302,6 +302,12 @@
               <label data-i18n="reportingYear">Reporting Year</label>
               <input id="year" name="year" type="number" placeholder="e.g. 2024；blank = all years" data-i18n-placeholder="yearPlaceholder" />
 
+              <label class="checkbox-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                <input id="includeDetailOutput" name="include_detail_output" type="checkbox" />
+                <span>輸出工單明細_已分類（檔案較大，處理時間較長）</span>
+              </label>
+              <p class="hint">預設使用快速輸出，只產生 Module 2 所需的年度彙總分頁。</p>
+
               <button type="submit" class="btn-primary">
                 <span class="btn-icon">▶</span>
                 <span data-i18n="runConsolidationClassification">Run Consolidation & Classification</span>
@@ -1894,6 +1900,7 @@ form.onsubmit = async (e) => {
   const laborInput = document.getElementById('laborFiles');
   const laborModeInput = document.getElementById('laborMode');
   const yearInput = document.getElementById('year');
+  const includeDetailOutputInput = document.getElementById('includeDetailOutput');
 
   const quantityFileCount = quantityInput ? quantityInput.files.length : 0;
   const laborFileCount = laborInput ? laborInput.files.length : 0;
@@ -1919,6 +1926,7 @@ form.onsubmit = async (e) => {
   fd.append('labor_mode', laborModeInput ? laborModeInput.value : 'both');
   fd.append('rule_set', ruleSetInput ? ruleSetInput.value : 'IPS');
   fd.append('year', yearInput ? yearInput.value : '');
+  fd.append('include_detail_output', includeDetailOutputInput && includeDetailOutputInput.checked ? 'true' : 'false');
 
   try {
     const res = await fetch('/process', {method: 'POST', body: fd});
@@ -1926,7 +1934,7 @@ form.onsubmit = async (e) => {
     if (!data.ok) throw new Error(data.message || cmpT('processingFailed', 'Processing failed'));
 
     const s = data.summary;
-    log.textContent = `Completed.\nRule Set: ${s.rule_set || 'IPS'}\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}`;
+    log.textContent = `Completed.\nRule Set: ${s.rule_set || 'IPS'}\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}\nFast output mode: ${s.fast_output_mode ? 'Yes' : 'No'}\nDetail sheet exported: ${s.include_detail_output ? 'Yes' : 'No'}`;
     summary.innerHTML = `
       <div class="metric"><b>Rule Set</b><span>${s.rule_set || 'IPS'}</span></div>
       <div class="metric"><b>Year</b><span>${s.year}</span></div>
@@ -1936,7 +1944,7 @@ form.onsubmit = async (e) => {
       <div class="metric"><b>Summary Rows</b><span>${s.annual_rows}</span></div>
       <div class="metric"><b>Total Output</b><span>${s.total_qty.toLocaleString()}</span></div>
       <div class="metric"><b>Total Hours</b><span>${(s.total_hours || 0).toLocaleString()}</span></div>
-      <div class="metric"><b>WIP Rows</b><span>${s.wip_rows}</span></div>`;
+      <div class="metric"><b>WIP Rows</b><span>${s.wip_rows}</span></div>\n      <div class="metric"><b>Fast Output</b><span>${s.fast_output_mode ? 'Yes' : 'No'}</span></div>`;
 
     download.href = data.download_url;
     download.classList.remove('disabled');
