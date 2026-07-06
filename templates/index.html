@@ -982,6 +982,44 @@ function cmpRemainingText(seconds) {
   return lang === 'zh' ? `約 ${seconds} 秒` : `~${seconds}s remaining`;
 }
 
+function formatTaipeiTime(datetimeString) {
+  if (!datetimeString) return '';
+
+  let value = String(datetimeString).trim();
+  if (!value) return '';
+
+  // Backend returns UTC with timezone, e.g. 2026-07-06T15:33:00Z.
+  // If an older backend returns no timezone, treat it as UTC to avoid Render showing 8 hours behind Taiwan.
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(value)) {
+    value = value.replace(' ', 'T') + 'Z';
+  }
+
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    return datetimeString ? String(datetimeString).replace('T', ' ') : '';
+  }
+
+  const parts = new Intl.DateTimeFormat('zh-TW', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(d).reduce((acc, part) => {
+    acc[part.type] = part.value;
+    return acc;
+  }, {});
+
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function currentTaipeiTime() {
+  return formatTaipeiTime(new Date().toISOString());
+}
+
 
 function setRuleImportStatus(mode, title, text) {
   if (!ruleImportStatus) return;
@@ -1211,7 +1249,7 @@ async function refreshBomStep1Source() {
     const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'Module 1 Step 1 output';
-    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
+    const modified = formatTaipeiTime(data.modified_at);
     bomStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
   } catch (err) {
     bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
@@ -1381,7 +1419,7 @@ async function refreshModule3RawBulkSource() {
     const res = await fetch('/module3/raw-material-bulk-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'raw material bulk';
-    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
+    const modified = formatTaipeiTime(data.modified_at);
     module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
   } catch (err) {
     module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
@@ -2095,7 +2133,7 @@ ruleForm.onsubmit = async (e) => {
 
     const importedRuleSet = data.rule_set || selectedRuleSet;
     const count = data.count || 0;
-    const importedAt = new Date().toLocaleString('zh-TW', { hour12: false });
+    const importedAt = currentTaipeiTime();
 
     setRuleImportStatus(
       'success',

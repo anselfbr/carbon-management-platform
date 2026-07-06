@@ -4,7 +4,7 @@ import re
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,9 +27,14 @@ LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_V19_2_DETAIL_ALWAYS_OUTPUT_UI_CLEAN"
+CMP_MAIN_VERSION = "CMP_V19_3_TIMEZONE_FIX"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
+
+
+def format_file_mtime_utc(path: Path) -> str:
+    """Return file modified time as UTC ISO-8601 with timezone for browser conversion."""
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 RULE_SET_MAP = {
@@ -1805,7 +1810,7 @@ def module2_step1_output_source():
         "ok": True,
         "filename": step1_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": format_file_mtime_utc(step1_path),
         "download_url": f"/download/{step1_path.name}",
     }
 
@@ -1841,7 +1846,7 @@ def module3_raw_material_bulk_source():
         "ok": True,
         "filename": raw_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": format_file_mtime_utc(raw_path),
         "download_url": f"/download/{raw_path.name}",
     }
 
