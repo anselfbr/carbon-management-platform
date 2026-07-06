@@ -45,7 +45,7 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V15_0_RULE_MASTER_ENGINE_SITE_PREFIX_WHITELIST =====")
+print("===== CMP MAIN VERSION: DIP_V16_4_STEP2_AUTO_MODULE3_REFRESH_TW_TIME =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -70,7 +70,7 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
     try:
         report(1, "建立 CCL 係數對應工作", 45)
         summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path, progress_callback=report)
-        summary["app_version"] = "CMP_MODULE3_CCL_PERFORMANCE_V2"
+        summary["app_version"] = "DIP_MODULE3_CCL_PERFORMANCE_V2_TW_TIME"
         _set_module3_ccl_job(
             job_id,
             status="success",
@@ -1566,8 +1566,8 @@ def index(request: Request):
 def debug_version():
     return {
         "ok": True,
-        "app": "Carbon Management Platform",
-        "version": "PROCESS_MANUAL_FORM_V6_STEP2_AUTO_STEP1_TW_TIME",
+        "app": "Data Integration Platform",
+        "version": "PROCESS_MANUAL_FORM_V6_STEP2_AUTO_STEP1_MODULE3_REFRESH_TW_TIME",
         "process_endpoint": "manual form compatible",
         "supports": ["files multi-upload", "file single-upload", "Module 2 multi-BOM upload", "blank year", "BU rule library"],
     }
@@ -1654,28 +1654,34 @@ async def process(request: Request):
     return {"ok": True, "summary": summary, "download_url": f"/download/{output_path.name}"}
 
 
+
+@app.get("/step2/step1-output-source")
+def step2_step1_output_source():
+    return module2_step1_output_source()
+
 # =========================================================
 # Step 2 · Batch Data Formatting
 # Step1 Output + Bulk Template -> Formatted Product Activity Bulk
 # =========================================================
 @app.post("/generate-bulk-file")
 async def generate_bulk_file(
-    step1_file: UploadFile = File(...),
     template_file: UploadFile = File(...),
     working_hour_source: str = Form("direct"),
 ):
-    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
+    step1_path = _find_latest_module1_step1_output()
+    if step1_path is None:
+        return JSONResponse(
+            {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"},
+            status_code=400,
+        )
 
     if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
         return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
 
     token = uuid.uuid4().hex[:10]
 
-    step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(step1_file.filename).name}"
     template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
 
-    step1_path.write_bytes(await step1_file.read())
     template_path.write_bytes(await template_file.read())
 
     working_hour_source = str(working_hour_source or "direct").strip()
@@ -1700,6 +1706,8 @@ async def generate_bulk_file(
             bom_structure_path=bom_structure_path,
             working_hour_rollup_path=working_hour_rollup_path,
         )
+        summary["module1_step1_source_filename"] = step1_path.name
+        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -1804,10 +1812,8 @@ def module2_step1_output_source():
 def _find_latest_module2_raw_material_bulk() -> Path | None:
     """Return the newest Module 2 raw material bulk output.
 
-    Important:
-    Do not return the cached global path directly. Module 2 may generate a newer
-    raw_material_activity_data_bulk_*.xlsx after the page has already loaded, so
-    this function always compares file modified time and refreshes the cache.
+    Always compare file modified time instead of returning the cached global path
+    directly, so Module 3 can see a newly generated Module 2 file immediately.
     """
     global MODULE2_RAW_MATERIAL_BULK_PATH
     candidates: list[Path] = []
@@ -1831,7 +1837,6 @@ def _find_latest_module2_raw_material_bulk() -> Path | None:
     latest = max(unique_candidates, key=lambda p: p.stat().st_mtime)
     MODULE2_RAW_MATERIAL_BULK_PATH = latest
     return latest
-
 
 @app.get("/module3/raw-material-bulk-source")
 def module3_raw_material_bulk_source():

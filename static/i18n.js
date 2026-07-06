@@ -204,6 +204,9 @@
     "modulePcfNoticeText": {"en": "Reserved module. This area can be extended for product carbon footprint calculation.", "zh": "預留模組。此區可延伸為產品碳足跡計算。"},
     "bomExpansionPageLead": {"en": "Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.", "zh": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。"},
     "module3RawBulkSourceTitle": {"en": "Raw Material Activity Data", "zh": "Raw Material Activity Data"},
+    "uploadAnnualOutputClassificationResult": {"en": "Annual Product Output & Classification Result", "zh": "上傳年度產品產量與分類結果"},
+    "pleaseCompleteModule1Step1First": {"en": "Please complete Module 1 → Step 1 first.", "zh": "請先完成 Module 1 → Step 1。"},
+    "bulkStatusAutoStep1": {"en": "The system will automatically use the latest Module 1 Step 1 output. Upload the Bulk template to start processing.", "zh": "系統會自動使用 Module 1 Step 1 最新產出的年度產品產量與分類結果，請上傳 Bulk 範本檔後開始處理。"},
     "pcfCalculation": {
         "en": "PCF Calculation",
         "zh": "產品碳足跡計算"
@@ -301,8 +304,8 @@
         "zh": "步驟 2 · 批次資料格式化"
     },
     "convertStep1OutputBulkTemplate": {
-        "en": "Convert Step 1 output and batch file template into a standardized batch file.",
-        "zh": "將 Step 1 輸出與批次範本轉換為標準化批次檔。"
+        "en": "Convert the latest Step 1 output and batch file template into a standardized batch file.",
+        "zh": "將最新 Step 1 輸出與批次範本轉換為標準化批次檔。"
     },
     "step2": {
         "en": "Step 2",
@@ -333,8 +336,8 @@
         "zh": "可供後續處理"
     },
     "uploadStep1OutputFile": {
-        "en": "Upload Step 1 Output File",
-        "zh": "上傳 Step 1 輸出檔"
+        "en": "Annual Product Output & Classification Result",
+        "zh": "上傳年度產品產量與分類結果"
     },
     "uploadBulkTemplateFile": {
         "en": "Upload Bulk Template File",
@@ -369,8 +372,8 @@
         "zh": "下載 Bulk ZIP 檔"
     },
     "step2Hint": {
-        "en": "Step 2 extracts required fields from the Step 1 output and writes them into the bulk template. Activity Data and Products sheets will be populated automatically.",
-        "zh": "Step 2 會從 Step 1 輸出擷取必要欄位並寫入 Bulk 範本。系統會自動填入 Activity Data 與 Products 分頁。"
+        "en": "Step 2 automatically uses the latest Module 1 Step 1 output and writes required fields into the bulk template. Activity Data and Products sheets will be populated automatically.",
+        "zh": "Step 2 會自動取用 Module 1 Step 1 最新產出的年度產品產量與分類結果，並將必要欄位寫入 Bulk 範本。系統會自動填入 Activity Data 與 Products 分頁。"
     },
     "executionLog": {
         "en": "Execution Log",
