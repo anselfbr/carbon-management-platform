@@ -2119,8 +2119,8 @@ async def process_bom_expansion(request: Request):
                 step1_output_path=step1_path,
                 mapping=mapping,
                 supplier_paths=supplier_paths,
-                supplier_bulk_template_path=supplier_bulk_template_path,
-                supplier_bulk_output_path=supplier_bulk_output_path,
+                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
+                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
             )
             output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
             summary["module1_step1_source_filename"] = step1_path.name
@@ -2132,8 +2132,8 @@ async def process_bom_expansion(request: Request):
                 output_path=output_path,
                 mapping=mapping,
                 supplier_paths=supplier_paths,
-                supplier_bulk_template_path=supplier_bulk_template_path,
-                supplier_bulk_output_path=supplier_bulk_output_path,
+                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
+                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
             )
         bom_structure_summary = export_bom_structure_file(
             bom_path=bom_paths,
@@ -2175,7 +2175,16 @@ async def process_bom_expansion(request: Request):
             summary["raw_material_bulk_download_url"] = f"/download/{output_path.name}"
 
         summary["supplier_upload_files"] = len(supplier_paths)
-        summary["app_version"] = "CMP_V16_1_MODULE2_AUTO_STEP1_SOURCE"
+        if not supplier_paths:
+            summary["supplier_bulk_filename"] = ""
+            summary["supplier_bulk_download_url"] = ""
+            summary["supplier_bulk_rows"] = 0
+            summary["supplier_bulk_generated"] = False
+            summary["supplier_status"] = "Not Uploaded"
+        else:
+            summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
+            summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
+        summary["app_version"] = "CMP_V16_2_SUPPLIER_BULK_OPTIONAL"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -2187,7 +2196,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V16_1_MODULE2_AUTO_STEP1_SOURCE",
+        "app_version": "CMP_V16_2_SUPPLIER_BULK_OPTIONAL",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
