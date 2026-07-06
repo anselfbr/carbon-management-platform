@@ -2552,3 +2552,242 @@ select:focus {
   color: #475569;
   font-size: 0.92rem;
 }
+
+
+/* =========================================================
+   CMP_V19_4_RESPONSIVE_SIDEBAR_FIX
+   Sidebar responsive layout:
+   - prevent bottom environment card from covering module buttons
+   - allow module navigation to scroll within available viewport height
+   - compact spacing on short screens / zoomed browser
+   ========================================================= */
+
+.sidebar {
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.side-nav {
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  padding-bottom: 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(183, 199, 216, .45) transparent;
+}
+
+.side-nav::-webkit-scrollbar {
+  width: 6px;
+}
+
+.side-nav::-webkit-scrollbar-thumb {
+  background: rgba(183, 199, 216, .35);
+  border-radius: 999px;
+}
+
+.system-card {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  align-self: end;
+}
+
+.logo-block,
+.sidebar-top-actions,
+.system-card {
+  flex-shrink: 0;
+}
+
+.sidebar-expanded .sub-nav,
+.sidebar-expanded .module3-sub-nav {
+  flex-shrink: 0;
+}
+
+/* Compact vertical rhythm when viewport height is limited or browser is zoomed */
+@media (max-height: 820px) {
+  .sidebar {
+    padding: 14px 16px;
+    gap: 10px;
+  }
+
+  .sidebar-top-actions {
+    gap: 10px;
+  }
+
+  .menu-toggle,
+  .home-toggle,
+  .lang-toggle {
+    width: 42px;
+    height: 42px;
+    min-width: 42px;
+    min-height: 42px;
+    border-radius: 13px;
+  }
+
+  .logo-block {
+    min-height: 52px;
+    gap: 12px;
+  }
+
+  .logo-mark {
+    width: 50px;
+    height: 50px;
+    min-width: 50px;
+    min-height: 50px;
+  }
+
+  .nav-label {
+    margin: 2px 12px 4px;
+  }
+
+  .side-nav {
+    gap: 5px;
+    padding-bottom: 8px;
+  }
+
+  .nav-item {
+    min-height: 48px;
+    max-height: none;
+    padding: 8px 10px;
+    grid-template-columns: 22px 34px minmax(0, 1fr);
+    gap: 8px;
+    border-radius: 13px;
+  }
+
+  .module-index {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+    min-height: 22px;
+    font-size: 11px;
+  }
+
+  .nav-icon {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+    border-radius: 11px;
+    font-size: 16px;
+  }
+
+  .nav-text b {
+    font-size: 13px;
+    line-height: 1.15;
+  }
+
+  .sub-nav,
+  .sidebar-expanded .sub-nav,
+  .sidebar-expanded .module3-sub-nav {
+    margin-left: 62px;
+    gap: 3px;
+  }
+
+  .sub-nav-item,
+  .sidebar-expanded .sub-nav .sub-nav-item,
+  .sidebar-expanded .module3-sub-nav .sub-nav-item {
+    min-height: 28px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  .system-card {
+    min-height: 58px;
+    max-height: 70px;
+    padding: 10px;
+    border-radius: 13px;
+  }
+
+  .system-card b {
+    font-size: 13px;
+  }
+
+  .system-card p {
+    font-size: 11px;
+    margin-top: 3px;
+  }
+}
+
+@media (max-height: 700px) {
+  .sidebar {
+    padding: 10px 14px;
+    gap: 7px;
+  }
+
+  .logo-block {
+    min-height: 46px;
+  }
+
+  .logo-mark {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: 12px;
+  }
+
+  .logo-title {
+    font-size: 13px;
+  }
+
+  .logo-subtitle {
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  .nav-item {
+    min-height: 42px;
+    padding: 6px 9px;
+    grid-template-columns: 20px 30px minmax(0, 1fr);
+    gap: 7px;
+  }
+
+  .module-index {
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    font-size: 10px;
+  }
+
+  .nav-icon {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    min-height: 30px;
+    font-size: 15px;
+  }
+
+  .nav-text b {
+    font-size: 12px;
+  }
+
+  .sub-nav,
+  .sidebar-expanded .sub-nav,
+  .sidebar-expanded .module3-sub-nav {
+    margin-left: 54px;
+  }
+
+  .system-card {
+    min-height: 50px;
+    max-height: 62px;
+    padding: 8px 10px;
+  }
+}
+
+/* Collapsed sidebar also scrolls safely on small screens */
+.app-shell:not(.sidebar-expanded) .side-nav {
+  overflow-y: auto;
+  padding-right: 0;
+}
+
+.app-shell:not(.sidebar-expanded) .nav-item {
+  flex-shrink: 0;
+}
