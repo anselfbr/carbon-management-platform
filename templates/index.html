@@ -597,8 +597,10 @@
               <label data-i18n="uploadRawMaterialBulkTemplate">Upload Raw Material Bulk Template</label>
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
-              <label data-i18n="uploadStep1OutputForRollup">Upload Step 1 Output File for Working Hour Roll-up</label>
-              <input id="bomStep1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" />
+              <div id="bomStep1Source" class="module3-source-card">
+                <b>Step 1 Output for Working Hour Roll-up</b>
+                <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+              </div>
 
               <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
               <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
@@ -895,6 +897,7 @@ const bomStatusText = document.getElementById('bomStatusText');
 const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
+const bomStep1SourceText = document.getElementById('bomStep1SourceText');
 const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
 const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
@@ -1148,6 +1151,7 @@ function activateBomPage() {
   pageLead.textContent = 'Expand multi-level BOM structures, roll up raw material quantities, and generate raw material bulk files.';
   pageLead.style.display = 'block';
   cmpApplyI18n();
+  refreshBomStep1Source();
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
 }
 
@@ -1159,6 +1163,21 @@ function setBomProcessingState(mode, title, text, timeText, progress) {
   bomStatusTime.textContent = timeText;
   bomProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   cmpApplyI18n();
+}
+
+
+
+async function refreshBomStep1Source() {
+  if (!bomStep1SourceText) return;
+  try {
+    const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
+    const data = await readJsonOrThrow(res);
+    const filename = data.filename || 'Module 1 Step 1 output';
+    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
+    bomStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
+  } catch (err) {
+    bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
+  }
 }
 
 function startBomEstimatedProgress() {
@@ -1263,6 +1282,7 @@ bomForm.addEventListener('submit', async (e) => {
   bomLog.textContent = cmpT('processingBomExpansion', 'Processing BOM Expansion...');
 
   startBomEstimatedProgress();
+  await refreshBomStep1Source();
 
   const fd = new FormData(bomForm);
 
@@ -1372,6 +1392,7 @@ if (module3CclForm) {
     }
     setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(30), 3);
     await refreshModule3RawBulkSource();
+refreshBomStep1Source();
     const fd = new FormData(module3CclForm);
     try {
       const res = await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: fd });
@@ -1386,6 +1407,7 @@ if (module3CclForm) {
 }
 
 refreshModule3RawBulkSource();
+refreshBomStep1Source();
 
 function formatModule3EmissionFactorUnit(unit) {
   const rawUnit = String(unit || '').trim();

@@ -1765,6 +1765,40 @@ def download_product_series_master(rule_set: str = DEFAULT_RULE_SET):
 
 
 
+def _find_latest_module1_step1_output() -> Path | None:
+    """Return the most recent Module 1 Step 1 output file for Module 2 roll-up."""
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for pattern in ["年度產品產量與分類結果_v6_*.xlsx", "年度產品產量與分類結果*.xlsx"]:
+        for path in OUTPUT_DIR.glob(pattern):
+            if path in seen:
+                continue
+            seen.add(path)
+            if path.name.startswith("~$"):
+                continue
+            if path.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
+                candidates.append(path)
+    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+
+@app.get("/module2/step1-output-source")
+def module2_step1_output_source():
+    step1_path = _find_latest_module1_step1_output()
+    if not step1_path:
+        return {
+            "ok": False,
+            "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。",
+        }
+    stat = step1_path.stat()
+    return {
+        "ok": True,
+        "filename": step1_path.name,
+        "size_bytes": stat.st_size,
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "download_url": f"/download/{step1_path.name}",
+    }
+
+
 def _find_latest_module2_raw_material_bulk() -> Path | None:
     """Return the most recent Module 2 raw material bulk output without creating a duplicate latest file."""
     global MODULE2_RAW_MATERIAL_BULK_PATH
@@ -2026,12 +2060,6 @@ async def process_bom_expansion(request: Request):
             status_code=400,
         )
 
-    if step1_file is not None and getattr(step1_file, "filename", None):
-        if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse(
-                {"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"},
-                status_code=400,
-            )
 
     for supplier_file in supplier_uploads:
         filename = str(getattr(supplier_file, "filename", "") or "")
@@ -2055,13 +2083,15 @@ async def process_bom_expansion(request: Request):
     working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{token}.xlsx"
     supplier_bulk_template_path = BASE_DIR / "templates" / "supplier_bulk_create_template_v1.xlsx"
     supplier_bulk_output_path = OUTPUT_DIR / f"supplier_bulk_create_{token}.xlsx"
-    step1_path = None
+    step1_path = _find_latest_module1_step1_output()
     supplier_paths: list[Path] = []
 
     template_path.write_bytes(await template_file.read())
-    if step1_file is not None and getattr(step1_file, "filename", None):
-        step1_path = UPLOAD_DIR / f"step1_for_rollup_{token}_{Path(step1_file.filename).name}"
-        step1_path.write_bytes(await step1_file.read())
+    if step1_path is None:
+        return JSONResponse(
+            {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"},
+            status_code=400,
+        )
 
     for idx, supplier_file in enumerate(supplier_uploads, start=1):
         filename = str(getattr(supplier_file, "filename", "") or f"supplier_{idx}.xlsx")
@@ -2093,6 +2123,8 @@ async def process_bom_expansion(request: Request):
                 supplier_bulk_output_path=supplier_bulk_output_path,
             )
             output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
+            summary["module1_step1_source_filename"] = step1_path.name
+            summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
         else:
             summary = generate_raw_material_bulk_file(
                 bom_path=bom_paths,
@@ -2143,7 +2175,7 @@ async def process_bom_expansion(request: Request):
             summary["raw_material_bulk_download_url"] = f"/download/{output_path.name}"
 
         summary["supplier_upload_files"] = len(supplier_paths)
-        summary["app_version"] = "CMP_V16_0_SUPPLIER_MASTER_CLEAN_PATCH"
+        summary["app_version"] = "CMP_V16_1_MODULE2_AUTO_STEP1_SOURCE"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -2155,7 +2187,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V16_0_SUPPLIER_MASTER_CLEAN_PATCH",
+        "app_version": "CMP_V16_1_MODULE2_AUTO_STEP1_SOURCE",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
