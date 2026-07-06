@@ -14,7 +14,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_PERFORMANCE_V2_20260704"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_CCL_FACTORNAME_V1_20260706"
 
 
 def _norm(value: Any) -> str:
@@ -108,6 +108,7 @@ def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[..., Non
         # CCL 對照表正式固定欄位：Material / CCL Item / 碳係數 / 係數單位
         material_col = _find_col_in_header_row(ws, header_row, ["Material"])
         ccl_item_col = _find_col_in_header_row(ws, header_row, ["CCL Item"])
+        factor_name_col = _find_col_in_header_row(ws, header_row, ["係數名稱"], required=False)
         factor_col = _find_col_in_header_row(ws, header_row, ["碳係數"])
         unit_col = _find_col_in_header_row(ws, header_row, ["係數單位"], required=False)
 
@@ -132,6 +133,7 @@ def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[..., Non
             mapping[key] = {
                 "material": material,
                 "ccl_item": _text(values[ccl_item_col - 1] if len(values) >= ccl_item_col else None),
+                "factor_name": _text(values[factor_name_col - 1] if factor_name_col and len(values) >= factor_name_col else ""),
                 "emission_factor": safe_factor if safe_factor is not None else factor_value,
                 "unit": _text(unit_value),
             }
@@ -211,12 +213,12 @@ def apply_ccl_factors_to_raw_material_bulk(
             unmatched += 1
             continue
 
-        ws.cell(row, cols["factor_name"]).value = item["ccl_item"]
+        ws.cell(row, cols["factor_name"]).value = item.get("factor_name") or item["ccl_item"]
         ws.cell(row, cols["emission_factor"]).value = item["emission_factor"]
         if cols["factor_source"]:
-            ws.cell(row, cols["factor_source"]).value = "CCL library"
+            ws.cell(row, cols["factor_source"]).value = "Ecoinvent"
         if cols["factor_comment"]:
-            ws.cell(row, cols["factor_comment"]).value = "無"
+            ws.cell(row, cols["factor_comment"]).value = "CCLibrary"
         if cols["country"]:
             ws.cell(row, cols["country"]).value = "GLO"
         if cols["enabled_date"]:
