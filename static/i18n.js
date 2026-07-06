@@ -1034,25 +1034,7 @@
   }
 
   function translateString(input, targetLang) {
-    if (!input || isSkippableText(input)) return input;
-    if (targetLang === "zh" && (/Ecoinvent.*係數資料庫/.test(input) || /CCLibrary.*係數資料庫/.test(input) || /資料整合平台/.test(input))) return input;
-
-    const dict = targetLang === "zh" ? phraseZh : {};
-    let output = String(input);
-
-    const normalized = output.replace(/\s+/g, " ").trim();
-    if (dict[normalized]) {
-      return output.replace(output.trim(), dict[normalized]);
-    }
-
-    Object.keys(dict)
-      .sort(function (a, b) { return b.length - a.length; })
-      .forEach(function (key) {
-        if (!key) return;
-        output = output.split(key).join(dict[key]);
-      });
-
-    return output;
+    return input;
   }
 
   function translateKeyedElements(targetLang) {
@@ -1101,38 +1083,19 @@
   }
 
   function translateTextNodes(root, targetLang) {
-    const walker = document.createTreeWalker(root || document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode: function (node) {
-        const parent = node.parentElement;
-        if (!parent) return NodeFilter.FILTER_REJECT;
-        if (parent.closest("script, style")) return NodeFilter.FILTER_REJECT;
-        if (parent.closest("select")) return NodeFilter.FILTER_REJECT;
-        if (parent.closest(".processing-status")) return NodeFilter.FILTER_REJECT;
-        if (parent.closest("[data-i18n], [data-i18n-dynamic]")) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      }
-    });
-
-    const nodes = [];
-    while (walker.nextNode()) nodes.push(walker.currentNode);
-
-    nodes.forEach(function (node) {
-      node.nodeValue = translateString(node.nodeValue, targetLang);
-    });
+    return;
   }
 
   function translateAttributes(targetLang) {
-    document.querySelectorAll("[placeholder]:not([data-i18n-placeholder])").forEach(function (el) {
-      el.setAttribute("placeholder", translateString(el.getAttribute("placeholder"), targetLang));
-    });
-
-    document.querySelectorAll("[aria-label]").forEach(function (el) {
-      if (el.id === "langToggle") return;
-      el.setAttribute("aria-label", translateString(el.getAttribute("aria-label"), targetLang));
+    document.querySelectorAll("[data-i18n-aria-label]").forEach(function (el) {
+      const key = el.getAttribute("data-i18n-aria-label");
+      if (keyed[key] && keyed[key][targetLang]) {
+        el.setAttribute("aria-label", keyed[key][targetLang]);
+      }
     });
 
     if (document.title) {
-      document.title = translateString(document.title, targetLang);
+      document.title = targetLang === "zh" ? "資料整合平台" : "Data Integration Platform (DIP)";
     }
   }
 
@@ -1172,28 +1135,7 @@
 
   const observer = new MutationObserver(function (mutations) {
     if (isApplying) return;
-
     window.setTimeout(function () {
-      mutations.forEach(function (mutation) {
-        mutation.addedNodes.forEach(function (node) {
-          if (node.nodeType === Node.TEXT_NODE) {
-            node.nodeValue = translateString(node.nodeValue, currentLang);
-          } else if (node.nodeType === Node.ELEMENT_NODE) {
-            if (!node.closest || (!node.closest(".processing-status") && !node.closest("[data-i18n-dynamic]"))) {
-              translateKeyedElements(currentLang);
-              translateTextNodes(node, currentLang);
-            }
-          }
-        });
-
-        if (mutation.type === "characterData" && mutation.target && mutation.target.nodeType === Node.TEXT_NODE) {
-          const p = mutation.target.parentElement;
-          if (!p || !p.closest(".processing-status")) {
-            mutation.target.nodeValue = translateString(mutation.target.nodeValue, currentLang);
-          }
-        }
-      });
-
       translateKeyedElements(currentLang);
       translateAttributes(currentLang);
       normalizeSelectOptions();
@@ -1202,8 +1144,7 @@
 
   observer.observe(document.body, {
     childList: true,
-    subtree: true,
-    characterData: true
+    subtree: true
   });
 
   applyLanguage(currentLang);
