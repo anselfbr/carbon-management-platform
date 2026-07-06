@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
+import gc
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, Request, UploadFile
@@ -14,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_module2_outputs_memory_optimized
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -2110,65 +2111,27 @@ async def process_bom_expansion(request: Request):
     }
 
     try:
-        if step1_path is not None:
-            summary = generate_raw_material_bulk_files_by_site_zip(
-                bom_path=bom_paths,
-                raw_material_template_path=template_path,
-                output_dir=OUTPUT_DIR,
-                token=token,
-                step1_output_path=step1_path,
-                mapping=mapping,
-                supplier_paths=supplier_paths,
-                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
-                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
-                bom_structure_output_path=LATEST_BOM_STRUCTURE_PATH,
-                working_hour_rollup_output_path=working_hour_rollup_output_path,
-            )
-            output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
-            summary["module1_step1_source_filename"] = step1_path.name
-            summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
-        else:
-            summary = generate_raw_material_bulk_file(
-                bom_path=bom_paths,
-                raw_material_template_path=template_path,
-                output_path=output_path,
-                mapping=mapping,
-                supplier_paths=supplier_paths,
-                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
-                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
-            )
-        if not summary.get("bom_structure_latest"):
-            bom_structure_summary = export_bom_structure_file(
-                bom_path=bom_paths,
-                output_path=LATEST_BOM_STRUCTURE_PATH,
-                mapping=mapping,
-            )
-            summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
-            summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
-            summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
-            summary["bom_files"] = int(bom_structure_summary.get("bom_files", summary.get("bom_files", len(bom_paths))))
-            summary["bom_rows_before_dedup"] = int(bom_structure_summary.get("bom_rows_before_dedup", summary.get("bom_rows_before_dedup", 0)))
-            summary["bom_rows_after_dedup"] = int(bom_structure_summary.get("bom_rows_after_dedup", summary.get("bom_rows_after_dedup", 0)))
-            summary["bom_duplicate_rows_removed"] = int(bom_structure_summary.get("bom_duplicate_rows_removed", summary.get("bom_duplicate_rows_removed", 0)))
+        # Module 2 Memory Optimization V1:
+        # Generate Raw Material ZIP + BOM Structure + Working Hour Roll-up in one path,
+        # so Standard BOM is loaded and normalized only once.
+        summary = generate_module2_outputs_memory_optimized(
+            bom_path=bom_paths,
+            raw_material_template_path=template_path,
+            output_dir=OUTPUT_DIR,
+            token=token,
+            step1_output_path=step1_path,
+            bom_structure_output_path=LATEST_BOM_STRUCTURE_PATH,
+            working_hour_rollup_output_path=working_hour_rollup_output_path,
+            mapping=mapping,
+            supplier_paths=supplier_paths,
+            supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
+            supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
+        )
+        output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
+        summary["module1_step1_source_filename"] = step1_path.name
+        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
 
-        if step1_path is not None and not summary.get("working_hour_rollup_filename"):
-            rollup_summary = generate_working_hour_rollup_file(
-                step1_output_path=step1_path,
-                bom_structure_path=LATEST_BOM_STRUCTURE_PATH,
-                output_path=working_hour_rollup_output_path,
-            )
-            summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
-            summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
-            summary["working_hour_rollup_rows"] = int(rollup_summary.get("summary_rows", 0))
-            summary["working_hour_rollup_detail_rows"] = int(rollup_summary.get("detail_rows", 0))
-            summary["working_hour_rollup_total_direct_hours"] = float(rollup_summary.get("total_direct_hours", 0))
-            summary["working_hour_rollup_total_semi_hours"] = float(rollup_summary.get("total_semi_hours", 0))
-            summary["working_hour_rollup_total_hours"] = float(rollup_summary.get("total_hours", 0))
-        elif step1_path is None:
-            summary["working_hour_rollup_filename"] = ""
-            summary["working_hour_rollup_download_url"] = ""
-            summary["working_hour_rollup_rows"] = 0
-
+        # Keep latest roll-up alias for downstream modules / UI compatibility.
         if working_hour_rollup_output_path.exists():
             LATEST_WORKING_HOUR_ROLLUP_PATH.write_bytes(working_hour_rollup_output_path.read_bytes())
             summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name
@@ -2201,7 +2164,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V16_2_SUPPLIER_BULK_OPTIONAL",
+        "app_version": "CMP_V17_4_MODULE2_MEMORY_OPT_V1",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
