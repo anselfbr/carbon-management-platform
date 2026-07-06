@@ -428,7 +428,7 @@
             <div class="section-title">
               <div>
                 <h2 data-i18n="module3Title">模組 3 · 碳排放係數選擇</h2>
-                <p data-i18n="module3Stage1Placeholder">模組3 入口頁面。請選擇以CCL 係數帶入或查詢Ecoinvent係數資料庫，進入各自專區。</p>
+                <p data-i18n="module3Stage1Placeholder">第一階段預留頁面。此頁面保留給 CCL 係數對應與係數資料庫查詢功能。</p>
               </div>
               <span class="step-chip" data-i18n="stage1">第一階段</span>
             </div>
@@ -456,7 +456,7 @@
 
           <section class="card insight-card module3-policy-card">
             <h2 data-i18n="module3IntegrationPolicy">模組 3 整合原則</h2>
-            <p data-i18n="module3IntegrationPolicyDesc">CCL係數資料庫專區以原物料料號對應，帶入CCL Item和碳係數；Ecoinvent係數資料庫專區主要為查詢功能，未來將導入建議係數功能。</p>
+            <p data-i18n="module3IntegrationPolicyDesc">此頁面目前只建立 A/B 專區入口，不呼叫任何後端 API。此版本不變更模組 1 與模組 2 的路由、表單、Excel 邏輯與輸出檔。</p>
           </section>
         </section>
       </section>
@@ -1127,7 +1127,7 @@ function activateFactorPage(pageId = 'factor-selection') {
   moduleNotice.classList.add('hidden');
   const titleKey = pageId === 'module3-ccl-mapping' ? 'module3CclZoneTitle' : (pageId === 'module3-factor-library' ? 'module3LibraryZoneTitle' : 'carbonEmissionFactorSelection');
   const leadKey = pageId === 'module3-ccl-mapping' ? 'module3CclZoneLead' : (pageId === 'module3-factor-library' ? 'module3LibraryZoneLead' : 'module3PageLead');
-  pageTitle.textContent = window.CMPI18N ? window.CMPI18N.t(titleKey, '碳排放係數選擇') : '碳排放係數選擇';
+  pageTitle.textContent = window.CMPI18N ? window.CMPI18N.t(titleKey, 'Carbon Emission Factor Selection') : 'Carbon Emission Factor Selection';
   pageLead.textContent = window.CMPI18N ? window.CMPI18N.t(leadKey, '') : '';
   pageLead.style.display = pageLead.textContent ? 'block' : 'none';
   cmpApplyI18n();
