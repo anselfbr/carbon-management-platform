@@ -17,7 +17,7 @@ from openpyxl import load_workbook, Workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
+BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
 
 
 DEFAULT_MAPPING = {
@@ -168,14 +168,13 @@ def _usage_probability_ratio(value: Any) -> float | None:
 def _apply_altitem_usage_probability(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Apply SAP Alternative Item usage probability to CS03 quantity.
 
-    CMP rule confirmed for Module 2A:
+    CMP Module 2A rule:
     - If Altitem Group has a value, effective quantity = CS03 Qty × Usage probability%.
     - If Altitem Group is blank, effective quantity = CS03 Qty.
 
-    This rule is intentionally not limited to duplicated Altitem Group rows.
-    SAP exports may contain only one visible row for an alternative group after
-    filtering/deduplication, but the row is still an alternative item and should
-    use its Usage probability when the Altitem Group is present.
+    The adjusted ``_qty`` is then used by every downstream BOM expansion step,
+    so the exported Expanded BOM Master Usage is the final raw-material usage
+    after semi-finished products are fully exploded and aggregated.
     """
     work = df
     if "_altitem_group" not in work.columns:
@@ -200,8 +199,8 @@ def _apply_altitem_usage_probability(df: pd.DataFrame) -> tuple[pd.DataFrame, di
     has_probability = work["_usage_probability_ratio"].apply(lambda x: x is not None)
     apply_mask = alt_mask & has_probability
 
-    # Only rows with a non-empty Altitem Group use Usage probability%.
-    # Blank Altitem Group rows remain unchanged even when Usage probability exists.
+    # Only non-empty Altitem Group rows use Usage probability%.
+    # Blank Altitem Group rows remain as CS03 Qty even if Usage probability exists.
     work.loc[apply_mask, "_qty"] = (
         work.loc[apply_mask, "_qty"].astype(float)
         * work.loc[apply_mask, "_usage_probability_ratio"].astype(float)
@@ -2160,7 +2159,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
+BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
 
 
 # =========================================================
@@ -2810,7 +2809,7 @@ def _calculate_total_working_hour_by_target(
 # - Module 3 can directly select one generated site workbook.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
+BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
 
 RAW_MATERIAL_ACTIVITY_HEADERS_V23_4 = [
     "Raw Material Name", "Raw Material Code", "Doc. Start Date", "Doc. End Date",
@@ -3167,7 +3166,7 @@ def generate_module2_outputs_memory_optimized(
 # - Keep Module 3 site-file selection compatible.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
+BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
 
 
 def _template_layout_for_fast_raw_only(template_path: str | Path) -> dict[str, Any]:
@@ -3531,7 +3530,7 @@ def generate_module2_outputs_memory_optimized(
 # - Keep Module 3 compatible: site-specific Raw Material Bulk xlsx files.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
+BOM_FORMATTER_VERSION = "CMP_V24_0_SUPPLIER_RESTORE_EFFICIENT_ONE_STEP"
 
 
 def _write_raw_material_bulk_from_exploded_fast_raw_only(
@@ -3878,7 +3877,7 @@ def generate_module2_outputs_memory_optimized(
 # C. Raw Material Bulk + Supplier Files -> Supplier-expanded Raw Material Bulk + Supplier Bulk Create
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
+BOM_FORMATTER_VERSION = "CMP_V25_0_4_EXPANDED_USAGE_FINAL"
 EXPANDED_BOM_MASTER_SHEET_NAME = "Expanded BOM Master"
 
 
@@ -3929,6 +3928,43 @@ def _read_expanded_bom_master(path: str | Path) -> pd.DataFrame:
     return df[["target_product", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "net_weight", "gross_weight", "weight_uom", "level"]]
 
 
+def _finalize_expanded_bom_master_usage(exploded: pd.DataFrame) -> pd.DataFrame:
+    """Ensure Module 2A Usage is final raw-material usage.
+
+    Usage in Expanded BOM Master must equal the final calculated usage after:
+    1) Altitem Group effective quantity is applied at each BOM edge;
+    2) all semi-finished products are fully exploded to raw materials;
+    3) the same Target Product + Raw Material + Unit rows are summed.
+
+    This final aggregation is intentionally repeated here as a safety guard,
+    even though the fast BOM engine already aggregates during traversal.
+    """
+    if exploded is None or exploded.empty:
+        return pd.DataFrame(columns=[
+            "target_product", "raw_material", "usage", "unit", "description",
+            "material_group", "valid_from", "net_weight", "gross_weight",
+            "weight_uom", "level"
+        ])
+
+    work = exploded.copy()
+    work["usage"] = work["usage"].apply(_safe_number)
+    return (
+        work.groupby(["target_product", "raw_material", "unit"], dropna=False, as_index=False)
+        .agg({
+            "usage": "sum",
+            "description": "first",
+            "material_group": "first",
+            "valid_from": "first",
+            "net_weight": "first",
+            "gross_weight": "first",
+            "weight_uom": "first",
+            "level": "max",
+        })
+        .sort_values(["target_product", "raw_material"])
+        .reset_index(drop=True)
+    )
+
+
 def generate_expanded_bom_master_file(
     bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
     output_path: str | Path,
@@ -3944,10 +3980,14 @@ def generate_expanded_bom_master_file(
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
     try:
         exploded, summary = _explode_bom(bom_df)
+        # Module 2A output Usage must be the final raw-material usage after BOM explosion.
+        # Re-aggregate here as a final safety guard before writing Expanded BOM Master.
+        exploded = _finalize_expanded_bom_master_usage(exploded)
         exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
         summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
         summary["activity_rows"] = int(len(exploded))
         summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+        summary["expanded_bom_master_usage_definition"] = "Final raw-material usage after all semi-finished BOM levels are exploded and Target Product + Raw Material + Unit rows are summed."
         output_df = exploded.rename(columns={
             "target_product": "Target Product",
             "raw_material": "Raw Material",
