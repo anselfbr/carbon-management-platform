@@ -606,7 +606,7 @@
               <input id="bomStep1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" />
               <p class="form-hint" data-i18n="bomStep1FileHint">Required for the first Module 2 run. If left blank later, the system reuses the latest uploaded Step 1 Output in this session.</p>
 
-              <p class="form-hint" data-i18n="module2SupplierSplitHint">Supplier mapping has been separated into Module 2B to reduce memory usage. Please run BOM Expansion first, then use the all-sites Raw Material Bulk in Supplier Mapping.</p>
+              <p class="form-hint" data-i18n="module2SupplierSplitHint">Supplier mapping has been separated into Module 2B. V22.8 also splits Raw Material Bulk into part files when output exceeds Excel row limits.</p>
 
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⌘</span>
@@ -629,7 +629,7 @@
             </div>
 
             <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk ZIP</span></a>
-            <a id="allSitesRawBulkDownload" class="download disabled" href="#"><span data-i18n="downloadAllSitesRawMaterialBulk">Download All-sites Raw Material Bulk for Module 3 / Supplier Mapping</span></a>
+            <a id="allSitesRawBulkDownload" class="download disabled" href="#"><span data-i18n="downloadAllSitesRawMaterialBulk">Download All-sites Raw Material Bulk / Parts</span></a>
             <a id="workingHourRollupDownload" class="download disabled" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
 
             <div class="divider"></div>
@@ -1392,8 +1392,8 @@ bomForm.addEventListener('submit', async (e) => {
 
     bomDownload.href = data.download_url;
     bomDownload.classList.remove('disabled');
-    if (allSitesRawBulkDownload && data.summary && data.summary.all_sites_download_url) {
-      allSitesRawBulkDownload.href = data.summary.all_sites_download_url;
+    if (allSitesRawBulkDownload && data.summary && (data.summary.all_sites_download_url || data.summary.all_sites_zip_download_url)) {
+      allSitesRawBulkDownload.href = data.summary.all_sites_download_url || data.summary.all_sites_zip_download_url;
       allSitesRawBulkDownload.classList.remove('disabled');
     }
     if (workingHourRollupDownload && data.summary && data.summary.working_hour_rollup_download_url) {
