@@ -2925,3 +2925,193 @@ def _write_raw_material_bulk_from_exploded(
     return result
 
 BOM_FORMATTER_VERSION = "CMP_V23_2_ONE_STEP_SUPPLIER_MERGED"
+
+# =========================================================
+# CMP_V23_3_XLSXWRITER_CONSTANT_MEMORY
+# True memory-safe Module 2 writer:
+# - Do NOT copy/load the full raw-material template workbook.
+# - Do NOT use openpyxl normal load_workbook/save for large output.
+# - Do NOT build a fully supplier-expanded DataFrame in memory.
+# - Stream rows directly to XLSX using xlsxwriter constant_memory.
+# =========================================================
+import xlsxwriter as _cmp_xlsxwriter
+
+CMP_XLSXWRITER_ACTIVITY_HEADERS = [
+    "Raw Material Name", "Raw Material Code", "Doc. Start Date", "Doc. End Date",
+    "Document Type", "Document Number (optional)", "Usage", "Activity Data Unit",
+    "", "", "", "Data Source", "Data Source Other", "Supplier Name (optional)",
+    "Transportation Origin", "Transportation Destination", "Allocated Target Product/Service",
+    "Comment (optional)", "Material Group", "Net Weight (optional)",
+    "Gross Weight (optional)", "Weight Unit (optional)",
+]
+
+CMP_XLSXWRITER_RAW_HEADERS = [
+    "Raw Material Name", "Raw Material Code", "", "", "", "Raw Material Description (Optional)",
+]
+
+
+def _xlsxwriter_write_row(ws, row_idx: int, values: list[Any], date_fmt=None) -> None:
+    for col_idx, value in enumerate(values):
+        if isinstance(value, date):
+            ws.write_datetime(row_idx, col_idx, datetime(value.year, value.month, value.day), date_fmt)
+        else:
+            ws.write(row_idx, col_idx, value)
+
+
+def _write_raw_material_bulk_from_exploded(
+    exploded: pd.DataFrame,
+    raw_material_template_path: str | Path,
+    output_path: str | Path,
+    supplier_map: dict[str, list[dict[str, str]]] | None = None,
+    return_expanded: bool = False,
+) -> Dict[str, Any] | tuple[Dict[str, Any], pd.DataFrame]:
+    """Write Raw Material Bulk using xlsxwriter constant_memory.
+
+    This is the V23.3 implementation of the recommended plan:
+    DataFrame -> xlsxwriter/constant_memory -> generated Excel.
+
+    It intentionally does not load or copy the full Excel template, because the
+    diagnostic logs showed Render OOM during workbook write/save, not during BOM
+    explosion. The output keeps the required sheet names and required columns for
+    downstream Module 3 compatibility.
+    """
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    supplier_map = supplier_map or {}
+    raw_unique: dict[str, str] = {}
+    supplier_bulk_records: dict[tuple[str, str, str, str, str], dict[str, str]] = {}
+
+    supplier_matched_rows = 0
+    supplier_expanded_rows = 0
+    supplier_name_matched_rows = 0
+    supplier_name_missing_rows = 0
+    written_activity_rows = 0
+
+    workbook = _cmp_xlsxwriter.Workbook(str(output_path), {"constant_memory": True})
+    date_fmt = workbook.add_format({"num_format": "yyyy/mm/dd"})
+    header_fmt = workbook.add_format({"bold": True})
+
+    activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
+    raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
+
+    # Keep two header rows to match the original template data start at row 3.
+    _xlsxwriter_write_row(activity_ws, 0, [""] * len(CMP_XLSXWRITER_ACTIVITY_HEADERS))
+    for c, h in enumerate(CMP_XLSXWRITER_ACTIVITY_HEADERS):
+        activity_ws.write(1, c, h, header_fmt)
+    _xlsxwriter_write_row(raw_ws, 0, [""] * len(CMP_XLSXWRITER_RAW_HEADERS))
+    for c, h in enumerate(CMP_XLSXWRITER_RAW_HEADERS):
+        raw_ws.write(1, c, h, header_fmt)
+
+    activity_row_idx = DATA_START_ROW - 1  # zero-based xlsxwriter row index
+    document_type_value = "Bill of Materials (BOM)"
+
+    def write_activity_row(source_row: dict[str, Any], supplier_info: dict[str, str] | None = None) -> None:
+        nonlocal activity_row_idx, written_activity_rows, supplier_expanded_rows, supplier_name_matched_rows, supplier_name_missing_rows
+
+        supplier_info = supplier_info or {}
+        valid_from = source_row.get("valid_from", "")
+        if not isinstance(valid_from, date):
+            valid_from = _date_from_value(valid_from)
+
+        supplier_code = supplier_info.get("supplier_code", "") or supplier_info.get("vendor_code", "")
+        supplier_name = supplier_info.get("supplier_master_name", "") or supplier_info.get("supplier_name", "")
+        supplier_address = supplier_info.get("supplier_address", "") or supplier_info.get("transport_origin", "")
+        supplier_country = supplier_info.get("country_area", "") or supplier_info.get("supplier_country_area", "")
+        destination = _safe_text(source_row.get("transport_destination", ""))
+
+        if supplier_info:
+            supplier_expanded_rows += 1
+            if supplier_name:
+                supplier_name_matched_rows += 1
+            else:
+                supplier_name_missing_rows += 1
+            key = (_safe_text(supplier_name), _normalize_vendor_code(supplier_code), _safe_text(supplier_country), _safe_text(supplier_address), destination)
+            if key[1] and key not in supplier_bulk_records:
+                supplier_bulk_records[key] = {
+                    "supplier_name": key[0],
+                    "supplier_code": key[1],
+                    "country_area": key[2],
+                    "supplier_address": key[3],
+                    "unit_name": key[4],
+                }
+
+        usage_value = _safe_number(source_row.get("usage", 0))
+        row = [""] * len(CMP_XLSXWRITER_ACTIVITY_HEADERS)
+        row[0] = source_row.get("raw_material", "")
+        row[1] = source_row.get("raw_material", "")
+        row[2] = _year_start(valid_from)
+        row[3] = _year_end(valid_from)
+        row[4] = document_type_value
+        row[5] = ""
+        row[6] = usage_value
+        row[7] = source_row.get("unit", "")
+        row[11] = "SAP"
+        row[12] = ""
+        row[13] = supplier_name
+        row[14] = supplier_address
+        row[15] = destination
+        row[16] = source_row.get("target_product", "")
+        row[17] = ""
+        row[18] = source_row.get("material_group", "")
+        row[19] = source_row.get("net_weight", "")
+        row[20] = source_row.get("gross_weight", "")
+        row[21] = source_row.get("weight_uom", "")
+        _xlsxwriter_write_row(activity_ws, activity_row_idx, row, date_fmt=date_fmt)
+        activity_row_idx += 1
+        written_activity_rows += 1
+
+    if exploded is not None and not exploded.empty:
+        for record in exploded.to_dict(orient="records"):
+            raw_material = _safe_text(record.get("raw_material", ""))
+            if raw_material and raw_material not in raw_unique:
+                raw_unique[raw_material] = _safe_text(record.get("description", ""))
+
+            raw_key = _normalize_material_key(raw_material)
+            suppliers = supplier_map.get(raw_key) or []
+            if suppliers:
+                supplier_matched_rows += 1
+                for info in suppliers:
+                    write_activity_row(record, info)
+            else:
+                write_activity_row(record, None)
+
+    raw_row_idx = DATA_START_ROW - 1
+    for raw_material in sorted(raw_unique):
+        row = [""] * len(CMP_XLSXWRITER_RAW_HEADERS)
+        row[0] = raw_material
+        row[1] = raw_material
+        row[5] = raw_unique.get(raw_material, "")
+        _xlsxwriter_write_row(raw_ws, raw_row_idx, row)
+        raw_row_idx += 1
+
+    workbook.close()
+
+    supplier_bulk_df = pd.DataFrame(list(supplier_bulk_records.values())) if supplier_bulk_records else pd.DataFrame(
+        columns=["supplier_name", "supplier_code", "country_area", "supplier_address", "unit_name"]
+    )
+
+    result = {
+        "output_filename": output_path.name,
+        "activity_rows": int(written_activity_rows),
+        "raw_materials": int(len(raw_unique)),
+        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
+        "supplier_name_options": 0,
+        "site_tbc_supplier_count": 0,
+        "supplier_matched_rows": int(supplier_matched_rows),
+        "supplier_expanded_rows": int(supplier_expanded_rows),
+        "supplier_name_matched_rows": int(supplier_name_matched_rows),
+        "supplier_name_missing_rows": int(supplier_name_missing_rows),
+        "supplier_dropdown_matched_rows": int(supplier_name_matched_rows),
+        "supplier_dropdown_missing_rows": int(supplier_name_missing_rows),
+        "excel_writer_mode": "xlsxwriter_constant_memory",
+        "template_preservation": "required_sheets_and_headers_only",
+    }
+    if return_expanded:
+        return result, supplier_bulk_df
+    return result
+
+
+BOM_FORMATTER_VERSION = "CMP_V23_3_XLSXWRITER_CONSTANT_MEMORY"
