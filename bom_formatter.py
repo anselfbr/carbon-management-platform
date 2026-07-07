@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V14_10_EXCLUDE_ZERO_USAGE_AND_ZERO_TOTAL_HOURS"
+BOM_FORMATTER_VERSION = "CMP_V17_2_FINAL_USAGE_ANNUAL_QTY"
 
 
 DEFAULT_MAPPING = {
@@ -124,9 +124,9 @@ def _usage_probability_ratio(value: Any) -> float | None:
 def _apply_altitem_usage_probability(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Apply alternative-item usage probability to CS03 quantity.
 
-    Rule: within the same parent material, rows with the same non-empty
-    Altitem group are alternative materials. For such duplicated groups,
-    effective quantity = CS03 Qty × Usage probability%.
+    Rule: when Altitem group has value, the row is an SAP alternative item,
+    so effective quantity = CS03 Qty × Usage probability%. Blank Altitem group
+    keeps original CS03 Qty.
     """
     work = df.copy()
     if "_altitem_group" not in work.columns:
@@ -146,27 +146,31 @@ def _apply_altitem_usage_probability(df: pd.DataFrame) -> tuple[pd.DataFrame, di
         }
 
     group_keys = ["_parent", "_altitem_group"]
-    group_sizes = work.groupby(group_keys, dropna=False)["_component"].transform("count")
-    duplicated_alt_group = alt_mask & (group_sizes > 1)
     has_probability = work["_usage_probability_ratio"].apply(lambda x: x is not None)
-    apply_mask = duplicated_alt_group & has_probability
+
+    # CMP official rule:
+    # If Altitem group has a value, CS03 Qty must be converted to effective qty
+    # by multiplying Usage probability%. Do not require duplicated rows in the
+    # same group, because SAP may export only the selected/available alternative
+    # item row while the probability still represents real usage.
+    apply_mask = alt_mask & has_probability
 
     work["_qty_original"] = work["_qty"]
     work.loc[apply_mask, "_qty"] = work.loc[apply_mask, "_qty"] * work.loc[apply_mask, "_usage_probability_ratio"].astype(float)
     work["_qty_adjusted_by_altitem"] = apply_mask
 
     alt_groups = (
-        work.loc[duplicated_alt_group, group_keys]
+        work.loc[alt_mask, group_keys]
         .drop_duplicates()
         .shape[0]
     )
-    missing_probability_rows = int((duplicated_alt_group & ~has_probability).sum())
+    missing_probability_rows = int((alt_mask & ~has_probability).sum())
     return work, {
-        "altitem_rows": int(duplicated_alt_group.sum()),
+        "altitem_rows": int(alt_mask.sum()),
         "altitem_groups": int(alt_groups),
         "altitem_adjusted_rows": int(apply_mask.sum()),
         "altitem_probability_missing_rows": missing_probability_rows,
-        "altitem_rule": "Effective CS03 Qty = CS03 Qty × Usage probability% for duplicated Altitem group within the same Parent Node.",
+        "altitem_rule": "Effective CS03 Qty = CS03 Qty × Usage probability% when Altitem group has value; blank Altitem group keeps original CS03 Qty.",
     }
 
 
@@ -886,6 +890,71 @@ def _read_step1_product_master_maps(step1_output_path: str | Path) -> tuple[dict
     }
 
 
+def _read_step1_annual_quantity_map(step1_output_path: str | Path) -> tuple[dict[str, float], Dict[str, Any]]:
+    """Read Module 1 Step1 output and return Finished Product -> annual quantity.
+
+    Raw Material Bulk Usage is the annual required amount, not per-PC BOM usage:
+        final usage = exploded BOM usage per PC × annual finished-product quantity.
+    """
+    step1_output_path = Path(step1_output_path)
+    try:
+        df = pd.read_excel(step1_output_path, sheet_name="Plant_Material年度產量", dtype=object)
+    except Exception:
+        df = pd.read_excel(step1_output_path, sheet_name=0, dtype=object)
+
+    material_col = _find_step1_column(df, ["Material Number", "Material", "Product Material Number"])
+    qty_col = _find_step1_column(df, ["年度生產量", "Annual Quantity", "Delivered quantity"])
+
+    work = df.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_annual_qty"] = work[qty_col].apply(_safe_number)
+    work = work[work["_material_key"] != ""].copy()
+
+    qty_map: dict[str, float] = {}
+    for _, r in work.groupby("_material_key", dropna=False, as_index=False)["_annual_qty"].sum().iterrows():
+        material = str(r["_material_key"] or "").strip().upper()
+        if material:
+            qty_map[material] = float(r["_annual_qty"] or 0.0)
+
+    return qty_map, {
+        "annual_quantity_source": "Module 1 Step1 Plant_Material年度產量",
+        "annual_quantity_mapped_products": int(len(qty_map)),
+        "raw_material_usage_rule": "Final Usage = BOM exploded usage per PC × Module 1 annual finished-product quantity",
+    }
+
+
+def _apply_annual_quantity_to_exploded_usage(
+    exploded: pd.DataFrame,
+    annual_qty_map: dict[str, float] | None,
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Convert per-PC BOM usage into annual raw-material requirement."""
+    if exploded is None or exploded.empty or "target_product" not in exploded.columns or "usage" not in exploded.columns:
+        return exploded.copy() if isinstance(exploded, pd.DataFrame) else pd.DataFrame(), {
+            "annual_quantity_applied": False,
+            "annual_quantity_missing_rows": 0,
+        }
+
+    annual_qty_map = annual_qty_map or {}
+    work = exploded.copy()
+    target_keys = work["target_product"].apply(_normalize_material_key)
+    annual_qty = target_keys.map(annual_qty_map)
+    found_mask = annual_qty.notna()
+
+    work["usage_per_pc"] = pd.to_numeric(work["usage"], errors="coerce").fillna(0.0)
+    work["annual_finished_product_qty"] = annual_qty.where(found_mask, 1.0).astype(float)
+    work.loc[found_mask, "usage"] = work.loc[found_mask, "usage_per_pc"] * work.loc[found_mask, "annual_finished_product_qty"]
+
+    missing_targets = sorted(set(target_keys.loc[~found_mask].astype(str))) if (~found_mask).any() else []
+    return work, {
+        "annual_quantity_applied": True,
+        "annual_quantity_matched_rows": int(found_mask.sum()),
+        "annual_quantity_missing_rows": int((~found_mask).sum()),
+        "annual_quantity_missing_targets": missing_targets[:50],
+        "usage_per_pc_column_added": True,
+        "annual_finished_product_qty_column_added": True,
+    }
+
+
 def generate_raw_material_bulk_files_by_site_zip(
     bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
     raw_material_template_path: str | Path,
@@ -909,6 +978,10 @@ def generate_raw_material_bulk_files_by_site_zip(
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
+    annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
+    exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
+    exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+
     total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(
         step1_output_path=step1_output_path,
         bom_df=bom_df,
@@ -919,7 +992,10 @@ def generate_raw_material_bulk_files_by_site_zip(
     )
 
     base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    base_summary["zero_annual_usage_rows_excluded"] = int(zero_annual_usage_rows_excluded)
     base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
+    base_summary.update(annual_qty_source_summary)
+    base_summary.update(annual_usage_summary)
     base_summary["activity_rows"] = int(len(exploded))
     base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
     base_summary.update(working_hour_summary)
@@ -1951,10 +2027,16 @@ def generate_raw_material_bulk_files_by_site_zip(
     supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
+    exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
+    exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(step1_output_path=step1_output_path, bom_df=bom_df)
     exploded, zero_total_working_hour_rows_excluded = _exclude_zero_total_working_hour_target_rows(exploded=exploded, total_hour_by_material=total_hour_by_target)
     base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    base_summary["zero_annual_usage_rows_excluded"] = int(zero_annual_usage_rows_excluded)
     base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
+    base_summary.update(annual_qty_source_summary)
+    base_summary.update(annual_usage_summary)
     base_summary["activity_rows"] = int(len(exploded))
     base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
     base_summary.update(working_hour_summary)
@@ -2042,4 +2124,4 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V17_1_SUPPLIER_TBC_FALLBACK_FIX"
+BOM_FORMATTER_VERSION = "CMP_V17_2_FINAL_USAGE_ANNUAL_QTY"
