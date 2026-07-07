@@ -3811,3 +3811,321 @@ def generate_module2_outputs_memory_optimized(
                 except Exception:
                     pass
         gc.collect()
+
+# =========================================================
+# CMP_V25_0_MODULE2_ABC
+# Module 2 split into three independent steps:
+# A. Standard BOM -> Expanded BOM Master
+# B. Expanded BOM Master + Module 1 Step1 + Raw Material Bulk Template -> Raw Material Bulk by site
+# C. Raw Material Bulk + Supplier Files -> Supplier-expanded Raw Material Bulk + Supplier Bulk Create
+# =========================================================
+
+BOM_FORMATTER_VERSION = "CMP_V25_0_MODULE2_ABC"
+EXPANDED_BOM_MASTER_SHEET_NAME = "Expanded BOM Master"
+
+
+def _read_expanded_bom_master(path: str | Path) -> pd.DataFrame:
+    path = Path(path)
+    try:
+        df = pd.read_excel(path, sheet_name=EXPANDED_BOM_MASTER_SHEET_NAME, dtype=object)
+    except Exception:
+        df = pd.read_excel(path, sheet_name=0, dtype=object)
+    rename_map = {}
+    for col in df.columns:
+        key = _normalize_template_header(col)
+        if key in {"targetproduct", "finishedproduct", "product", "成品料號"}:
+            rename_map[col] = "target_product"
+        elif key in {"rawmaterial", "rawmaterialcode", "component", "原物料", "原物料代碼"}:
+            rename_map[col] = "raw_material"
+        elif key in {"usage", "totalusage", "quantity", "用量", "使用量"}:
+            rename_map[col] = "usage"
+        elif key in {"unit", "activitydataunit", "uom", "單位"}:
+            rename_map[col] = "unit"
+        elif key in {"description", "rawmaterialdescription", "componentdescription", "原物料描述"}:
+            rename_map[col] = "description"
+        elif key in {"materialgroup", "物料群組"}:
+            rename_map[col] = "material_group"
+        elif key in {"validfrom", "bomvalidfrom"}:
+            rename_map[col] = "valid_from"
+        elif key in {"netweight"}:
+            rename_map[col] = "net_weight"
+        elif key in {"grossweight"}:
+            rename_map[col] = "gross_weight"
+        elif key in {"weightuom", "weightunit"}:
+            rename_map[col] = "weight_uom"
+        elif key in {"level", "maxlevel"}:
+            rename_map[col] = "level"
+    df = df.rename(columns=rename_map)
+    required = ["target_product", "raw_material", "usage", "unit"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError("Expanded BOM Master 缺少必要欄位：" + ", ".join(missing))
+    for col in ["description", "material_group", "valid_from", "net_weight", "gross_weight", "weight_uom", "level"]:
+        if col not in df.columns:
+            df[col] = "" if col != "level" else 0
+    df["target_product"] = df["target_product"].apply(_safe_text)
+    df["raw_material"] = df["raw_material"].apply(_safe_text)
+    df["usage"] = df["usage"].apply(_safe_number)
+    df["unit"] = df["unit"].apply(_safe_text)
+    df = df[(df["target_product"] != "") & (df["raw_material"] != "")].copy().reset_index(drop=True)
+    return df[["target_product", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "net_weight", "gross_weight", "weight_uom", "level"]]
+
+
+def generate_expanded_bom_master_file(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+) -> Dict[str, Any]:
+    """Module 2A: expand all Standard BOM files into one finished-product-to-raw-material master file.
+
+    The output contains only final raw materials. Semi-finished materials are used
+    only during traversal and are aggregated into raw-material usage.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    try:
+        exploded, summary = _explode_bom(bom_df)
+        exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+        summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+        summary["activity_rows"] = int(len(exploded))
+        summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+        output_df = exploded.rename(columns={
+            "target_product": "Target Product",
+            "raw_material": "Raw Material",
+            "usage": "Usage",
+            "unit": "Unit",
+            "description": "Raw Material Description",
+            "material_group": "Material Group",
+            "valid_from": "Valid From",
+            "net_weight": "Net Weight",
+            "gross_weight": "Gross Weight",
+            "weight_uom": "Weight UoM",
+            "level": "Max Level",
+        })
+        with pd.ExcelWriter(output_path, engine="xlsxwriter", engine_kwargs={"options": {"constant_memory": True}}) as writer:
+            output_df.to_excel(writer, index=False, sheet_name=EXPANDED_BOM_MASTER_SHEET_NAME)
+            ws = writer.sheets[EXPANDED_BOM_MASTER_SHEET_NAME]
+            ws.freeze_panes(1, 0)
+            ws.set_column(0, 1, 22)
+            ws.set_column(2, 3, 14)
+            ws.set_column(4, 4, 42)
+            ws.set_column(5, 10, 16)
+        summary.update({
+            "output_filename": output_path.name,
+            "download_url": f"/download/{output_path.name}",
+            "expanded_bom_master_filename": output_path.name,
+            "expanded_bom_master_download_url": f"/download/{output_path.name}",
+            "used_columns": used_columns,
+            "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
+            "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
+            "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
+            "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
+            "module2_step": "A",
+            "module2_abc_version": BOM_FORMATTER_VERSION,
+        })
+        return summary
+    finally:
+        try:
+            del bom_df
+            gc.collect()
+        except Exception:
+            pass
+
+
+def _read_step1_finished_product_site_map(step1_output_path: str | Path) -> tuple[pd.DataFrame, dict[str, str], Dict[str, Any]]:
+    step1_output_path = Path(step1_output_path)
+    try:
+        step1_df = pd.read_excel(step1_output_path, sheet_name=STEP1_SOURCE_SHEET_NAME, dtype=object)
+    except Exception:
+        step1_df = pd.read_excel(step1_output_path, sheet_name=0, dtype=object)
+    material_col = _find_step1_column(step1_df, ["Material Number", "Material", "Product Material Number"])
+    site_col = _find_step1_optional_column(step1_df, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
+    wip_col = _find_step1_optional_column(step1_df, ["Is_WIP", "Is WIP", "WIP"])
+    type_col = _find_step1_optional_column(step1_df, ["產品類型", "Product Type"])
+    work = step1_df.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_production_site"] = work[site_col].apply(_safe_text) if site_col else "Unassigned"
+    if wip_col:
+        is_wip_mask = work[wip_col].astype(str).str.strip().str.upper().isin(["Y", "YES", "TRUE", "1"])
+    elif type_col:
+        is_wip_mask = work[type_col].astype(str).str.strip().str.upper().eq("WIP")
+    else:
+        is_wip_mask = pd.Series(False, index=work.index)
+    work = work[(work["_material_key"] != "") & (~is_wip_mask)].copy()
+    site_map: dict[str, str] = {}
+    conflicts: list[str] = []
+    for material, group in work.groupby("_material_key", dropna=False):
+        sites = sorted({str(x).strip() for x in group["_production_site"] if str(x).strip()})
+        if not sites:
+            sites = ["Unassigned"]
+        site_map[str(material)] = sites[0]
+        if len(sites) > 1:
+            conflicts.append(f"{material}: {', '.join(sites)}")
+    return work, site_map, {
+        "module1_step1_rows": int(len(step1_df)),
+        "module1_finished_products": int(len(site_map)),
+        "module1_site_conflicts": conflicts,
+    }
+
+
+def generate_raw_material_bulk_from_expanded_master_by_site(
+    expanded_bom_master_path: str | Path,
+    step1_output_path: str | Path,
+    raw_material_template_path: str | Path,
+    output_dir: str | Path,
+    token: str,
+) -> Dict[str, Any]:
+    """Module 2B: create Raw Material Bulk by searching Module 2A master for Module 1 finished products."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    expanded = _read_expanded_bom_master(expanded_bom_master_path)
+    _step1_work, site_map, step1_summary = _read_step1_finished_product_site_map(step1_output_path)
+    product_keys = set(site_map.keys())
+    work = expanded.copy()
+    work["_target_key"] = work["target_product"].apply(_normalize_material_key)
+    before_filter_rows = int(len(work))
+    work = work[work["_target_key"].isin(product_keys)].copy().reset_index(drop=True)
+    missing_products = sorted(product_keys - set(work["_target_key"].unique()))
+    if work.empty:
+        raise ValueError("Module 2B 找不到 Module 1 成品料號對應的 BOM 展開結果，請確認 Module 2A Expanded BOM Master 是否包含這些成品。")
+    work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
+    work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+    work["transport_destination"] = work["_production_site"]
+    site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()})
+    generated_files: list[dict[str, Any]] = []
+    total_rows = 0
+    total_raw_materials = 0
+    for site in site_values:
+        site_df = work.loc[work["_production_site"].eq(site)].drop(columns=["_target_key", "_production_site"], errors="ignore")
+        safe_site = _sanitize_filename_part(site)
+        file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
+        writer_func = globals().get("_write_raw_material_bulk_from_exploded_fast_raw_only") or globals().get("_write_raw_material_bulk_from_exploded")
+        write_summary = writer_func(site_df, raw_material_template_path, file_path)
+        generated_files.append({
+            "production_site": site,
+            "filename": file_path.name,
+            "download_url": f"/download/{file_path.name}",
+            "activity_rows": int(write_summary.get("activity_rows", 0)),
+            "raw_materials": int(write_summary.get("raw_materials", 0)),
+        })
+        total_rows += int(write_summary.get("activity_rows", 0))
+        total_raw_materials += int(write_summary.get("raw_materials", 0))
+        del site_df
+        gc.collect()
+    first_file = generated_files[0]["filename"] if generated_files else ""
+    summary = {
+        "module2_step": "B",
+        "module2_abc_version": BOM_FORMATTER_VERSION,
+        "expanded_bom_master_filename": Path(expanded_bom_master_path).name,
+        "output_filename": first_file,
+        "download_url": f"/download/{first_file}" if first_file else "",
+        "split_by_production_site": True,
+        "production_site_files": generated_files,
+        "production_site_count": int(len(generated_files)),
+        "activity_rows": int(total_rows),
+        "raw_materials": int(total_raw_materials),
+        "expanded_master_rows_before_filter": before_filter_rows,
+        "expanded_master_rows_after_module1_filter": int(len(work)),
+        "module1_products_missing_in_bom": int(len(missing_products)),
+        "module1_products_missing_in_bom_sample": missing_products[:50],
+    }
+    summary.update(step1_summary)
+    return summary
+
+
+def _read_raw_material_bulk_activity_as_exploded(path: str | Path) -> tuple[pd.DataFrame, list[Any], list[Any], dict[str, int | None]]:
+    path = Path(path)
+    df = pd.read_excel(path, sheet_name=ACTIVITY_SHEET_NAME, header=1, dtype=object)
+    headers = list(df.columns)
+    col_map = {
+        "raw_material": _header_index_from_aliases(headers, RAW_MATERIAL_CODE_ALIASES, 1) if "_header_index_from_aliases" in globals() else None,
+        "usage": _header_index_from_aliases(headers, USAGE_ALIASES, 6) if "_header_index_from_aliases" in globals() else None,
+        "unit": _header_index_from_aliases(headers, ACTIVITY_DATA_UNIT_ALIASES, 7) if "_header_index_from_aliases" in globals() else None,
+        "supplier_name": _header_index_from_aliases(headers, SUPPLIER_NAME_ALIASES, 13) if "_header_index_from_aliases" in globals() else None,
+        "transport_origin": _header_index_from_aliases(headers, TRANSPORT_ORIGIN_ALIASES, 14) if "_header_index_from_aliases" in globals() else None,
+        "transport_destination": _header_index_from_aliases(headers, TRANSPORT_DESTINATION_ALIASES, 15) if "_header_index_from_aliases" in globals() else None,
+        "target_product": _header_index_from_aliases(headers, PRODUCT_LINK_ALIASES, 16) if "_header_index_from_aliases" in globals() else None,
+        "description": _header_index_from_aliases(headers, RAW_MATERIAL_DESC_ALIASES, None) if "_header_index_from_aliases" in globals() else None,
+        "material_group": _header_index_from_aliases(headers, MATERIAL_GROUP_ALIASES, 18) if "_header_index_from_aliases" in globals() else None,
+        "net_weight": _header_index_from_aliases(headers, NET_WEIGHT_ALIASES, 19) if "_header_index_from_aliases" in globals() else None,
+        "gross_weight": _header_index_from_aliases(headers, GROSS_WEIGHT_ALIASES, 20) if "_header_index_from_aliases" in globals() else None,
+        "weight_uom": _header_index_from_aliases(headers, WEIGHT_UNIT_ALIASES, 21) if "_header_index_from_aliases" in globals() else None,
+    }
+    def get_col(key: str, fallback: str = ""):
+        idx = col_map.get(key)
+        if idx is None or idx >= len(headers):
+            return fallback
+        return df[headers[idx]]
+    out = pd.DataFrame()
+    out["raw_material"] = get_col("raw_material", pd.Series([""] * len(df))).apply(_safe_text)
+    out["usage"] = get_col("usage", pd.Series([0] * len(df))).apply(_safe_number)
+    out["unit"] = get_col("unit", pd.Series([""] * len(df))).apply(_safe_text)
+    out["target_product"] = get_col("target_product", pd.Series([""] * len(df))).apply(_safe_text)
+    out["transport_destination"] = get_col("transport_destination", pd.Series([""] * len(df))).apply(_safe_text)
+    out["transport_origin"] = get_col("transport_origin", pd.Series([""] * len(df))).apply(_safe_text)
+    out["supplier_name"] = get_col("supplier_name", pd.Series([""] * len(df))).apply(_safe_text)
+    out["description"] = get_col("description", pd.Series([""] * len(df))).apply(_safe_text)
+    out["material_group"] = get_col("material_group", pd.Series([""] * len(df))).apply(_safe_text)
+    out["net_weight"] = get_col("net_weight", pd.Series([""] * len(df)))
+    out["gross_weight"] = get_col("gross_weight", pd.Series([""] * len(df)))
+    out["weight_uom"] = get_col("weight_uom", pd.Series([""] * len(df))).apply(_safe_text)
+    out["valid_from"] = date(datetime.now().year, 1, 1)
+    out["level"] = 0
+    out = out[(out["raw_material"] != "") & (out["target_product"] != "")].copy().reset_index(drop=True)
+    return out, [], headers, col_map
+
+
+def generate_supplier_mapping_from_raw_material_bulk_files(
+    raw_material_bulk_paths: list[str | Path] | tuple[str | Path, ...],
+    supplier_paths: list[str | Path] | tuple[str | Path, ...],
+    output_dir: str | Path,
+    token: str,
+    supplier_bulk_template_path: str | Path | None = None,
+    supplier_bulk_output_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """Module 2C: expand Module 2B Raw Material Bulk by supplier master files."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not raw_material_bulk_paths:
+        raise ValueError("Module 2C 找不到 Module 2B Raw Material Bulk 檔案，請先完成 Module 2B。")
+    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+    if not supplier_paths:
+        raise ValueError("請上傳 Supplier Files。")
+    frames: list[pd.DataFrame] = []
+    source_files: list[str] = []
+    for p in raw_material_bulk_paths:
+        p = Path(p)
+        if not p.exists():
+            continue
+        df, _row1, _headers, _col_map = _read_raw_material_bulk_activity_as_exploded(p)
+        if not df.empty:
+            df["_source_raw_bulk"] = p.name
+            frames.append(df)
+            source_files.append(p.name)
+    if not frames:
+        raise ValueError("Module 2C 無可處理的 Raw Material Bulk 資料。")
+    base = pd.concat(frames, ignore_index=True)
+    expanded, mapping_summary = _apply_supplier_mapping_to_exploded(base, supplier_map, supplier_options=[], tbc_supplier_map={})
+    output_path = output_dir / f"supplier_expanded_raw_material_bulk_{token}.xlsx"
+    writer_func = globals().get("_write_raw_material_bulk_from_exploded_fast_raw_only") or globals().get("_write_raw_material_bulk_from_exploded")
+    # Use first raw bulk as layout/template source. It is already a valid raw material bulk workbook.
+    write_summary = writer_func(expanded, raw_material_bulk_paths[0], output_path)
+    supplier_bulk_summary: Dict[str, Any] = {}
+    if supplier_bulk_template_path and supplier_bulk_output_path:
+        supplier_bulk_summary = _write_supplier_bulk_create_file(expanded, supplier_bulk_template_path, supplier_bulk_output_path)
+    summary = {
+        "module2_step": "C",
+        "module2_abc_version": BOM_FORMATTER_VERSION,
+        "source_raw_material_bulk_files": source_files,
+        "output_filename": output_path.name,
+        "download_url": f"/download/{output_path.name}",
+        "supplier_expanded_raw_material_bulk_filename": output_path.name,
+        "supplier_expanded_raw_material_bulk_download_url": f"/download/{output_path.name}",
+        "activity_rows": int(write_summary.get("activity_rows", len(expanded))),
+        "raw_materials": int(write_summary.get("raw_materials", expanded["raw_material"].nunique() if not expanded.empty else 0)),
+    }
+    summary.update(supplier_summary)
+    summary.update(mapping_summary)
+    summary.update(supplier_bulk_summary)
+    return summary

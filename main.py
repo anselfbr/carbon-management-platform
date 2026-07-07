@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_module2_outputs_memory_optimized
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_module2_outputs_memory_optimized, generate_expanded_bom_master_file, generate_raw_material_bulk_from_expanded_master_by_site, generate_supplier_mapping_from_raw_material_bulk_files
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -30,11 +30,13 @@ FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH = OUTPUT_DIR / "module2_raw_material_bulk_latest.json"
+LATEST_MODULE2_EXPANDED_BOM_MASTER_MANIFEST_PATH = OUTPUT_DIR / "module2_expanded_bom_master_latest.json"
+LATEST_MODULE2_SUPPLIER_MANIFEST_PATH = OUTPUT_DIR / "module2_supplier_mapping_latest.json"
 TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_V24_0_SUPPLIER_MODULE3_RAW_BULK_MANIFEST"
+CMP_MAIN_VERSION = "CMP_V25_0_MODULE2_ABC"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -2390,3 +2392,222 @@ async def process_bom_expansion(request: Request):
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
     }
+
+# =========================================================
+# Module 2 V25 · A/B/C independent execution endpoints
+# =========================================================
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_module2_expanded_bom_master_manifest(summary: dict[str, Any]) -> None:
+    filename = Path(str(summary.get("expanded_bom_master_filename") or summary.get("output_filename") or "")).name
+    path = _safe_output_path(filename)
+    files = []
+    if path and path.exists():
+        stat = path.stat()
+        files.append({
+            "filename": path.name,
+            "size_bytes": int(stat.st_size),
+            "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
+            "mtime": float(stat.st_mtime),
+            "download_url": f"/download/{path.name}",
+        })
+    manifest = {
+        "ok": bool(files),
+        "timezone": "Asia/Taipei",
+        "updated_at": _now_taipei().isoformat(timespec="seconds"),
+        "selected_filename": filename,
+        "files": files,
+        "summary": summary,
+    }
+    LATEST_MODULE2_EXPANDED_BOM_MASTER_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _find_latest_module2_expanded_bom_master() -> Path | None:
+    manifest = _read_json_file(LATEST_MODULE2_EXPANDED_BOM_MASTER_MANIFEST_PATH)
+    for item in manifest.get("files", []) or []:
+        path = _safe_output_path(item.get("filename"))
+        if path and path.exists():
+            return path
+    candidates = sorted(OUTPUT_DIR.glob("expanded_bom_master_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+@app.get("/module2/expanded-bom-master-source")
+def module2_expanded_bom_master_source():
+    path = _find_latest_module2_expanded_bom_master()
+    if not path:
+        return {"ok": False, "message": "尚未找到 Module 2A Expanded BOM Master，請先執行 Module 2A。", "timezone": "Asia/Taipei"}
+    stat = path.stat()
+    return {
+        "ok": True,
+        "filename": path.name,
+        "size_bytes": int(stat.st_size),
+        "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
+        "download_url": f"/download/{path.name}",
+        "timezone": "Asia/Taipei",
+    }
+
+
+@app.get("/module2/raw-material-bulk-source")
+def module2_raw_material_bulk_source():
+    options = _list_module2_site_raw_material_bulk_files()
+    if not options:
+        return {"ok": False, "message": "尚未找到 Module 2B Raw Material Bulk，請先執行 Module 2B。", "options": [], "timezone": "Asia/Taipei"}
+    return {"ok": True, "options": options, "selected_filename": options[0].get("filename", ""), "timezone": "Asia/Taipei"}
+
+
+@app.post("/module2a/expand-bom-master")
+async def module2a_expand_bom_master(request: Request):
+    try:
+        form = await request.form()
+        def is_upload_file_like(item) -> bool:
+            return bool(getattr(item, "filename", None)) and hasattr(item, "read")
+        bom_uploads = [item for item in form.getlist("bom_files") + form.getlist("bom_file") if is_upload_file_like(item)]
+        if not bom_uploads:
+            return JSONResponse({"ok": False, "message": "請至少上傳一個 Standard BOM Excel 檔案。"}, status_code=400)
+        token = uuid.uuid4().hex[:10]
+        bom_paths: list[Path] = []
+        for idx, bom_file in enumerate(bom_uploads, start=1):
+            filename = Path(str(getattr(bom_file, "filename", "") or f"bom_{idx}.xlsx")).name
+            if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+                return JSONResponse({"ok": False, "message": f"{filename} 不是 Standard BOM Excel 檔案。"}, status_code=400)
+            saved_path = UPLOAD_DIR / f"module2a_standard_bom_{token}_{idx}_{filename}"
+            saved_path.write_bytes(await bom_file.read())
+            bom_paths.append(saved_path)
+        mapping = {
+            "parent_col": str(form.get("parent_col") or ""),
+            "component_col": str(form.get("component_col") or ""),
+            "qty_col": str(form.get("qty_col") or ""),
+            "unit_col": str(form.get("unit_col") or ""),
+            "description_col": str(form.get("description_col") or ""),
+            "material_group_col": str(form.get("material_group_col") or ""),
+            "valid_from_col": str(form.get("valid_from_col") or ""),
+        }
+        output_path = OUTPUT_DIR / f"expanded_bom_master_{token}.xlsx"
+        summary = generate_expanded_bom_master_file(bom_paths, output_path, mapping=mapping)
+        summary["timezone"] = "Asia/Taipei"
+        summary["app_version"] = CMP_MAIN_VERSION
+        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
+        _write_module2_expanded_bom_master_manifest(summary)
+        return {"ok": True, "message": "Module 2A BOM Expansion Master completed.", "summary": summary, "download_url": summary.get("download_url")}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    finally:
+        gc.collect()
+
+
+@app.post("/module2b/generate-raw-material-bulk")
+async def module2b_generate_raw_material_bulk(template_file: UploadFile = File(...)):
+    global MODULE2_RAW_MATERIAL_BULK_PATH, MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH
+    try:
+        if not template_file or not template_file.filename:
+            return JSONResponse({"ok": False, "message": "請上傳 Raw Material Bulk Template。"}, status_code=400)
+        if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": "Raw Material Bulk Template 請上傳 Excel 檔案。"}, status_code=400)
+        expanded_master_path = _find_latest_module2_expanded_bom_master()
+        if not expanded_master_path:
+            return JSONResponse({"ok": False, "message": "尚未找到 Module 2A Expanded BOM Master，請先執行 Module 2A。"}, status_code=400)
+        step1_path = _find_latest_module1_step1_output()
+        if not step1_path:
+            return JSONResponse({"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"}, status_code=400)
+        token = uuid.uuid4().hex[:10]
+        template_path = UPLOAD_DIR / f"module2b_raw_material_template_{token}_{Path(template_file.filename).name}"
+        template_path.write_bytes(await template_file.read())
+        summary = generate_raw_material_bulk_from_expanded_master_by_site(
+            expanded_bom_master_path=expanded_master_path,
+            step1_output_path=step1_path,
+            raw_material_template_path=template_path,
+            output_dir=OUTPUT_DIR,
+            token=token,
+        )
+        MODULE2_RAW_MATERIAL_BULK_PATH = None
+        MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH = None
+        for item in summary.get("production_site_files", []) or []:
+            candidate = OUTPUT_DIR / str(item.get("filename", ""))
+            if candidate.exists():
+                MODULE2_RAW_MATERIAL_BULK_PATH = candidate
+                MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH = candidate
+                summary["module2_raw_material_bulk_selected"] = candidate.name
+                summary["module2_raw_material_bulk_selected_download_url"] = f"/download/{candidate.name}"
+                break
+        summary["module1_step1_source_filename"] = step1_path.name
+        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
+        summary["timezone"] = "Asia/Taipei"
+        summary["app_version"] = CMP_MAIN_VERSION
+        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
+        _write_latest_module2_manifest(summary, selected_filename=summary.get("module2_raw_material_bulk_selected", ""))
+        return {"ok": True, "message": "Module 2B Raw Material Bulk Generation completed.", "summary": summary, "download_url": summary.get("download_url")}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    finally:
+        gc.collect()
+
+
+@app.post("/module2c/supplier-mapping")
+async def module2c_supplier_mapping(request: Request):
+    try:
+        form = await request.form()
+        def is_upload_file_like(item) -> bool:
+            return bool(getattr(item, "filename", None)) and hasattr(item, "read")
+        supplier_uploads = [item for item in form.getlist("supplier_files") + form.getlist("supplier_file") if is_upload_file_like(item)]
+        if not supplier_uploads:
+            return JSONResponse({"ok": False, "message": "請上傳 Supplier Files。"}, status_code=400)
+        options = _list_module2_site_raw_material_bulk_files()
+        raw_paths = []
+        selected = str(form.get("raw_material_bulk_filename") or "").strip()
+        if selected:
+            path = _safe_output_path(selected)
+            if path and path.exists():
+                raw_paths.append(path)
+        if not raw_paths:
+            for item in options:
+                path = _safe_output_path(item.get("filename"))
+                if path and path.exists():
+                    raw_paths.append(path)
+        if not raw_paths:
+            return JSONResponse({"ok": False, "message": "尚未找到 Module 2B Raw Material Bulk，請先執行 Module 2B。"}, status_code=400)
+        token = uuid.uuid4().hex[:10]
+        supplier_paths: list[Path] = []
+        for idx, supplier_file in enumerate(supplier_uploads, start=1):
+            filename = Path(str(getattr(supplier_file, "filename", "") or f"supplier_{idx}.xlsx")).name
+            if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+                return JSONResponse({"ok": False, "message": f"{filename} 不是 Supplier Excel 檔案。"}, status_code=400)
+            saved_path = UPLOAD_DIR / f"module2c_supplier_{token}_{idx}_{filename}"
+            saved_path.write_bytes(await supplier_file.read())
+            supplier_paths.append(saved_path)
+        supplier_bulk_template_path = BASE_DIR / "templates" / "supplier_bulk_create_template_v1.xlsx"
+        supplier_bulk_output_path = OUTPUT_DIR / f"supplier_bulk_create_{token}.xlsx"
+        summary = generate_supplier_mapping_from_raw_material_bulk_files(
+            raw_material_bulk_paths=raw_paths,
+            supplier_paths=supplier_paths,
+            output_dir=OUTPUT_DIR,
+            token=token,
+            supplier_bulk_template_path=supplier_bulk_template_path if supplier_bulk_template_path.exists() else None,
+            supplier_bulk_output_path=supplier_bulk_output_path if supplier_bulk_template_path.exists() else None,
+        )
+        summary["timezone"] = "Asia/Taipei"
+        summary["app_version"] = CMP_MAIN_VERSION
+        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
+        LATEST_MODULE2_SUPPLIER_MANIFEST_PATH.write_text(json.dumps({
+            "ok": True,
+            "timezone": "Asia/Taipei",
+            "updated_at": _now_taipei().isoformat(timespec="seconds"),
+            "summary": summary,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"ok": True, "message": "Module 2C Supplier Mapping completed.", "summary": summary, "download_url": summary.get("download_url")}
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    finally:
+        gc.collect()
