@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V22_0_BOM_ENGINE_REWRITE"
+BOM_FORMATTER_VERSION = "CMP_V22_1_BOM_ENGINE_STABLE"
 
 
 DEFAULT_MAPPING = {
@@ -2102,7 +2102,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V22_0_BOM_ENGINE_REWRITE"
+BOM_FORMATTER_VERSION = "CMP_V22_1_BOM_ENGINE_STABLE"
 
 
 # =========================================================
