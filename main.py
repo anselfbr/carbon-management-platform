@@ -29,7 +29,7 @@ LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_PATCH_V22_2_STABLE"
+CMP_MAIN_VERSION = "CMP_PATCH_V22_3_STABLE_ALL_SITE_BULK"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -1813,18 +1813,43 @@ def module2_step1_output_source():
 
 
 def _find_latest_module2_raw_material_bulk() -> Path | None:
-    """Return the most recent Module 2 raw material bulk output without creating a duplicate latest file."""
+    """Return the stable all-site Module 2 raw material bulk workbook for Module 3.
+
+    Priority:
+    1. In-memory path from the current Module 2 run.
+    2. Stable latest workbook persisted on disk.
+    3. Most recent non-split raw material bulk workbook.
+
+    Do not use Production Site split workbooks as Module 3 source unless no
+    all-site workbook exists, otherwise Module 3 may process only one site.
+    """
     global MODULE2_RAW_MATERIAL_BULK_PATH
     if MODULE2_RAW_MATERIAL_BULK_PATH and MODULE2_RAW_MATERIAL_BULK_PATH.exists():
         return MODULE2_RAW_MATERIAL_BULK_PATH
-    candidates = []
+
+    stable_latest = OUTPUT_DIR / "raw_material_activity_data_bulk_latest.xlsx"
+    if stable_latest.exists():
+        MODULE2_RAW_MATERIAL_BULK_PATH = stable_latest
+        return stable_latest
+
+    candidates: list[Path] = []
     for path in OUTPUT_DIR.glob("raw_material_activity_data_bulk_*.xlsx"):
         name = path.name.lower()
-        if "by_site" in name or name.endswith("_latest.xlsx"):
+        if "by_site" in name:
             continue
-        candidates.append(path)
+        # Split files contain site names after raw_material_activity_data_bulk_;
+        # all-site files are generated as raw_material_activity_data_bulk_<token>.xlsx
+        # where token is the 10-character run id.
+        stem = path.stem.replace("raw_material_activity_data_bulk_", "", 1)
+        if len(stem) == 10 and re.fullmatch(r"[0-9a-f]+", stem):
+            candidates.append(path)
+
+    if not candidates:
+        # Last-resort fallback: keep old behavior so existing deployments do not break.
+        candidates = [p for p in OUTPUT_DIR.glob("raw_material_activity_data_bulk_*.xlsx") if "by_site" not in p.name.lower()]
     if not candidates:
         return None
+
     latest = max(candidates, key=lambda p: p.stat().st_mtime)
     MODULE2_RAW_MATERIAL_BULK_PATH = latest
     return latest
@@ -2168,24 +2193,45 @@ async def process_bom_expansion(request: Request):
         )
         output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
 
-        # CMP V22.2: keep a stable latest Raw Material Bulk workbook for Module 3.
-        # Module 2 exports a ZIP split by Production Site; Module 3 needs an xlsx
-        # source.  Use the first generated site workbook as the latest source
-        # instead of accidentally falling back to an older run.
+        # CMP V22.3: keep a stable all-site Raw Material Bulk workbook for Module 3.
+        # Module 2 still returns the by-site ZIP for download, but Module 3 must not
+        # accidentally consume only the first site workbook.
         MODULE2_RAW_MATERIAL_BULK_PATH = None
         latest_raw_bulk_path = OUTPUT_DIR / "raw_material_activity_data_bulk_latest.xlsx"
-        for item in summary.get("production_site_files", []) or []:
-            candidate = OUTPUT_DIR / str(item.get("filename", ""))
-            if candidate.exists() and candidate.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
+        candidate_names = [
+            str(summary.get("combined_raw_material_bulk_filename", "") or ""),
+            str(summary.get("all_site_raw_material_bulk_filename", "") or ""),
+        ]
+        for candidate_name in candidate_names:
+            candidate = OUTPUT_DIR / candidate_name if candidate_name else None
+            if candidate and candidate.exists() and candidate.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
                 try:
                     shutil.copy2(candidate, latest_raw_bulk_path)
                     MODULE2_RAW_MATERIAL_BULK_PATH = latest_raw_bulk_path
                     summary["module2_raw_material_bulk_latest"] = latest_raw_bulk_path.name
                     summary["module2_raw_material_bulk_latest_download_url"] = f"/download/{latest_raw_bulk_path.name}"
                     summary["module2_raw_material_bulk_source_filename"] = candidate.name
+                    summary["module2_raw_material_bulk_source_scope"] = "all_production_sites"
                 except Exception:
                     traceback.print_exc()
                 break
+
+        # Last-resort fallback for older bom_formatter.py: use a site file only if
+        # the all-site workbook was not generated.
+        if MODULE2_RAW_MATERIAL_BULK_PATH is None:
+            for item in summary.get("production_site_files", []) or []:
+                candidate = OUTPUT_DIR / str(item.get("filename", ""))
+                if candidate.exists() and candidate.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
+                    try:
+                        shutil.copy2(candidate, latest_raw_bulk_path)
+                        MODULE2_RAW_MATERIAL_BULK_PATH = latest_raw_bulk_path
+                        summary["module2_raw_material_bulk_latest"] = latest_raw_bulk_path.name
+                        summary["module2_raw_material_bulk_latest_download_url"] = f"/download/{latest_raw_bulk_path.name}"
+                        summary["module2_raw_material_bulk_source_filename"] = candidate.name
+                        summary["module2_raw_material_bulk_source_scope"] = "single_site_fallback"
+                    except Exception:
+                        traceback.print_exc()
+                    break
 
         summary["module1_step1_source_filename"] = step1_path.name
         summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
@@ -2210,7 +2256,7 @@ async def process_bom_expansion(request: Request):
         else:
             summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
             summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
-        summary["app_version"] = "CMP_PATCH_V22_2_STABLE"
+        summary["app_version"] = "CMP_PATCH_V22_3_STABLE_ALL_SITE_BULK"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -2228,7 +2274,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_PATCH_V22_2_STABLE",
+        "app_version": "CMP_PATCH_V22_3_STABLE_ALL_SITE_BULK",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),

@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V22_2_BOM_ENGINE_STABLE_SINGLE_STRUCTURE"
+BOM_FORMATTER_VERSION = "CMP_V22_3_BOM_ENGINE_STABLE_ALL_SITE_BULK"
 
 
 DEFAULT_MAPPING = {
@@ -2102,7 +2102,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V22_2_BOM_ENGINE_STABLE_SINGLE_STRUCTURE"
+BOM_FORMATTER_VERSION = "CMP_V22_3_BOM_ENGINE_STABLE_ALL_SITE_BULK"
 
 
 # =========================================================
@@ -2233,11 +2233,29 @@ def generate_module2_outputs_memory_optimized(
                 work["material_group"] = ""
 
         site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
+
+        # CMP V22.3: generate an all-site xlsx in the same Module 2 run.
+        # The by-site ZIP remains the user-facing Module 2 export, while this
+        # workbook is the stable source for Module 3 CCL factor filling.
+        all_site_df = work.drop(columns=["_target_key", "_production_site"], errors="ignore").copy()
+        all_site_file_path = output_dir / f"raw_material_activity_data_bulk_{token}.xlsx"
+        all_site_write_summary, all_site_expanded = _write_raw_material_bulk_from_exploded(
+            exploded=all_site_df,
+            raw_material_template_path=raw_material_template_path,
+            output_path=all_site_file_path,
+            supplier_map=supplier_map,
+            return_expanded=True,
+        )
+
         generated_files: list[dict[str, Any]] = []
         expanded_all: list[pd.DataFrame] = []
-        supplier_matched_total = supplier_expanded_total = 0
-        supplier_name_matched_total = supplier_name_missing_total = 0
-        supplier_options_total = 0
+        if supplier_bulk_template_path and supplier_bulk_output_path and all_site_expanded is not None and not all_site_expanded.empty:
+            expanded_all.append(all_site_expanded)
+        supplier_matched_total = int(all_site_write_summary.get("supplier_matched_rows", 0))
+        supplier_expanded_total = int(all_site_write_summary.get("supplier_expanded_rows", 0))
+        supplier_name_matched_total = int(all_site_write_summary.get("supplier_name_matched_rows", 0))
+        supplier_name_missing_total = int(all_site_write_summary.get("supplier_name_missing_rows", 0))
+        supplier_options_total = int(all_site_write_summary.get("supplier_name_options", 0))
         zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
         zip_path = output_dir / zip_filename
 
@@ -2254,12 +2272,9 @@ def generate_module2_outputs_memory_optimized(
                     supplier_map=supplier_map,
                     return_expanded=True,
                 )
-                if supplier_bulk_template_path and supplier_bulk_output_path and expanded_site is not None and not expanded_site.empty:
-                    expanded_all.append(expanded_site)
-                supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
-                supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
-                supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
-                supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
+                # Site files are split exports of the same all-site dataset.
+                # Do not add their supplier counts to the all-site totals, or the
+                # dashboard summary will double count.
                 supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
                 zf.write(file_path, arcname=file_path.name)
                 generated_files.append({
@@ -2297,6 +2312,12 @@ def generate_module2_outputs_memory_optimized(
         summary.update({
             "output_filename": zip_filename,
             "download_url": f"/download/{zip_filename}",
+            "combined_raw_material_bulk_filename": all_site_file_path.name,
+            "combined_raw_material_bulk_download_url": f"/download/{all_site_file_path.name}",
+            "all_site_raw_material_bulk_filename": all_site_file_path.name,
+            "all_site_raw_material_bulk_download_url": f"/download/{all_site_file_path.name}",
+            "all_site_activity_rows": int(all_site_write_summary.get("activity_rows", 0)),
+            "all_site_raw_materials": int(all_site_write_summary.get("raw_materials", 0)),
             "split_by_production_site": True,
             "production_site_files": generated_files,
             "production_site_count": int(len(site_values)),
