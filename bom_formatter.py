@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V23_1_ONE_STEP_STREAMING_WRITER"
+BOM_FORMATTER_VERSION = "CMP_V23_2_ONE_STEP_SUPPLIER_MERGED"
 
 
 DEFAULT_MAPPING = {
@@ -2102,7 +2102,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V23_1_ONE_STEP_STREAMING_WRITER"
+BOM_FORMATTER_VERSION = "CMP_V23_2_ONE_STEP_SUPPLIER_MERGED"
 
 
 # =========================================================
@@ -2746,7 +2746,7 @@ def _calculate_total_working_hour_by_target(
 
 
 # =========================================================
-# CMP_V23_1_ONE_STEP_STREAMING_WRITER
+# CMP_V23_2_ONE_STEP_SUPPLIER_MERGED
 # Override raw-material bulk writer to avoid openpyxl normal-mode OOM.
 # Module 2 remains one-step: BOM expansion + optional supplier mapping.
 # =========================================================
@@ -2924,4 +2924,4 @@ def _write_raw_material_bulk_from_exploded(
         return result, expanded
     return result
 
-BOM_FORMATTER_VERSION = "CMP_V23_1_ONE_STEP_STREAMING_WRITER"
+BOM_FORMATTER_VERSION = "CMP_V23_2_ONE_STEP_SUPPLIER_MERGED"
