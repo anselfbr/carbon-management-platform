@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import re
 import shutil
 import tempfile
@@ -16,7 +17,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V14_10_EXCLUDE_ZERO_USAGE_AND_ZERO_TOTAL_HOURS"
+BOM_FORMATTER_VERSION = "CMP_V22_4_BOM_ENGINE_STABLE_ALL_SITES_SOURCE"
 
 
 DEFAULT_MAPPING = {
@@ -130,8 +131,10 @@ def _apply_altitem_usage_probability(df: pd.DataFrame) -> tuple[pd.DataFrame, di
     Rule: within the same parent material, rows with the same non-empty
     Altitem group are alternative materials. For such duplicated groups,
     effective quantity = CS03 Qty × Usage probability%.
+
+    Memory V1: operate on the already-normalized BOM frame in-place.
     """
-    work = df.copy()
+    work = df
     if "_altitem_group" not in work.columns:
         work["_altitem_group"] = ""
     if "_usage_probability_ratio" not in work.columns:
@@ -393,7 +396,16 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     altitem_group_col = _find_optional_column(df, m["altitem_group_col"])
     usage_probability_col = _find_optional_column(df, m["usage_probability_col"])
 
-    df = df.copy()
+    # Memory V1: keep only the columns required by Module 2 before creating
+    # normalized helper columns. This prevents carrying unused SAP columns
+    # through BOM explosion / structure / roll-up.
+    required_source_cols = [
+        parent_col, component_col, qty_col, unit_col, description_col, material_group_col,
+        valid_from_col, net_weight_col, gross_weight_col, weight_uom_col,
+        altitem_group_col, usage_probability_col,
+    ]
+    required_source_cols = list(dict.fromkeys([c for c in required_source_cols if c]))
+    df = df.loc[:, required_source_cols]
     df["_parent"] = df[parent_col].apply(_safe_text)
     df["_component"] = df[component_col].apply(_safe_text)
     df["_qty"] = df[qty_col].apply(_safe_number)
@@ -407,7 +419,7 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     df["_altitem_group"] = df[altitem_group_col].apply(_normalize_altitem_group) if altitem_group_col else ""
     df["_usage_probability_ratio"] = df[usage_probability_col].apply(_usage_probability_ratio) if usage_probability_col else None
 
-    df = df[(df["_parent"] != "") & (df["_component"] != "")].copy()
+    df = df.loc[(df["_parent"] != "") & (df["_component"] != "")].reset_index(drop=True)
     df, altitem_summary = _apply_altitem_usage_probability(df)
 
     used_columns = {
@@ -459,11 +471,10 @@ def _read_boms(
     for path in paths:
         try:
             df, cols = _read_bom(path, mapping=mapping)
-            part = df.copy()
-            part["_source_file"] = path.name
-            frames.append(part)
+            df["_source_file"] = path.name
+            frames.append(df)
             used_columns = used_columns or cols
-            source_rows.append({"filename": path.name, "rows": int(len(part))})
+            source_rows.append({"filename": path.name, "rows": int(len(df))})
         except Exception as exc:
             errors.append(f"{path.name}: {exc}")
 
@@ -1816,7 +1827,10 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
         _write_template_value(ws, row_idx, cols["unit_name"], row["unit_name"])
         row_idx += 1
 
-    wb.save(output_path)
+    try:
+        wb.save(output_path)
+    finally:
+        wb.close()
     return {
         "supplier_bulk_rows": int(len(rows)),
         "supplier_bulk_filename": output_path.name,
@@ -1924,7 +1938,10 @@ def _write_raw_material_bulk_from_exploded(
         _write_template_value(raw_ws, row_idx, raw_cols["description"], r["description"])
         row_idx += 1
 
-    wb.save(output_path)
+    try:
+        wb.save(output_path)
+    finally:
+        wb.close()
     result = {
         "output_filename": output_path.name,
         "activity_template_columns": activity_cols,
@@ -2085,4 +2102,666 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V17_3_SUPPLIER_NAME_VENDORNAME"
+BOM_FORMATTER_VERSION = "CMP_V22_4_BOM_ENGINE_STABLE_ALL_SITES_SOURCE"
+
+
+# =========================================================
+# Module 2 Memory Optimization V1 helpers
+# Read Standard BOM once, reuse the same normalized DataFrame for:
+# 1) Raw Material Bulk by site ZIP
+# 2) BOM Structure latest file
+# 3) Working Hour Roll-up file
+# =========================================================
+
+def write_bom_structure_dataframe(
+    structure: pd.DataFrame,
+    summary: dict[str, Any],
+    used_columns: dict[str, Any],
+    output_path: str | Path,
+) -> Dict[str, Any]:
+    """Write a precomputed BOM Structure DataFrame without re-expanding BOM."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        structure.to_excel(writer, index=False, sheet_name="BOM Structure")
+        ws = writer.book["BOM Structure"]
+        ws.freeze_panes = "A2"
+        for col in ws.columns:
+            max_len = 12
+            letter = col[0].column_letter
+            for cell in col[:1000]:
+                max_len = max(max_len, len(str(cell.value or "")) + 2)
+            ws.column_dimensions[letter].width = min(max_len, 45)
+    out = dict(summary or {})
+    out["output_filename"] = output_path.name
+    out["used_columns"] = used_columns
+    out["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
+    out["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
+    out["bom_rows_after_dedup"] = int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0
+    out["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
+    out["bom_structure_reused"] = True
+    return out
+
+
+def export_bom_structure_file_from_dataframe(
+    bom_df: pd.DataFrame,
+    used_columns: dict[str, Any],
+    output_path: str | Path,
+) -> Dict[str, Any]:
+    """Export BOM Structure using an already-loaded normalized BOM DataFrame."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    structure, summary = _explode_bom_structure(bom_df)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        structure.to_excel(writer, index=False, sheet_name="BOM Structure")
+        ws = writer.book["BOM Structure"]
+        ws.freeze_panes = "A2"
+        for col in ws.columns:
+            max_len = 12
+            letter = col[0].column_letter
+            for cell in col[:1000]:
+                max_len = max(max_len, len(str(cell.value or "")) + 2)
+            ws.column_dimensions[letter].width = min(max_len, 45)
+    summary["output_filename"] = output_path.name
+    summary["used_columns"] = used_columns
+    summary["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
+    summary["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
+    summary["bom_rows_after_dedup"] = int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0
+    summary["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
+    return summary
+
+
+def generate_module2_outputs_memory_optimized(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    raw_material_template_path: str | Path,
+    output_dir: str | Path,
+    token: str,
+    step1_output_path: str | Path,
+    bom_structure_output_path: str | Path,
+    working_hour_rollup_output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
+    supplier_bulk_template_path: str | Path | None = None,
+    supplier_bulk_output_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """Generate all Module 2 outputs while loading Standard BOM only once."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    try:
+        supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+
+        # CMP V22.2: build and export BOM Structure once, then reuse it for
+        # zero-working-hour filtering and the auditable roll-up file.
+        bom_structure_df, bom_structure_summary = _explode_bom_structure(bom_df)
+        bom_structure_summary = write_bom_structure_dataframe(
+            structure=bom_structure_df,
+            summary=bom_structure_summary,
+            used_columns=used_columns,
+            output_path=bom_structure_output_path,
+        )
+
+        exploded, base_summary = _explode_bom(bom_df)
+        exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+
+        total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(
+            step1_output_path=step1_output_path,
+            bom_df=None,
+            bom_structure_df=bom_structure_df,
+        )
+        exploded, zero_total_working_hour_rows_excluded = _exclude_zero_total_working_hour_target_rows(
+            exploded=exploded,
+            total_hour_by_material=total_hour_by_target,
+        )
+        base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+        base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
+        base_summary["activity_rows"] = int(len(exploded))
+        base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+        base_summary.update(working_hour_summary)
+
+        site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
+        if exploded.empty:
+            work = exploded.assign(_production_site="")
+        else:
+            work = exploded
+            work["_target_key"] = work["target_product"].apply(_normalize_material_key)
+            work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
+            work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+            work["transport_destination"] = work["_production_site"]
+            if "material_group" not in work.columns:
+                work["material_group"] = ""
+
+        site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
+        generated_files: list[dict[str, Any]] = []
+        expanded_all: list[pd.DataFrame] = []
+        supplier_matched_total = supplier_expanded_total = 0
+        supplier_name_matched_total = supplier_name_missing_total = 0
+        supplier_options_total = 0
+        zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
+        zip_path = output_dir / zip_filename
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for site in site_values:
+                site_mask = work["_production_site"].eq(site)
+                site_df = work.loc[site_mask].drop(columns=["_target_key", "_production_site"], errors="ignore")
+                safe_site = _sanitize_filename_part(site)
+                file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
+                write_summary, expanded_site = _write_raw_material_bulk_from_exploded(
+                    exploded=site_df,
+                    raw_material_template_path=raw_material_template_path,
+                    output_path=file_path,
+                    supplier_map=supplier_map,
+                    return_expanded=True,
+                )
+                if supplier_bulk_template_path and supplier_bulk_output_path and expanded_site is not None and not expanded_site.empty:
+                    expanded_all.append(expanded_site)
+                supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
+                supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
+                supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
+                supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
+                supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
+                zf.write(file_path, arcname=file_path.name)
+                generated_files.append({
+                    "production_site": site,
+                    "filename": file_path.name,
+                    "activity_rows": int(write_summary.get("activity_rows", 0)),
+                    "raw_materials": int(write_summary.get("raw_materials", 0)),
+                    "supplier_matched_rows": int(write_summary.get("supplier_matched_rows", 0)),
+                    "supplier_expanded_rows": int(write_summary.get("supplier_expanded_rows", 0)),
+                })
+                del site_df, expanded_site
+                gc.collect()
+
+        # CMP V22.4: generate one all-sites xlsx for Module 3 while keeping
+        # the user-facing split-by-site ZIP. This workbook is complete across
+        # Production Sites and prevents Module 3 from accidentally using only
+        # the first site workbook.
+        all_sites_output_filename = f"raw_material_activity_data_bulk_all_sites_{token}.xlsx"
+        all_sites_output_path = output_dir / all_sites_output_filename
+        all_sites_df = work.drop(columns=["_target_key", "_production_site"], errors="ignore").copy()
+        all_sites_write_summary, all_sites_expanded = _write_raw_material_bulk_from_exploded(
+            exploded=all_sites_df,
+            raw_material_template_path=raw_material_template_path,
+            output_path=all_sites_output_path,
+            supplier_map=supplier_map,
+            return_expanded=True,
+        )
+        del all_sites_df, all_sites_expanded
+        gc.collect()
+
+        supplier_bulk_summary: Dict[str, Any] = {}
+        if supplier_bulk_template_path and supplier_bulk_output_path and expanded_all:
+            supplier_bulk_df = pd.concat(expanded_all, ignore_index=True)
+            supplier_bulk_summary = _write_supplier_bulk_create_file(
+                supplier_bulk_df,
+                supplier_bulk_template_path,
+                supplier_bulk_output_path,
+            )
+            del supplier_bulk_df, expanded_all
+            gc.collect()
+        elif supplier_bulk_template_path and supplier_bulk_output_path:
+            supplier_bulk_summary = {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": ""}
+
+        rollup_summary = generate_working_hour_rollup_file(
+            step1_output_path=step1_output_path,
+            bom_structure_path=bom_structure_output_path,
+            output_path=working_hour_rollup_output_path,
+        )
+
+        unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
+        summary = dict(base_summary)
+        summary.update({
+            "output_filename": zip_filename,
+            "download_url": f"/download/{zip_filename}",
+            "all_sites_output_filename": all_sites_output_filename,
+            "all_sites_download_url": f"/download/{all_sites_output_filename}",
+            "all_sites_activity_rows": int(all_sites_write_summary.get("activity_rows", 0)),
+            "all_sites_raw_materials": int(all_sites_write_summary.get("raw_materials", 0)),
+            "module3_source_scope": "all_sites",
+            "split_by_production_site": True,
+            "production_site_files": generated_files,
+            "production_site_count": int(len(site_values)),
+            "unassigned_rows": unassigned_rows,
+            "used_columns": used_columns,
+            "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
+            "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
+            "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
+            "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
+            "supplier_matched_rows": int(supplier_matched_total),
+            "supplier_expanded_rows": int(supplier_expanded_total),
+            "supplier_name_matched_rows": int(supplier_name_matched_total),
+            "supplier_name_missing_rows": int(supplier_name_missing_total),
+            "supplier_dropdown_matched_rows": int(supplier_name_matched_total),
+            "supplier_dropdown_missing_rows": int(supplier_name_missing_total),
+            "supplier_name_options": int(supplier_options_total),
+            "module2_memory_optimized": True,
+            "memory_optimization_version": BOM_FORMATTER_VERSION,
+        })
+        summary.update(supplier_summary)
+        summary.update(step1_summary)
+        summary.update(supplier_bulk_summary)
+        summary["bom_structure_latest"] = Path(bom_structure_output_path).name
+        summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
+        summary["bom_structure_download_url"] = f"/download/{Path(bom_structure_output_path).name}"
+        summary["working_hour_rollup_filename"] = Path(working_hour_rollup_output_path).name
+        summary["working_hour_rollup_download_url"] = f"/download/{Path(working_hour_rollup_output_path).name}"
+        summary["working_hour_rollup_latest"] = Path(working_hour_rollup_output_path).name
+        summary["working_hour_rollup_latest_download_url"] = f"/download/{Path(working_hour_rollup_output_path).name}"
+        summary["working_hour_rollup_rows"] = int(rollup_summary.get("summary_rows", 0))
+        summary["working_hour_rollup_detail_rows"] = int(rollup_summary.get("detail_rows", 0))
+        summary["working_hour_rollup_total_direct_hours"] = float(rollup_summary.get("total_direct_hours", 0))
+        summary["working_hour_rollup_total_semi_hours"] = float(rollup_summary.get("total_semi_hours", 0))
+        summary["working_hour_rollup_total_hours"] = float(rollup_summary.get("total_hours", 0))
+        return summary
+    finally:
+        for name in ["bom_df", "exploded", "work", "supplier_map"]:
+            if name in locals():
+                try:
+                    del locals()[name]
+                except Exception:
+                    pass
+        gc.collect()
+
+
+# =========================================================
+# CMP_V22_0_BOM_ENGINE_REWRITE
+# CPU optimization for Module 2 BOM Expansion
+# - Replace repeated Python dict-row DFS with tuple-based cached engine
+# - Aggregate during traversal instead of building a huge output DataFrame first
+# - Keep output schema and public function behavior unchanged
+# =========================================================
+
+def _build_bom_children_index(df: pd.DataFrame):
+    """Build a compact Parent -> tuple(children) index for fast BOM traversal."""
+    children: dict[str, list[tuple[Any, ...]]] = defaultdict(list)
+
+    cols = [
+        "_parent", "_component", "_qty", "_uom", "_description", "_material_group",
+        "_valid_from", "_net_weight", "_gross_weight", "_weight_uom",
+    ]
+
+    for row in df[cols].itertuples(index=False, name=None):
+        parent, component, qty, uom, desc, group, valid_from, net_weight, gross_weight, weight_uom = row
+        parent = str(parent or "").strip()
+        component = str(component or "").strip()
+        if not parent or not component:
+            continue
+        try:
+            qty_value = float(qty or 0.0)
+        except Exception:
+            qty_value = 0.0
+        children[parent].append((
+            component,
+            qty_value,
+            uom,
+            desc,
+            group,
+            valid_from,
+            net_weight,
+            gross_weight,
+            weight_uom,
+        ))
+
+    return {k: tuple(v) for k, v in children.items()}
+
+
+def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Fast BOM explosion engine.
+
+    Output is intentionally compatible with the previous _explode_bom():
+    columns:
+    target_product, raw_material, usage, unit, description, material_group,
+    valid_from, net_weight, gross_weight, weight_uom, level
+    """
+    if df is None or df.empty:
+        exploded = pd.DataFrame(columns=[
+            "target_product", "raw_material", "usage", "unit", "description",
+            "material_group", "valid_from", "net_weight", "gross_weight",
+            "weight_uom", "level"
+        ])
+        return exploded, {
+            "products": 0,
+            "semi_finished": 0,
+            "raw_materials": 0,
+            "activity_rows": 0,
+            "max_level": 0,
+            "cycles_skipped": 0,
+            "bom_engine_version": "CMP_V22_0_BOM_ENGINE_REWRITE",
+        }
+
+    parent_set = set(df["_parent"].dropna().astype(str).str.strip())
+    component_set = set(df["_component"].dropna().astype(str).str.strip())
+    parent_set.discard("")
+    component_set.discard("")
+
+    semi_finished_set = parent_set.intersection(component_set)
+    roots = sorted(parent_set - component_set) or sorted(parent_set)
+    children = _build_bom_children_index(df)
+
+    expansion_cache: dict[str, tuple[tuple[Any, ...], ...]] = {}
+    cycle_count = 0
+
+    def expand_node(node: str, path: tuple[str, ...]) -> tuple[tuple[Any, ...], ...]:
+        """Return raw leaves under node as compact tuples.
+
+        tuple format:
+        raw_material, usage_per_node, unit, description, material_group,
+        valid_from, net_weight, gross_weight, weight_uom, relative_level
+        """
+        nonlocal cycle_count
+
+        cached = expansion_cache.get(node)
+        if cached is not None:
+            return cached
+
+        rows: list[tuple[Any, ...]] = []
+        for child in children.get(node, ()):
+            component, qty, uom, desc, group, valid_from, net_weight, gross_weight, weight_uom = child
+
+            if component in path:
+                cycle_count += 1
+                continue
+
+            if component in semi_finished_set:
+                sub_rows = expand_node(component, path + (component,))
+                for sub in sub_rows:
+                    (
+                        raw_material,
+                        sub_usage,
+                        sub_unit,
+                        sub_desc,
+                        sub_group,
+                        sub_valid_from,
+                        sub_net_weight,
+                        sub_gross_weight,
+                        sub_weight_uom,
+                        sub_level,
+                    ) = sub
+                    rows.append((
+                        raw_material,
+                        qty * float(sub_usage or 0.0),
+                        sub_unit,
+                        sub_desc,
+                        sub_group,
+                        sub_valid_from,
+                        sub_net_weight,
+                        sub_gross_weight,
+                        sub_weight_uom,
+                        int(sub_level or 0) + 1,
+                    ))
+            else:
+                rows.append((
+                    component,
+                    qty,
+                    uom,
+                    desc,
+                    group,
+                    valid_from,
+                    net_weight,
+                    gross_weight,
+                    weight_uom,
+                    1,
+                ))
+
+        result = tuple(rows)
+        expansion_cache[node] = result
+        return result
+
+    # Aggregate while traversing to avoid building a huge intermediate DataFrame.
+    aggregated: dict[tuple[str, str, Any], list[Any]] = {}
+
+    for root in roots:
+        root_rows = expand_node(root, (root,))
+        for row in root_rows:
+            (
+                raw_material,
+                usage,
+                unit,
+                desc,
+                group,
+                valid_from,
+                net_weight,
+                gross_weight,
+                weight_uom,
+                relative_level,
+            ) = row
+            key = (root, raw_material, unit)
+            current = aggregated.get(key)
+            if current is None:
+                aggregated[key] = [
+                    float(usage or 0.0),
+                    desc,
+                    group,
+                    valid_from,
+                    net_weight,
+                    gross_weight,
+                    weight_uom,
+                    int(relative_level or 0),
+                ]
+            else:
+                current[0] += float(usage or 0.0)
+                if int(relative_level or 0) > int(current[7] or 0):
+                    current[7] = int(relative_level or 0)
+
+    if aggregated:
+        records = [
+            (
+                target_product,
+                raw_material,
+                values[0],
+                unit,
+                values[1],
+                values[2],
+                values[3],
+                values[4],
+                values[5],
+                values[6],
+                values[7],
+            )
+            for (target_product, raw_material, unit), values in aggregated.items()
+        ]
+        exploded = pd.DataFrame.from_records(
+            records,
+            columns=[
+                "target_product", "raw_material", "usage", "unit", "description",
+                "material_group", "valid_from", "net_weight", "gross_weight",
+                "weight_uom", "level"
+            ],
+        ).sort_values(["target_product", "raw_material"]).reset_index(drop=True)
+    else:
+        exploded = pd.DataFrame(columns=[
+            "target_product", "raw_material", "usage", "unit", "description",
+            "material_group", "valid_from", "net_weight", "gross_weight",
+            "weight_uom", "level"
+        ])
+
+    summary = {
+        "products": len(roots),
+        "semi_finished": len(semi_finished_set),
+        "raw_materials": int(exploded["raw_material"].nunique()) if not exploded.empty else 0,
+        "activity_rows": int(len(exploded)),
+        "max_level": int(exploded["level"].max()) if not exploded.empty else 0,
+        "cycles_skipped": int(cycle_count),
+        "bom_engine_version": "CMP_V22_0_BOM_ENGINE_REWRITE",
+        "bom_engine_cached_nodes": int(len(expansion_cache)),
+    }
+    return exploded, summary
+
+
+def _explode_bom_structure(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """CPU-optimized normalized multi-level BOM structure export."""
+    if df is None or df.empty:
+        structure = pd.DataFrame(columns=[
+            "Target Product", "Parent Material", "Component", "Quantity Per Parent",
+            "Accumulated Quantity", "Unit", "Component Description", "Material Group",
+            "Valid From", "Net weight", "Gross weight", "Weight UoM", "Level",
+            "Is Semi-finished"
+        ])
+        return structure, {
+            "products": 0,
+            "semi_finished": 0,
+            "structure_rows": 0,
+            "max_level": 0,
+            "cycles_skipped": 0,
+            "bom_structure_engine_version": "CMP_V22_0_BOM_ENGINE_REWRITE",
+        }
+
+    parent_set = set(df["_parent"].dropna().astype(str).str.strip())
+    component_set = set(df["_component"].dropna().astype(str).str.strip())
+    parent_set.discard("")
+    component_set.discard("")
+
+    semi_finished_set = parent_set.intersection(component_set)
+    roots = sorted(parent_set - component_set) or sorted(parent_set)
+    children = _build_bom_children_index(df)
+
+    rows: list[tuple[Any, ...]] = []
+    cycle_count = 0
+
+    for root in roots:
+        stack: list[tuple[str, float, int, tuple[str, ...]]] = [(root, 1.0, 0, (root,))]
+        while stack:
+            current_parent, accumulated_qty, level, path = stack.pop()
+            next_level = level + 1
+            for child in children.get(current_parent, ()):
+                component, qty, uom, desc, group, valid_from, net_weight, gross_weight, weight_uom = child
+                if component in path:
+                    cycle_count += 1
+                    continue
+
+                next_qty = accumulated_qty * float(qty or 0.0)
+                is_semi = component in semi_finished_set
+                rows.append((
+                    root,
+                    current_parent,
+                    component,
+                    qty,
+                    next_qty,
+                    uom,
+                    desc,
+                    group,
+                    valid_from,
+                    net_weight,
+                    gross_weight,
+                    weight_uom,
+                    next_level,
+                    "Y" if is_semi else "N",
+                ))
+
+                if is_semi:
+                    stack.append((component, next_qty, next_level, path + (component,)))
+
+    if rows:
+        structure = pd.DataFrame.from_records(
+            rows,
+            columns=[
+                "Target Product", "Parent Material", "Component", "Quantity Per Parent",
+                "Accumulated Quantity", "Unit", "Component Description", "Material Group",
+                "Valid From", "Net weight", "Gross weight", "Weight UoM", "Level",
+                "Is Semi-finished"
+            ],
+        )
+    else:
+        structure = pd.DataFrame(columns=[
+            "Target Product", "Parent Material", "Component", "Quantity Per Parent",
+            "Accumulated Quantity", "Unit", "Component Description", "Material Group",
+            "Valid From", "Net weight", "Gross weight", "Weight UoM", "Level",
+            "Is Semi-finished"
+        ])
+
+    summary = {
+        "products": len(roots),
+        "semi_finished": len(semi_finished_set),
+        "structure_rows": int(len(structure)),
+        "max_level": int(structure["Level"].max()) if not structure.empty else 0,
+        "cycles_skipped": int(cycle_count),
+        "bom_structure_engine_version": "CMP_V22_0_BOM_ENGINE_REWRITE",
+    }
+    return structure, summary
+
+
+def _calculate_total_working_hour_by_target(
+    step1_output_path: str | Path,
+    bom_df: pd.DataFrame | None = None,
+    bom_structure_df: pd.DataFrame | None = None,
+) -> tuple[dict[str, float], Dict[str, Any]]:
+    """CPU-optimized working-hour map used for zero-hour filtering.
+
+    CMP V22.2: accepts a precomputed BOM Structure DataFrame so Module 2 can
+    avoid exploding the same BOM structure more than once in a single run.
+    """
+    step1_output_path = Path(step1_output_path)
+    try:
+        step1_df = pd.read_excel(step1_output_path, sheet_name=STEP1_SOURCE_SHEET_NAME, dtype=object)
+    except Exception:
+        step1_df = pd.read_excel(step1_output_path, sheet_name=0, dtype=object)
+
+    material_col = _find_step1_column(step1_df, ["Material Number", "Material", "Product Material Number"])
+    qty_col = _find_step1_optional_column(step1_df, ["年度生產量", "Annual Quantity", "Delivered quantity"])
+    hour_col = _find_step1_optional_column(step1_df, ["年度總工時", "Total working hours", "Selected Hours", "Total Hours", "Working Hours"])
+    if not hour_col:
+        return {}, {
+            "working_hour_filter_applied": False,
+            "working_hour_filter_reason": "Step1 Output 找不到年度總工時欄位，未套用 Total Annual Working Hour = 0 過濾。",
+            "zero_total_working_hour_targets": 0,
+            "working_hour_engine_version": "CMP_V22_0_BOM_ENGINE_REWRITE",
+        }
+
+    work = step1_df[[c for c in [material_col, qty_col, hour_col] if c]].copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_annual_qty"] = work[qty_col].apply(_safe_number) if qty_col else 0.0
+    work["_direct_hour"] = work[hour_col].apply(_safe_number)
+    work = work[work["_material_key"] != ""]
+
+    material_totals = work.groupby(["_material_key"], dropna=False, as_index=False).agg({
+        "_annual_qty": "sum",
+        "_direct_hour": "sum",
+    })
+
+    qty_by_material: dict[str, float] = {}
+    direct_by_material: dict[str, float] = {}
+    hour_per_pc_by_material: dict[str, float] = {}
+
+    for material, qty, hours in material_totals[["_material_key", "_annual_qty", "_direct_hour"]].itertuples(index=False, name=None):
+        material = str(material or "").strip().upper()
+        qty = float(qty or 0.0)
+        hours = float(hours or 0.0)
+        qty_by_material[material] = qty
+        direct_by_material[material] = hours
+        hour_per_pc_by_material[material] = hours / qty if qty else 0.0
+
+    if bom_structure_df is not None:
+        structure = bom_structure_df.copy()
+    else:
+        if bom_df is None:
+            bom_df = pd.DataFrame()
+        structure, _structure_summary = _explode_bom_structure(bom_df)
+    semi_by_target: dict[str, float] = {}
+
+    if not structure.empty:
+        semi_rows = structure[
+            structure["Is Semi-finished"].astype(str).str.strip().str.upper().isin(["Y", "YES", "TRUE", "1"])
+        ]
+        for target, component, acc_qty in semi_rows[["Target Product", "Component", "Accumulated Quantity"]].itertuples(index=False, name=None):
+            target_key = _normalize_material_key(target)
+            semi_key = _normalize_material_key(component)
+            target_qty = float(qty_by_material.get(target_key, 0.0) or 0.0)
+            semi_hr_pc = float(hour_per_pc_by_material.get(semi_key, 0.0) or 0.0)
+            contribution = target_qty * float(acc_qty or 0.0) * semi_hr_pc
+            if contribution:
+                semi_by_target[target_key] = semi_by_target.get(target_key, 0.0) + contribution
+
+    total_by_target: dict[str, float] = {}
+    for material in sorted(set(direct_by_material) | set(semi_by_target)):
+        total_by_target[material] = float(direct_by_material.get(material, 0.0) or 0.0) + float(semi_by_target.get(material, 0.0) or 0.0)
+
+    zero_targets = [m for m, h in total_by_target.items() if float(h or 0.0) == 0.0]
+    return total_by_target, {
+        "working_hour_filter_applied": True,
+        "working_hour_filter_rule": "Exclude all Raw Material Activity rows when Target Product Total Annual Working Hour, including semi-finished roll-up, equals 0.",
+        "working_hour_mapped_targets": int(len(total_by_target)),
+        "zero_total_working_hour_targets": int(len(zero_targets)),
+        "working_hour_engine_version": "CMP_V22_0_BOM_ENGINE_REWRITE",
+    }
+
