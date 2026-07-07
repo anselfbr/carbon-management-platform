@@ -16,10 +16,11 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V17_3_DEBUG_TRACE_DETAIL"
+BOM_FORMATTER_VERSION = "CMP_V17_4_MATERIAL_SCOPED_BOM"
 
 
 DEFAULT_MAPPING = {
+    "material_col": "Material",
     "parent_col": "Parent Node",
     "component_col": "Component",
     "qty_col": "CS03 Qty",
@@ -378,6 +379,7 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     df = _read_excel_first_sheet(bom_path)
     m = _resolve_mapping(mapping)
 
+    material_col = _find_optional_column(df, m.get("material_col", "Material"))
     parent_col = _find_column(df, m["parent_col"])
     component_col = _find_column(df, m["component_col"])
     qty_col = _find_column(df, m["qty_col"])
@@ -389,6 +391,7 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     usage_probability_col = _find_optional_column(df, m["usage_probability_col"])
 
     df = df.copy()
+    df["_bom_material"] = df[material_col].apply(_safe_text) if material_col else ""
     df["_parent"] = df[parent_col].apply(_safe_text)
     df["_component"] = df[component_col].apply(_safe_text)
     df["_qty"] = df[qty_col].apply(_safe_number)
@@ -403,6 +406,7 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     df, altitem_summary = _apply_altitem_usage_probability(df)
 
     used_columns = {
+        "material_col": material_col or "",
         "parent_col": parent_col,
         "component_col": component_col,
         "qty_col": qty_col,
@@ -463,7 +467,7 @@ def _read_boms(
 
     merged = pd.concat(frames, ignore_index=True)
     before_dedup = int(len(merged))
-    dedup_subset = ["_parent", "_component", "_qty", "_uom", "_description", "_material_group", "_valid_from", "_altitem_group", "_usage_probability_ratio"]
+    dedup_subset = ["_bom_material", "_parent", "_component", "_qty", "_uom", "_description", "_material_group", "_valid_from", "_altitem_group", "_usage_probability_ratio"]
     merged = merged.drop_duplicates(subset=dedup_subset, keep="first").reset_index(drop=True)
     after_dedup = int(len(merged))
 
@@ -601,80 +605,117 @@ def _calculate_total_working_hour_by_target(
     }
 
 def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
-    parent_set = set(df["_parent"].dropna().astype(str))
-    component_set = set(df["_component"].dropna().astype(str))
-    semi_finished_set = parent_set.intersection(component_set)
+    """Explode BOM within each SAP Material scope.
 
-    roots = sorted(parent_set - component_set)
-    if not roots:
-        roots = sorted(parent_set)
-
-    children: dict[str, list[dict[str, Any]]] = defaultdict(list)
-
-    for _, r in df.iterrows():
-        row = {
-            "parent": r["_parent"],
-            "component": r["_component"],
-            "qty": r["_qty"],
-            "qty_original": r.get("_qty_original", r["_qty"]),
-            "qty_adjusted_by_altitem": bool(r.get("_qty_adjusted_by_altitem", False)),
-            "altitem_group": r.get("_altitem_group", ""),
-            "usage_probability_ratio": r.get("_usage_probability_ratio", None),
-            "uom": r["_uom"],
-            "description": r["_description"],
-            "material_group": r["_material_group"],
-            "valid_from": r["_valid_from"],
-        }
-        children[row["parent"]].append(row)
-
+    SAP CS03 multi-material exports can contain the same Parent Node under
+    different finished Materials. Parent Node is only unique inside a Material,
+    so the graph must be built per Material to prevent cross-product mixing.
+    """
     output_rows: list[dict[str, Any]] = []
     cycle_count = 0
+    product_count = 0
+    semi_finished_total: set[str] = set()
 
-    for root in roots:
-        stack: list[tuple[str, float, int, list[str]]] = [(root, 1.0, 0, [root])]
+    if df is None or df.empty:
+        trace_detail = pd.DataFrame(columns=[
+            "target_product", "source_material", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level",
+            "immediate_parent", "trace_path", "parent_accumulated_qty", "qty_this_level_effective",
+            "qty_this_level_original", "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio", "usage_per_path", "source_file"
+        ])
+        exploded = pd.DataFrame(columns=["target_product", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level"])
+        exploded.attrs["trace_detail"] = trace_detail
+        return exploded, {"products": 0, "semi_finished": 0, "raw_materials": 0, "activity_rows": 0, "max_level": 0, "cycles_skipped": 0}
 
-        while stack:
-            current_parent, accumulated_qty, level, path = stack.pop()
+    work = df.copy()
+    if "_bom_material" not in work.columns:
+        work["_bom_material"] = ""
+    work["_bom_material"] = work["_bom_material"].apply(_safe_text)
 
-            for child in children.get(current_parent, []):
-                component = child["component"]
-                qty = child["qty"]
-                next_qty = accumulated_qty * qty
-                next_level = level + 1
+    # If Material column is unavailable, fall back to the legacy single global graph.
+    scoped_groups = list(work.groupby("_bom_material", dropna=False)) if work["_bom_material"].astype(str).str.strip().any() else [("", work)]
 
-                if component in path:
-                    cycle_count += 1
-                    continue
+    for material_value, scoped_df in scoped_groups:
+        material = _safe_text(material_value)
+        parent_set = set(scoped_df["_parent"].dropna().astype(str))
+        component_set = set(scoped_df["_component"].dropna().astype(str))
+        semi_finished_set = parent_set.intersection(component_set)
+        semi_finished_total.update(semi_finished_set)
 
-                if component in semi_finished_set:
-                    stack.append((component, next_qty, next_level, path + [component]))
-                else:
-                    output_rows.append({
-                        "target_product": root,
-                        "raw_material": component,
-                        "usage": next_qty,
-                        "unit": child["uom"],
-                        "description": child["description"],
-                        "material_group": child["material_group"],
-                        "valid_from": child["valid_from"],
-                        "level": next_level,
-                        "immediate_parent": current_parent,
-                        "trace_path": " > ".join(path + [component]),
-                        "parent_accumulated_qty": accumulated_qty,
-                        "qty_this_level_effective": qty,
-                        "qty_this_level_original": child.get("qty_original", qty),
-                        "qty_adjusted_by_altitem": child.get("qty_adjusted_by_altitem", False),
-                        "altitem_group": child.get("altitem_group", ""),
-                        "usage_probability_ratio": child.get("usage_probability_ratio", None),
-                        "usage_per_path": next_qty,
-                    })
+        if material and material in parent_set:
+            roots = [material]
+        else:
+            roots = sorted(parent_set - component_set)
+            if not roots:
+                roots = sorted(parent_set)
+        product_count += len(roots)
+
+        children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for _, r in scoped_df.iterrows():
+            row = {
+                "source_material": material,
+                "parent": r["_parent"],
+                "component": r["_component"],
+                "qty": r["_qty"],
+                "qty_original": r.get("_qty_original", r["_qty"]),
+                "qty_adjusted_by_altitem": bool(r.get("_qty_adjusted_by_altitem", False)),
+                "altitem_group": r.get("_altitem_group", ""),
+                "usage_probability_ratio": r.get("_usage_probability_ratio", None),
+                "uom": r["_uom"],
+                "description": r["_description"],
+                "material_group": r["_material_group"],
+                "valid_from": r["_valid_from"],
+                "source_file": r.get("_source_file", ""),
+            }
+            children[row["parent"]].append(row)
+
+        for root in roots:
+            target_product = material or root
+            stack: list[tuple[str, float, int, list[str]]] = [(root, 1.0, 0, [root])]
+
+            while stack:
+                current_parent, accumulated_qty, level, path = stack.pop()
+
+                for child in children.get(current_parent, []):
+                    component = child["component"]
+                    qty = child["qty"]
+                    next_qty = accumulated_qty * qty
+                    next_level = level + 1
+
+                    if component in path:
+                        cycle_count += 1
+                        continue
+
+                    if component in semi_finished_set:
+                        stack.append((component, next_qty, next_level, path + [component]))
+                    else:
+                        output_rows.append({
+                            "target_product": target_product,
+                            "source_material": material,
+                            "raw_material": component,
+                            "usage": next_qty,
+                            "unit": child["uom"],
+                            "description": child["description"],
+                            "material_group": child["material_group"],
+                            "valid_from": child["valid_from"],
+                            "level": next_level,
+                            "immediate_parent": current_parent,
+                            "trace_path": " > ".join(path + [component]),
+                            "parent_accumulated_qty": accumulated_qty,
+                            "qty_this_level_effective": qty,
+                            "qty_this_level_original": child.get("qty_original", qty),
+                            "qty_adjusted_by_altitem": child.get("qty_adjusted_by_altitem", False),
+                            "altitem_group": child.get("altitem_group", ""),
+                            "usage_probability_ratio": child.get("usage_probability_ratio", None),
+                            "usage_per_path": next_qty,
+                            "source_file": child.get("source_file", ""),
+                        })
 
     trace_detail = pd.DataFrame(output_rows)
     if trace_detail.empty:
         trace_detail = pd.DataFrame(columns=[
-            "target_product", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level",
+            "target_product", "source_material", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level",
             "immediate_parent", "trace_path", "parent_accumulated_qty", "qty_this_level_effective",
-            "qty_this_level_original", "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio", "usage_per_path"
+            "qty_this_level_original", "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio", "usage_per_path", "source_file"
         ])
 
     exploded = trace_detail.copy()
@@ -699,16 +740,15 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     exploded.attrs["trace_detail"] = trace_detail
 
     summary = {
-        "products": len(roots),
-        "semi_finished": len(semi_finished_set),
+        "products": int(product_count),
+        "semi_finished": int(len(semi_finished_total)),
         "raw_materials": int(exploded["raw_material"].nunique()) if not exploded.empty else 0,
         "activity_rows": int(len(exploded)),
         "max_level": int(exploded["level"].max()) if not exploded.empty else 0,
         "cycles_skipped": cycle_count,
+        "bom_scope_rule": "BOM graph is built within each Material; identical Parent Node values from different Material values are not shared.",
     }
     return exploded, summary
-
-
 
 def _write_raw_material_bulk_from_exploded(
     exploded: pd.DataFrame,
@@ -1009,11 +1049,11 @@ def _write_bom_trace_detail_file(
         work["annual_qty_found"] = found_mask
 
     preferred_cols = [
-        "target_product", "raw_material", "unit", "immediate_parent", "level", "trace_path",
+        "target_product", "source_material", "raw_material", "unit", "immediate_parent", "level", "trace_path",
         "parent_accumulated_qty", "qty_this_level_original", "qty_this_level_effective",
         "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio",
         "usage_per_path", "annual_finished_product_qty", "final_usage_per_path",
-        "description", "material_group", "valid_from", "annual_qty_found",
+        "description", "material_group", "valid_from", "annual_qty_found", "source_file",
     ]
     ordered_cols = [c for c in preferred_cols if c in work.columns] + [c for c in work.columns if c not in preferred_cols]
     work = work[ordered_cols]
@@ -1168,53 +1208,77 @@ def generate_raw_material_bulk_files_by_site_zip(
 
 
 def _explode_bom_structure(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
-    """Create normalized multi-level BOM structure for Step 2 working-hour roll-up."""
-    parent_set = set(df["_parent"].dropna().astype(str))
-    component_set = set(df["_component"].dropna().astype(str))
-    semi_finished_set = parent_set.intersection(component_set)
-    roots = sorted(parent_set - component_set) or sorted(parent_set)
-    children: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for _, r in df.iterrows():
-        children[r["_parent"]].append({
-            "parent": r["_parent"], "component": r["_component"], "qty": r["_qty"],
-            "uom": r["_uom"], "description": r["_description"],
-            "material_group": r["_material_group"], "valid_from": r["_valid_from"],
-        })
+    """Create normalized multi-level BOM structure within each SAP Material scope."""
     rows: list[dict[str, Any]] = []
     cycle_count = 0
-    for root in roots:
-        stack: list[tuple[str, float, int, list[str]]] = [(root, 1.0, 0, [root])]
-        while stack:
-            current_parent, accumulated_qty, level, path = stack.pop()
-            for child in children.get(current_parent, []):
-                component = child["component"]
-                next_qty = accumulated_qty * child["qty"]
-                next_level = level + 1
-                is_semi = component in semi_finished_set
-                if component in path:
-                    cycle_count += 1
-                    continue
-                rows.append({
-                    "Target Product": root,
-                    "Parent Material": current_parent,
-                    "Component": component,
-                    "Quantity Per Parent": child["qty"],
-                    "Accumulated Quantity": next_qty,
-                    "Unit": child["uom"],
-                    "Component Description": child["description"],
-                    "Material Group": child["material_group"],
-                    "Valid From": child["valid_from"],
-                    "Level": next_level,
-                    "Is Semi-finished": "Y" if is_semi else "N",
-                })
-                if is_semi:
-                    stack.append((component, next_qty, next_level, path + [component]))
+    product_count = 0
+    semi_finished_total: set[str] = set()
+
+    if df is None or df.empty:
+        structure = pd.DataFrame(columns=["Target Product", "Source Material", "Parent Material", "Component", "Quantity Per Parent", "Accumulated Quantity", "Unit", "Component Description", "Material Group", "Valid From", "Level", "Is Semi-finished"])
+        return structure, {"products": 0, "semi_finished": 0, "structure_rows": 0, "max_level": 0, "cycles_skipped": 0}
+
+    work = df.copy()
+    if "_bom_material" not in work.columns:
+        work["_bom_material"] = ""
+    work["_bom_material"] = work["_bom_material"].apply(_safe_text)
+    scoped_groups = list(work.groupby("_bom_material", dropna=False)) if work["_bom_material"].astype(str).str.strip().any() else [("", work)]
+
+    for material_value, scoped_df in scoped_groups:
+        material = _safe_text(material_value)
+        parent_set = set(scoped_df["_parent"].dropna().astype(str))
+        component_set = set(scoped_df["_component"].dropna().astype(str))
+        semi_finished_set = parent_set.intersection(component_set)
+        semi_finished_total.update(semi_finished_set)
+        if material and material in parent_set:
+            roots = [material]
+        else:
+            roots = sorted(parent_set - component_set) or sorted(parent_set)
+        product_count += len(roots)
+
+        children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for _, r in scoped_df.iterrows():
+            children[r["_parent"]].append({
+                "parent": r["_parent"], "component": r["_component"], "qty": r["_qty"],
+                "uom": r["_uom"], "description": r["_description"],
+                "material_group": r["_material_group"], "valid_from": r["_valid_from"],
+            })
+
+        for root in roots:
+            target_product = material or root
+            stack: list[tuple[str, float, int, list[str]]] = [(root, 1.0, 0, [root])]
+            while stack:
+                current_parent, accumulated_qty, level, path = stack.pop()
+                for child in children.get(current_parent, []):
+                    component = child["component"]
+                    next_qty = accumulated_qty * child["qty"]
+                    next_level = level + 1
+                    is_semi = component in semi_finished_set
+                    if component in path:
+                        cycle_count += 1
+                        continue
+                    rows.append({
+                        "Target Product": target_product,
+                        "Source Material": material,
+                        "Parent Material": current_parent,
+                        "Component": component,
+                        "Quantity Per Parent": child["qty"],
+                        "Accumulated Quantity": next_qty,
+                        "Unit": child["uom"],
+                        "Component Description": child["description"],
+                        "Material Group": child["material_group"],
+                        "Valid From": child["valid_from"],
+                        "Level": next_level,
+                        "Is Semi-finished": "Y" if is_semi else "N",
+                    })
+                    if is_semi:
+                        stack.append((component, next_qty, next_level, path + [component]))
+
     structure = pd.DataFrame(rows)
     if structure.empty:
-        structure = pd.DataFrame(columns=["Target Product", "Parent Material", "Component", "Quantity Per Parent", "Accumulated Quantity", "Unit", "Component Description", "Material Group", "Valid From", "Level", "Is Semi-finished"])
-    summary = {"products": len(roots), "semi_finished": len(semi_finished_set), "structure_rows": int(len(structure)), "max_level": int(structure["Level"].max()) if not structure.empty else 0, "cycles_skipped": cycle_count}
+        structure = pd.DataFrame(columns=["Target Product", "Source Material", "Parent Material", "Component", "Quantity Per Parent", "Accumulated Quantity", "Unit", "Component Description", "Material Group", "Valid From", "Level", "Is Semi-finished"])
+    summary = {"products": int(product_count), "semi_finished": int(len(semi_finished_total)), "structure_rows": int(len(structure)), "max_level": int(structure["Level"].max()) if not structure.empty else 0, "cycles_skipped": cycle_count}
     return structure, summary
-
 
 def export_bom_structure_file(
     bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
@@ -2234,4 +2298,4 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V17_3_DEBUG_TRACE_DETAIL"
+BOM_FORMATTER_VERSION = "CMP_V17_4_MATERIAL_SCOPED_BOM"
