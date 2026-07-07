@@ -34,7 +34,7 @@ TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_PATCH_V23_8_TAIPEI_MANIFEST_MODULE2_FLOW"
+CMP_MAIN_VERSION = "CMP_V24_0_SUPPLIER_MODULE3_RAW_BULK_MANIFEST"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -2324,9 +2324,9 @@ async def process_bom_expansion(request: Request):
             bom_structure_output_path=LATEST_BOM_STRUCTURE_PATH,
             working_hour_rollup_output_path=working_hour_rollup_output_path,
             mapping=mapping,
-            supplier_paths=[],  # V23.6 Fast Mode: skip Supplier Mapping for speed.
-            supplier_bulk_template_path=None,
-            supplier_bulk_output_path=None,
+            supplier_paths=supplier_paths,
+            supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths and supplier_bulk_template_path.exists() else None,
+            supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths and supplier_bulk_template_path.exists() else None,
         )
         output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_{token}.xlsx"))
 
@@ -2358,11 +2358,13 @@ async def process_bom_expansion(request: Request):
                 traceback.print_exc()
 
         summary["supplier_upload_files"] = len(supplier_paths)
-        summary["supplier_bulk_filename"] = ""
-        summary["supplier_bulk_download_url"] = ""
-        summary["supplier_bulk_rows"] = 0
-        summary["supplier_bulk_generated"] = False
-        summary["supplier_status"] = "Skipped in Fast Mode"
+        summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_filename"))
+        if supplier_paths and not summary.get("supplier_bulk_generated"):
+            summary["supplier_status"] = summary.get("supplier_bulk_error") or "Supplier files uploaded, but no supplier bulk rows were generated."
+        elif supplier_paths:
+            summary["supplier_status"] = "Supplier Mapping completed."
+        else:
+            summary["supplier_status"] = "No supplier file uploaded."
         summary["timezone"] = "Asia/Taipei"
         summary["module2_manifest_filename"] = LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.name
         summary["app_version"] = CMP_MAIN_VERSION

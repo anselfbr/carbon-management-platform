@@ -3463,3 +3463,351 @@ def generate_module2_outputs_memory_optimized(
                 except Exception:
                     pass
         gc.collect()
+
+
+# =========================================================
+# CMP_V24_0_SUPPLIER_RESTORE_EFFICIENT_ONE_STEP
+# - Restore Supplier Mapping and Supplier Bulk in Module 2 one-step flow.
+# - Keep XlsxWriter constant_memory Raw Material Bulk output.
+# - Keep BOM expansion once; Supplier mapping reuses the exploded Raw Material result.
+# - Keep Module 3 compatible: site-specific Raw Material Bulk xlsx files.
+# =========================================================
+
+BOM_FORMATTER_VERSION = "CMP_V24_0_SUPPLIER_RESTORE_EFFICIENT_ONE_STEP"
+
+
+def _write_raw_material_bulk_from_exploded_fast_raw_only(
+    exploded: pd.DataFrame,
+    raw_material_template_path: str | Path,
+    output_path: str | Path,
+    supplier_map: dict[str, list[dict[str, str]]] | None = None,
+    return_expanded: bool = False,
+) -> Dict[str, Any] | tuple[Dict[str, Any], pd.DataFrame]:
+    """Template-layout Raw Material Bulk writer with Supplier Mapping restored.
+
+    This overrides the earlier Fast Raw Only writer. It still uses XlsxWriter
+    constant_memory and the uploaded template layout, but fills Supplier Name,
+    Transportation Origin and Supplier metadata when supplier files are provided.
+    """
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import xlsxwriter as _cmp_xlsxwriter
+    except Exception as exc:
+        raise RuntimeError(
+            "XlsxWriter is required for Module 2. Please ensure requirements.txt contains XlsxWriter."
+        ) from exc
+
+    layout = _template_layout_for_fast_raw_only(raw_material_template_path)
+    activity_headers = list(layout.get("activity_headers") or RAW_MATERIAL_ACTIVITY_HEADERS_V23_4)
+    raw_headers = list(layout.get("raw_headers") or RAW_MATERIAL_MASTER_HEADERS_V23_4)
+
+    document_type_value, supplier_options, tbc_supplier_map = _template_dropdown_metadata_light(raw_material_template_path)
+    expanded, supplier_write_summary = _apply_supplier_mapping_to_exploded(
+        exploded,
+        supplier_map or {},
+        supplier_options,
+        tbc_supplier_map=tbc_supplier_map,
+    )
+
+    activity_col_map = {
+        "raw_name": _header_index_from_aliases(activity_headers, RAW_MATERIAL_NAME_ALIASES, 0),
+        "raw_code": _header_index_from_aliases(activity_headers, RAW_MATERIAL_CODE_ALIASES, 1),
+        "start_date": _header_index_from_aliases(activity_headers, DOC_START_DATE_ALIASES, 2),
+        "end_date": _header_index_from_aliases(activity_headers, DOC_END_DATE_ALIASES, 3),
+        "document_type": _header_index_from_aliases(activity_headers, DOCUMENT_TYPE_ALIASES, 4),
+        "document_number": _header_index_from_aliases(activity_headers, DOCUMENT_NUMBER_ALIASES, 5),
+        "usage": _header_index_from_aliases(activity_headers, USAGE_ALIASES, 6),
+        "unit": _header_index_from_aliases(activity_headers, ACTIVITY_DATA_UNIT_ALIASES, 7),
+        "data_source": _header_index_from_aliases(activity_headers, DATA_SOURCE_ALIASES, 11),
+        "data_source_other": _header_index_from_aliases(activity_headers, DATA_SOURCE_OTHER_ALIASES, 12),
+        "supplier_name": _header_index_from_aliases(activity_headers, SUPPLIER_NAME_ALIASES, 13),
+        "transport_origin": _header_index_from_aliases(activity_headers, TRANSPORT_ORIGIN_ALIASES, 14),
+        "transport_destination": _header_index_from_aliases(activity_headers, TRANSPORT_DESTINATION_ALIASES, 15),
+        "target_product": _header_index_from_aliases(activity_headers, PRODUCT_LINK_ALIASES, 16),
+        "comment": _header_index_from_aliases(activity_headers, COMMENT_ALIASES, 17),
+        "material_group": _header_index_from_aliases(activity_headers, MATERIAL_GROUP_ALIASES, 18),
+        "net_weight": _header_index_from_aliases(activity_headers, NET_WEIGHT_ALIASES, 19),
+        "gross_weight": _header_index_from_aliases(activity_headers, GROSS_WEIGHT_ALIASES, 20),
+        "weight_unit": _header_index_from_aliases(activity_headers, WEIGHT_UNIT_ALIASES, 21),
+    }
+    raw_col_map = {
+        "raw_name": _header_index_from_aliases(raw_headers, RAW_MATERIAL_NAME_ALIASES, 0),
+        "raw_code": _header_index_from_aliases(raw_headers, RAW_MATERIAL_CODE_ALIASES, 1),
+        "description": _header_index_from_aliases(raw_headers, RAW_MATERIAL_DESC_ALIASES, 5),
+    }
+
+    workbook = _cmp_xlsxwriter.Workbook(str(output_path), {
+        "constant_memory": True,
+        "strings_to_urls": False,
+        "nan_inf_to_errors": True,
+    })
+    date_fmt = workbook.add_format({"num_format": "yyyy/mm/dd"})
+    header_fmt = workbook.add_format({"bold": True})
+
+    activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
+    raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
+
+    for col_idx, value in enumerate(layout.get("activity_row1") or [None] * len(activity_headers)):
+        if value not in [None, ""]:
+            activity_ws.write(0, col_idx, value)
+    for col_idx, header in enumerate(activity_headers):
+        if header not in [None, ""]:
+            activity_ws.write(1, col_idx, header, header_fmt)
+    for col_idx, value in enumerate(layout.get("raw_row1") or [None] * len(raw_headers)):
+        if value not in [None, ""]:
+            raw_ws.write(0, col_idx, value)
+    for col_idx, header in enumerate(raw_headers):
+        if header not in [None, ""]:
+            raw_ws.write(1, col_idx, header, header_fmt)
+
+    activity_ws.freeze_panes(2, 0)
+    raw_ws.freeze_panes(2, 0)
+    for col_idx, width in enumerate(layout.get("activity_widths") or [18] * len(activity_headers)):
+        activity_ws.set_column(col_idx, col_idx, width or 18)
+    for col_idx, width in enumerate(layout.get("raw_widths") or [18] * len(raw_headers)):
+        raw_ws.set_column(col_idx, col_idx, width or 18)
+
+    raw_seen: set[str] = set()
+    raw_master_rows: list[tuple[str, str]] = []
+
+    excel_row_idx = 2
+    for r in expanded.itertuples(index=False):
+        row = r._asdict() if hasattr(r, "_asdict") else {}
+        valid_from = row.get("valid_from", "")
+        if not isinstance(valid_from, date):
+            valid_from = _date_from_value(valid_from)
+        raw_material = row.get("raw_material", "")
+        description = row.get("description", "")
+        try:
+            usage_value = float(row.get("usage", 0) or 0)
+        except Exception:
+            usage_value = 0.0
+        values_by_key = {
+            "raw_name": raw_material,
+            "raw_code": raw_material,
+            "start_date": _year_start(valid_from),
+            "end_date": _year_end(valid_from),
+            "document_type": document_type_value or "BOM",
+            "document_number": "",
+            "usage": usage_value,
+            "unit": row.get("unit", ""),
+            "data_source": "SAP",
+            "data_source_other": "",
+            "supplier_name": row.get("supplier_name", ""),
+            "transport_origin": row.get("transport_origin", ""),
+            "transport_destination": row.get("transport_destination", ""),
+            "target_product": row.get("target_product", ""),
+            "comment": "",
+            "material_group": row.get("material_group", ""),
+            "net_weight": row.get("net_weight", ""),
+            "gross_weight": row.get("gross_weight", ""),
+            "weight_unit": row.get("weight_uom", ""),
+        }
+        _write_row_by_column_map(activity_ws, excel_row_idx, values_by_key, activity_col_map, date_fmt)
+        excel_row_idx += 1
+        raw_key = str(raw_material or "").strip()
+        if raw_key and raw_key not in raw_seen:
+            raw_seen.add(raw_key)
+            raw_master_rows.append((raw_key, description))
+
+    raw_excel_row_idx = 2
+    for raw_material, description in sorted(raw_master_rows, key=lambda x: x[0]):
+        _write_row_by_column_map(raw_ws, raw_excel_row_idx, {
+            "raw_name": raw_material,
+            "raw_code": raw_material,
+            "description": description,
+        }, raw_col_map, date_fmt)
+        raw_excel_row_idx += 1
+
+    workbook.close()
+    result = {
+        "output_filename": output_path.name,
+        "activity_rows": int(len(expanded)),
+        "raw_materials": int(len(raw_seen)),
+        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
+        "supplier_name_options": int(len(supplier_options)),
+        "site_tbc_supplier_count": int(len(tbc_supplier_map)),
+        "raw_material_writer": "xlsxwriter_constant_memory_template_layout_supplier_v24_0",
+        "template_layout_source": str(layout.get("source", "")),
+        "activity_template_columns": activity_col_map,
+        "raw_material_template_columns": raw_col_map,
+    }
+    result.update(supplier_write_summary)
+    if return_expanded:
+        return result, expanded
+    return result
+
+
+def generate_module2_outputs_memory_optimized(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    raw_material_template_path: str | Path,
+    output_dir: str | Path,
+    token: str,
+    step1_output_path: str | Path,
+    bom_structure_output_path: str | Path,
+    working_hour_rollup_output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
+    supplier_bulk_template_path: str | Path | None = None,
+    supplier_bulk_output_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """Efficient one-step Module 2 output.
+
+    BOM is read/exploded once. The exploded Raw Material result is reused for:
+    - site-specific Raw Material Bulk files for Module 3
+    - optional Supplier Mapping
+    - optional Supplier Bulk Create
+
+    Heavy optional BOM Structure / Working-hour roll-up are skipped in this web
+    flow to keep Render CPU/RAM stable.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    try:
+        supplier_paths = list(supplier_paths or [])
+        supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+
+        exploded, base_summary = _explode_bom(bom_df)
+        exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+        base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+        base_summary["activity_rows"] = int(len(exploded))
+        base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+
+        site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
+        if exploded.empty:
+            work = exploded.assign(_production_site="Unassigned")
+        else:
+            work = exploded
+            work["_target_key"] = work["target_product"].apply(_normalize_material_key)
+            work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
+            work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+            work["transport_destination"] = work["_production_site"]
+            if "material_group" not in work.columns:
+                work["material_group"] = ""
+
+        site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
+        generated_files: list[dict[str, Any]] = []
+        supplier_bulk_frames: list[pd.DataFrame] = []
+        supplier_matched_total = supplier_expanded_total = 0
+        supplier_name_matched_total = supplier_name_missing_total = 0
+        supplier_options_total = 0
+        total_written_rows = 0
+        total_raw_materials = 0
+
+        supplier_bulk_cols = [
+            "supplier_code", "vendor_code", "supplier_name", "Supplier Name", "Supplier Name (optional)",
+            "supplier_master_name", "Vendor Name", "Search Term", "supplier_country_area", "Country/Area",
+            "country_area", "Country", "supplier_address", "Supplier Address", "transport_origin",
+            "Transportation Origin", "transport_destination", "Transportation Destination", "production_site",
+            "Production Site", "Unit Name",
+        ]
+
+        for site in site_values:
+            site_mask = work["_production_site"].eq(site)
+            site_df = work.loc[site_mask].drop(columns=["_target_key", "_production_site"], errors="ignore")
+            safe_site = _sanitize_filename_part(site)
+            file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
+            write_summary, expanded_site = _write_raw_material_bulk_from_exploded_fast_raw_only(
+                exploded=site_df,
+                raw_material_template_path=raw_material_template_path,
+                output_path=file_path,
+                supplier_map=supplier_map,
+                return_expanded=True,
+            )
+            if supplier_bulk_template_path and supplier_bulk_output_path and expanded_site is not None and not expanded_site.empty:
+                cols = [c for c in supplier_bulk_cols if c in expanded_site.columns]
+                supplier_code_col = "supplier_code" if "supplier_code" in expanded_site.columns else None
+                if supplier_code_col:
+                    mini = expanded_site.loc[expanded_site[supplier_code_col].astype(str).str.strip() != "", cols].copy()
+                    if not mini.empty:
+                        supplier_bulk_frames.append(mini)
+
+            supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
+            supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
+            supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
+            supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
+            supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
+            total_written_rows += int(write_summary.get("activity_rows", 0))
+            total_raw_materials += int(write_summary.get("raw_materials", 0))
+            generated_files.append({
+                "production_site": site,
+                "filename": file_path.name,
+                "download_url": f"/download/{file_path.name}",
+                "activity_rows": int(write_summary.get("activity_rows", 0)),
+                "raw_materials": int(write_summary.get("raw_materials", 0)),
+                "supplier_matched_rows": int(write_summary.get("supplier_matched_rows", 0)),
+                "supplier_expanded_rows": int(write_summary.get("supplier_expanded_rows", 0)),
+                "raw_material_writer": write_summary.get("raw_material_writer", ""),
+            })
+            del site_df, expanded_site
+            gc.collect()
+
+        supplier_bulk_summary: Dict[str, Any] = {}
+        if supplier_bulk_template_path and supplier_bulk_output_path and supplier_bulk_frames:
+            supplier_bulk_df = pd.concat(supplier_bulk_frames, ignore_index=True)
+            supplier_bulk_summary = _write_supplier_bulk_create_file(
+                supplier_bulk_df,
+                supplier_bulk_template_path,
+                supplier_bulk_output_path,
+            )
+            supplier_bulk_summary["supplier_bulk_generated"] = bool(supplier_bulk_summary.get("supplier_bulk_filename"))
+            del supplier_bulk_df, supplier_bulk_frames
+            gc.collect()
+        elif supplier_bulk_template_path and supplier_bulk_output_path:
+            supplier_bulk_summary = {
+                "supplier_bulk_rows": 0,
+                "supplier_bulk_filename": "",
+                "supplier_bulk_download_url": "",
+                "supplier_bulk_generated": False,
+            }
+
+        first_file = generated_files[0]["filename"] if generated_files else ""
+        unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
+        summary = dict(base_summary)
+        summary.update({
+            "output_filename": first_file,
+            "download_url": f"/download/{first_file}" if first_file else "",
+            "split_by_production_site": True,
+            "production_site_files": generated_files,
+            "production_site_count": int(len(site_values)),
+            "unassigned_rows": unassigned_rows,
+            "used_columns": used_columns,
+            "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
+            "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
+            "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
+            "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
+            "supplier_matched_rows": int(supplier_matched_total),
+            "supplier_expanded_rows": int(supplier_expanded_total),
+            "supplier_name_matched_rows": int(supplier_name_matched_total),
+            "supplier_name_missing_rows": int(supplier_name_missing_total),
+            "supplier_dropdown_matched_rows": int(supplier_name_matched_total),
+            "supplier_dropdown_missing_rows": int(supplier_name_missing_total),
+            "supplier_name_options": int(supplier_options_total),
+            "raw_material_writer": "xlsxwriter_constant_memory_template_layout_supplier_v24_0",
+            "raw_material_bulk_rows_written": int(total_written_rows),
+            "raw_material_bulk_raw_materials_written": int(total_raw_materials),
+            "supplier_mapping_skipped": False if supplier_paths else True,
+            "bom_structure_generated": False,
+            "working_hour_rollup_generated": False,
+            "module2_skipped_outputs": ["bom_structure", "working_hour_rollup", "zero_working_hour_filter"],
+            "module2_memory_optimized": True,
+            "module2_one_step_supplier_enabled": True,
+            "memory_optimization_version": BOM_FORMATTER_VERSION,
+        })
+        summary.update(supplier_summary)
+        summary.update(step1_summary)
+        summary.update(supplier_bulk_summary)
+        return summary
+    finally:
+        for name in ["bom_df", "exploded", "work", "supplier_map"]:
+            if name in locals():
+                try:
+                    del locals()[name]
+                except Exception:
+                    pass
+        gc.collect()

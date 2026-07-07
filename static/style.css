@@ -2552,3 +2552,5 @@ select:focus {
   color: #475569;
   font-size: 0.92rem;
 }
+
+.form-hint { margin: -4px 0 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }

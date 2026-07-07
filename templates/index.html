@@ -610,13 +610,13 @@
               </div>
 
               <div class="module3-source-card">
-                <b>Module 2 Fast Mode</b>
-                <p>本版本預設只產出各廠區 Raw Material Bulk .xlsx，供 Module 3 直接選擇引用；Supplier Mapping、Supplier Bulk、BOM Structure 與 Working Hour Roll-up 先跳過以縮短處理時間。</p>
+                <b>Module 2 Efficient One-step Mode</b>
+                <p>本版本維持一段式流程：上傳 Standard BOM、Raw Material Bulk Template 與選填 Supplier Files 後，系統只展 BOM 一次；Raw Material Bulk 直接提供 Module 3 使用，Supplier Mapping / Supplier Bulk 會在有上傳供應商檔案時同步產出。</p>
               </div>
 
-              <label style="display:none;" data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
-              <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple style="display:none;" />
-              <p class="form-hint" style="display:none;">Fast Mode skips Supplier Mapping and Supplier Bulk generation.</p>
+              <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
+              <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
+              <p class="form-hint">選填。若上傳供應商檔案，Module 2 會在同一次 BOM 展開結果上執行 Supplier Mapping，不會重複展 BOM。</p>
 
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⌘</span>
@@ -1266,14 +1266,14 @@ function stopBomProgressSuccess(summary) {
   const siteCount = Number(summary.production_site_count || ((summary.production_site_files || []).length) || 0);
   setBomProcessingState(
     'success',
-    'BOM Expansion Fast Mode completed',
+    'BOM Expansion completed',
     `BOM Files: ${summary.bom_files || 1}; Rows: ${summary.bom_rows_after_dedup || 0}; Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}; Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Site files: ${siteCount}; Max BOM Level: ${summary.max_level}.`,
     cmpT('completed', 'Completed'),
     100
   );
 
   bomLog.textContent =
-    `Completed - Fast Raw Material Bulk Mode.
+    `Completed - Efficient One-step Mode.
 BOM Files: ${summary.bom_files || 1}
 BOM Rows Before Dedup: ${summary.bom_rows_before_dedup || 0}
 BOM Rows After Dedup: ${summary.bom_rows_after_dedup || 0}
@@ -1283,8 +1283,13 @@ Semi-finished Components: ${summary.semi_finished}
 Activity Data Rows: ${summary.activity_rows}
 Raw Materials: ${summary.raw_materials}
 Production Site Files: ${siteCount}
+Supplier Uploaded Files: ${summary.supplier_upload_files || 0}
+Supplier Matched Rows: ${summary.supplier_matched_rows || 0}
+Supplier Expanded Rows: ${summary.supplier_expanded_rows || 0}
+Supplier Bulk Rows: ${summary.supplier_bulk_rows || 0}
+Supplier Status: ${summary.supplier_status || ''}
 Raw Material Writer: ${summary.raw_material_writer || 'xlsxwriter_constant_memory'}
-Skipped: Supplier Mapping / Supplier Bulk / BOM Structure / Working Hour Roll-up
+Module 3 Source: Raw Material Bulk files from Module 2 manifest
 Timezone: Asia/Taipei (UTC+8)`;
 }
 
@@ -1380,9 +1385,17 @@ bomForm.addEventListener('submit', async (e) => {
       bomDownload.classList.remove('disabled');
       bomDownload.style.display = '';
     }
-    // V23.6 Fast Mode intentionally skips Working Hour Roll-up and Supplier Bulk.
     if (workingHourRollupDownload) workingHourRollupDownload.style.display = 'none';
-    if (supplierBulkDownload) supplierBulkDownload.style.display = 'none';
+    if (supplierBulkDownload) {
+      const supplierUrl = data.summary && data.summary.supplier_bulk_download_url;
+      if (supplierUrl) {
+        supplierBulkDownload.href = supplierUrl;
+        supplierBulkDownload.classList.remove('disabled');
+        supplierBulkDownload.style.display = '';
+      } else {
+        supplierBulkDownload.style.display = 'none';
+      }
+    }
     stopBomProgressSuccess(data.summary);
     await refreshModule3RawBulkSource();
     await refreshBomStep1Source();
@@ -1423,7 +1436,9 @@ async function refreshModule3RawBulkSource() {
     const data = await readJsonOrThrow(res);
     const filename = data.selected_filename || data.filename || 'raw material bulk';
     const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    module3RawBulkSourceText.textContent = `來源：Module 2 已選擇廠區資料｜檔案：${filename}${modified ? `｜建立時間：${modified}（Asia/Taipei, UTC+8）` : ''}`;
+    const selectedOption = (data.options || []).find((item) => item.filename === filename) || {};
+    const siteName = selectedOption.production_site || data.production_site || '未指定廠區';
+    module3RawBulkSourceText.textContent = `來源：Module 2 Raw Material Bulk｜廠區：${siteName}｜檔案名稱：${filename}${modified ? `｜建立日期：${modified}（Asia/Taipei, UTC+8）` : ''}｜狀態：Ready`;
 
     if (module3RawBulkSelect) {
       const options = data.options || [];
@@ -1464,7 +1479,8 @@ if (module3RawBulkSelect) {
       });
       const data = await readJsonOrThrow(res);
       const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-      module3RawBulkSourceText.textContent = `來源：Module 2 已選擇廠區資料｜檔案：${data.filename}${modified ? `｜建立時間：${modified}（Asia/Taipei, UTC+8）` : ''}`;
+      const site = data.production_site || (module3RawBulkSelect.options[module3RawBulkSelect.selectedIndex] ? module3RawBulkSelect.options[module3RawBulkSelect.selectedIndex].textContent.split('｜')[0] : '未指定廠區');
+      module3RawBulkSourceText.textContent = `來源：Module 2 Raw Material Bulk｜廠區：${site}｜檔案名稱：${data.filename}${modified ? `｜建立日期：${modified}（Asia/Taipei, UTC+8）` : ''}｜狀態：Ready`;
     } catch (err) {
       module3RawBulkSourceText.textContent = err.message || '切換 Module 2 廠區檔案失敗。';
     }
