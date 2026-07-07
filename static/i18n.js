@@ -203,8 +203,6 @@
     "modulePrepNoticeText": {"en": "Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.", "zh": "完成 Step 1 工單處理、Step 2 批次資料格式化與規則管理。"},
     "modulePcfNoticeText": {"en": "Reserved module. This area can be extended for product carbon footprint calculation.", "zh": "預留模組。此區可延伸為產品碳足跡計算。"},
     "bomExpansionPageLead": {"en": "Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.", "zh": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。"},
-    "module3RawBulkSourceTitle": {"en": "Raw Material Activity Data", "zh": "Raw Material Activity Data"},
-    "module2JobAlreadyRunning": {"en": "Module 2 is already processing another job. Please wait until the current BOM Expansion is finished.", "zh": "Module 2 目前已有工作正在執行。請等待目前的 BOM 展開完成後再執行。"},
     "pcfCalculation": {
         "en": "PCF Calculation",
         "zh": "產品碳足跡計算"

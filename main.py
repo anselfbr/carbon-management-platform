@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import gc
-import json
 import re
 import traceback
-import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -18,7 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_module2_outputs_memory_optimized, generate_expanded_bom_master_file, generate_raw_material_bulk_from_expanded_master_by_site, generate_supplier_mapping_from_raw_material_bulk_files
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -29,16 +25,7 @@ RULE_LIBRARY_DIR = BASE_DIR / "rule_library"
 FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
-LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH = OUTPUT_DIR / "module2_raw_material_bulk_latest.json"
-LATEST_MODULE2_EXPANDED_BOM_MASTER_MANIFEST_PATH = OUTPUT_DIR / "module2_expanded_bom_master_latest.json"
-LATEST_MODULE2_SUPPLIER_MANIFEST_PATH = OUTPUT_DIR / "module2_supplier_mapping_latest.json"
-TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
-MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
-
-CMP_MAIN_VERSION = "CMP_V25_0_MODULE2_ABC"
-ENABLE_MODULE3_ECOINVENT_DATABASE = False
-MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
 
 RULE_SET_MAP = {
@@ -56,7 +43,7 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print(f"===== CMP MAIN VERSION: {CMP_MAIN_VERSION} =====")
+print("===== CMP MAIN VERSION: CMP_V15_0_RULE_MASTER_ENGINE_SITE_PREFIX_WHITELIST =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -65,7 +52,7 @@ MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
 def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
     job = MODULE3_CCL_JOBS.setdefault(job_id, {})
     job.update(updates)
-    job["updated_at"] = _now_taipei().isoformat(timespec="seconds")
+    job["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
 def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
     def report(progress: int, step: str, remaining_seconds: int | None = None) -> None:
@@ -299,72 +286,6 @@ def ensure_master_files() -> None:
 ensure_master_files()
 
 
-def _now_taipei() -> datetime:
-    return datetime.now(TAIPEI_TZ)
-
-
-def _datetime_from_mtime_taipei(mtime: float) -> datetime:
-    return datetime.fromtimestamp(float(mtime), tz=TAIPEI_TZ)
-
-
-def _iso_from_mtime_taipei(mtime: float) -> str:
-    return _datetime_from_mtime_taipei(mtime).isoformat(timespec="seconds")
-
-
-def _safe_output_path(filename: object) -> Path | None:
-    name = Path(str(filename or "").strip()).name
-    if not name:
-        return None
-    path = OUTPUT_DIR / name
-    try:
-        path.resolve().relative_to(OUTPUT_DIR.resolve())
-    except Exception:
-        return None
-    return path
-
-
-def _read_latest_module2_manifest() -> dict[str, Any]:
-    if not LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.exists():
-        return {}
-    try:
-        data = json.loads(LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _write_latest_module2_manifest(summary: dict[str, Any], selected_filename: str = "") -> None:
-    files: list[dict[str, Any]] = []
-    for item in summary.get("production_site_files", []) or []:
-        filename = str(item.get("filename") or "").strip()
-        path = _safe_output_path(filename)
-        if not path or not path.exists():
-            continue
-        stat = path.stat()
-        files.append({
-            "filename": path.name,
-            "production_site": str(item.get("production_site") or "Unassigned"),
-            "activity_rows": int(item.get("activity_rows", 0) or 0),
-            "raw_materials": int(item.get("raw_materials", 0) or 0),
-            "size_bytes": int(stat.st_size),
-            "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
-            "mtime": float(stat.st_mtime),
-            "download_url": f"/download/{path.name}",
-        })
-    files.sort(key=lambda r: (float(r.get("mtime", 0) or 0), str(r.get("filename", ""))), reverse=True)
-    if not selected_filename and files:
-        selected_filename = str(files[0].get("filename") or "")
-    manifest = {
-        "ok": True,
-        "timezone": "Asia/Taipei",
-        "updated_at": _now_taipei().isoformat(timespec="seconds"),
-        "selected_filename": Path(str(selected_filename or "")).name,
-        "files": files,
-        "module1_step1_source_filename": summary.get("module1_step1_source_filename", ""),
-        "module1_step1_source_download_url": summary.get("module1_step1_source_download_url", ""),
-    }
-    LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-
 
 def production_site_from_line(product_line: object) -> str:
     """Rule Master only mode.
@@ -594,56 +515,6 @@ def parse_product_series(description: object, masters: Optional[dict] = None) ->
         return candidate, "全文 Regex Prefix Search 解析產品系列"
 
     # fallback：若 rule_master 沒有涵蓋 prefix，仍保留舊邏輯，但同樣套用截斷
-    parts = raw_text.replace("_", ",").replace(";", ",").split(",")
-    for idx, part in enumerate(parts, start=1):
-        compact = re.sub(r"\s+", "", part)
-        compact = trim_series_candidate(compact)
-        if not compact or compact in GENERIC_WORDS:
-            continue
-        match = SERIES_RE.match(compact)
-        if match:
-            series = trim_series_candidate(match.group(0))
-            if series and re.search(r"\d", series) and len(series) >= 5:
-                return series, "fallback：逗號分段解析產品系列" if idx == 1 else f"fallback：前段非系列，取第{idx}段"
-
-    return "", "未找到符合產品系列格式的英數碼"
-
-
-
-def build_product_series_parser(masters: Optional[dict] = None) -> re.Pattern:
-    """Build the Product Series regex once per Step 1 run.
-
-    CMP V19.0 CPU optimization:
-    parse_product_series() used to rebuild the same prefix regex for every row.
-    With large work-order files this can compile regex tens of thousands of times.
-    """
-    prefixes = get_series_prefixes(masters)
-    prefix_pattern = "|".join(prefixes)
-    return re.compile(rf"({prefix_pattern})[A-Z0-9]{{3,40}}")
-
-
-def parse_product_series_fast(description: object, pattern: re.Pattern) -> tuple[str, str]:
-    """Fast row parser using a precompiled series-prefix pattern.
-
-    Logic intentionally mirrors parse_product_series() so output stays compatible.
-    """
-    if pd.isna(description):
-        return "", "Material description 空白"
-
-    raw_text = str(description).upper()
-
-    segments = [seg for seg in re.split(r"[,;_]+", raw_text) if str(seg).strip()]
-    for idx, segment in enumerate(segments, start=1):
-        candidate = _series_candidate_from_text(segment, pattern)
-        if candidate:
-            if idx == 1:
-                return candidate, "標點切段解析產品系列"
-            return candidate, f"標點切段解析產品系列：取第{idx}段"
-
-    candidate = _series_candidate_from_text(raw_text, pattern)
-    if candidate:
-        return candidate, "全文 Regex Prefix Search 解析產品系列"
-
     parts = raw_text.replace("_", ",").replace(";", ",").split(",")
     for idx, part in enumerate(parts, start=1):
         compact = re.sub(r"\s+", "", part)
@@ -1315,7 +1186,6 @@ def process_files(
     labor_paths: Optional[list[Path]] = None,
     labor_mode: str = "both",
     rule_set: str = DEFAULT_RULE_SET,
-    include_detail_output: bool = True,
 ) -> tuple[Path, dict]:
     rule_set = normalize_rule_set(rule_set)
     masters = build_masters(rule_set)
@@ -1342,25 +1212,17 @@ def process_files(
     if year:
         out = out[out["Year"] == int(year)].copy()
 
-    # CMP V19.0 CPU optimization: compile the Product Series regex once per run.
-    series_pattern = build_product_series_parser(masters)
-    parsed = out["Material description"].apply(lambda desc: parse_product_series_fast(desc, series_pattern))
-    out["Product series"] = parsed.str[0]
-    out["解析說明"] = parsed.str[1]
+    parsed = out["Material description"].apply(lambda desc: parse_product_series(desc, masters))
+    out["Product series"] = parsed.apply(lambda x: x[0])
+    out["解析說明"] = parsed.apply(lambda x: x[1])
 
     # Resolve Plant -> Production Site before classification.
     # This makes Rule Master classification plant-aware:
     # - site-specific rules only apply to the same Production Site
     # - blank-site rules remain generic and can be used by both 越南海防廠-IPS and 廣州石碣廠-IPS
-    # CMP V19.0 CPU optimization: resolve Plant -> Production Site once per unique Plant.
-    unique_plants = pd.Series(out["Plant"].dropna().astype(str).unique())
-    plant_site_cache = {
-        plant: resolve_plant_production_site_from_rule_master(plant, masters)
-        for plant in unique_plants
-    }
-    initial_plant_site_rules = out["Plant"].astype(str).map(plant_site_cache).fillna("")
-    out["_Plant Production Site"] = initial_plant_site_rules.apply(lambda x: x[0] if isinstance(x, tuple) else "")
-    out["_Plant Production Site Rule"] = initial_plant_site_rules.apply(lambda x: x[1] if isinstance(x, tuple) else "")
+    initial_plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
+    out["_Plant Production Site"] = initial_plant_site_rules.apply(lambda x: x[0])
+    out["_Plant Production Site Rule"] = initial_plant_site_rules.apply(lambda x: x[1])
 
     classified = out.apply(
         lambda r: classify(
@@ -1468,9 +1330,9 @@ def process_files(
     # Plant Rule Master override:
     # Production Site may be controlled directly by Plant Exact / Plant Prefix rules in rule_master.csv.
     # This only updates Production Site and does not change Product Type / Product Line / WIP status.
-    plant_site_rules = out["Plant"].astype(str).map(plant_site_cache).fillna("")
-    plant_sites = plant_site_rules.apply(lambda x: x[0] if isinstance(x, tuple) else "")
-    plant_rule_hits = plant_site_rules.apply(lambda x: x[1] if isinstance(x, tuple) else "")
+    plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
+    plant_sites = plant_site_rules.apply(lambda x: x[0])
+    plant_rule_hits = plant_site_rules.apply(lambda x: x[1])
 
     plant_site_mask = plant_sites.astype(str).str.strip().ne("")
     if plant_site_mask.any():
@@ -1527,11 +1389,69 @@ def process_files(
     )
 
 
-    # CMP V19.0 CPU optimization:
-    # The following diagnostic DataFrames were not written to the Step 1 Excel output
-    # and were not returned in the API summary. Skipping them avoids several groupby/copy
-    # operations on large work-order datasets.
-    wip_rows_count = int((out["Is_WIP"] == "Y").sum())
+    source_summary = (
+        out.groupby(["判斷來源", "規則判定結果", "命中規則"], dropna=False, as_index=False)["Delivered quantity"]
+        .agg(筆數="count", 生產量="sum")
+    )
+
+    file_summary = (
+        out.groupby(["Source file"], dropna=False, as_index=False)["Delivered quantity"]
+        .agg(筆數="count", 生產量="sum")
+        .sort_values(["Source file"])
+    )
+
+    # Labor source file summary: helps verify whether each labor file was loaded and how many hours were read.
+    if labor is not None and not labor.empty:
+        labor_source_summary = (
+            labor.copy()
+            .assign(**{
+                "Labor HR.Act": pd.to_numeric(labor["Labor HR.Act"], errors="coerce").fillna(0),
+                "FOH-Others.Act": pd.to_numeric(labor["FOH-Others.Act"], errors="coerce").fillna(0),
+                "Selected Hours": pd.to_numeric(labor["Selected Hours"], errors="coerce").fillna(0),
+            })
+            .groupby(["Labor Source files"], dropna=False, as_index=False)
+            .agg({
+                "Order Merge Key": "count",
+                "Labor HR.Act": "sum",
+                "FOH-Others.Act": "sum",
+                "Selected Hours": "sum",
+            })
+            .rename(columns={
+                "Labor Source files": "Labor Source file",
+                "Order Merge Key": "工時Order數",
+                "Labor HR.Act": "Labor HR.Act合計",
+                "FOH-Others.Act": "FOH-Others.Act合計",
+                "Selected Hours": "Selected Hours合計",
+            })
+        )
+    else:
+        labor_source_summary = pd.DataFrame(columns=[
+            "Labor Source file", "工時Order數", "Labor HR.Act合計", "FOH-Others.Act合計", "Selected Hours合計"
+        ])
+
+    # Labor matching diagnostics: shows how production Orders matched labor Order Numbers.
+    diagnostic_cols = [
+        "Source file", "Order", "Order Merge Key", "Matched Labor Order Number",
+        "Labor Match Status", "Material Number", "Material description",
+        "Labor HR.Act", "FOH-Others.Act", "Selected Hours", "Labor Source files"
+    ]
+    for c in diagnostic_cols:
+        if c not in out.columns:
+            out[c] = ""
+    labor_match_diagnostics = out[diagnostic_cols].copy()
+    for c in ["Labor HR.Act", "FOH-Others.Act", "Selected Hours"]:
+        labor_match_diagnostics[c] = pd.to_numeric(labor_match_diagnostics[c], errors="coerce").fillna(0)
+    labor_match_diagnostics = labor_match_diagnostics.rename(columns={
+        "Selected Hours": "Total working hours"
+    })
+
+    labor_match_summary = (
+        labor_match_diagnostics.groupby(["Labor Match Status"], dropna=False, as_index=False)["Order"]
+        .count()
+        .rename(columns={"Order": "筆數"})
+    )
+
+    wip = out[out["Is_WIP"] == "Y"].copy()
 
     file_id = uuid.uuid4().hex[:10]
     output_path = OUTPUT_DIR / f"年度產品產量與分類結果_v6_{year or 'ALL'}_{file_id}.xlsx"
@@ -1550,19 +1470,18 @@ def process_files(
         out_export = out_export.drop(columns=["Labor HR.Act"], errors="ignore")
         annual_export = annual_export.drop(columns=["年度人員工時"], errors="ignore")
 
-    # CMP V19.2 Step1 Output:
-    # Always include 工單明細_已分類 while keeping V19 CPU optimizations and fixed-width export.
-    include_detail_output = True
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual_export.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
         type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
-
-        # Avoid scanning thousands of cells for auto-width. Fixed widths are much faster.
         for sheet in writer.book.worksheets:
             sheet.freeze_panes = "A2"
-            for col_idx in range(1, sheet.max_column + 1):
-                sheet.column_dimensions[sheet.cell(1, col_idx).column_letter].width = 18
+            for col in sheet.columns:
+                max_len = 12
+                letter = col[0].column_letter
+                for cell in col[:1000]:
+                    max_len = max(max_len, len(str(cell.value or "")) + 2)
+                sheet.column_dimensions[letter].width = min(max_len, 45)
 
     summary = {
         "files": int(len(paths)),
@@ -1573,19 +1492,16 @@ def process_files(
         "annual_rows": int(len(annual)),
         "total_qty": float(out["Delivered quantity"].sum()),
         "total_hours": float(out["Selected Hours"].sum()) if "Selected Hours" in out.columns else 0.0,
-        "wip_rows": int(wip_rows_count),
+        "wip_rows": int(len(wip)),
         "strict_site_excluded_rows": int(strict_site_excluded_rows),
         "output_filename": output_path.name,
         "year": year or "ALL",
-        "include_detail_output": bool(include_detail_output),
-        "fast_output_mode": False,
-        "app_version": CMP_MAIN_VERSION,
     }
     return output_path, summary
 
 def process_file(path: Path, year: Optional[int]) -> tuple[Path, dict]:
     """Backward-compatible wrapper for single-file processing."""
-    return process_files([path], year, None, "both", DEFAULT_RULE_SET, True)
+    return process_files([path], year, None, "both", DEFAULT_RULE_SET)
 
 
 def normalize_rule_upload(df: pd.DataFrame) -> pd.DataFrame:
@@ -1651,7 +1567,7 @@ def debug_version():
         "app": "Carbon Management Platform",
         "version": "PROCESS_MANUAL_FORM_V6",
         "process_endpoint": "manual form compatible",
-        "supports": ["files multi-upload", "file single-upload", "Module 2 multi-BOM upload", "blank year", "BU rule library", "Step1 fast output mode"],
+        "supports": ["files multi-upload", "file single-upload", "Module 2 multi-BOM upload", "blank year", "BU rule library"],
     }
 
 @app.post("/process")
@@ -1704,8 +1620,6 @@ async def process(request: Request):
     labor_mode = normalize_labor_mode(form.get("labor_mode") or "both")
     rule_set = normalize_rule_set(form.get("rule_set") or DEFAULT_RULE_SET)
     year = form.get("year")
-    # V19.2: Always export 工單明細_已分類. Frontend no longer shows or sends an optional detail-output flag.
-    include_detail_output = True
 
     saved_paths: list[Path] = []
     for upload in upload_files:
@@ -1730,7 +1644,7 @@ async def process(request: Request):
         if year is not None and str(year).strip() != "":
             year_value = int(str(year).strip())
 
-        output_path, summary = process_files(saved_paths, year_value, saved_labor_paths, labor_mode, rule_set, include_detail_output)
+        output_path, summary = process_files(saved_paths, year_value, saved_labor_paths, labor_mode, rule_set)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -1880,69 +1794,25 @@ def module2_step1_output_source():
         "ok": True,
         "filename": step1_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         "download_url": f"/download/{step1_path.name}",
     }
 
 
-def _list_module2_site_raw_material_bulk_files() -> list[dict[str, Any]]:
-    """List Module 2 site-specific Raw Material Bulk xlsx files for Module 3 selection.
-
-    Priority is the latest Module 2 manifest written after /process-bom-expansion.
-    This prevents Module 3 from accidentally picking an older raw-material file
-    after the server restarts or when outputs/ contains historical files.
-    """
-    manifest = _read_latest_module2_manifest()
-    manifest_rows: list[dict[str, Any]] = []
-    for item in manifest.get("files", []) or []:
-        path = _safe_output_path(item.get("filename"))
-        if not path or not path.exists() or path.suffix.lower() not in [".xlsx", ".xlsm", ".xls"]:
-            continue
-        stat = path.stat()
-        row = dict(item)
-        row.update({
-            "filename": path.name,
-            "size_bytes": int(stat.st_size),
-            "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
-            "mtime": float(stat.st_mtime),
-            "download_url": f"/download/{path.name}",
-        })
-        manifest_rows.append(row)
-    if manifest_rows:
-        manifest_rows.sort(key=lambda r: (float(r.get("mtime", 0) or 0), str(r.get("filename", ""))), reverse=True)
-        return manifest_rows
-
-    rows: list[dict[str, Any]] = []
-    for path in OUTPUT_DIR.glob("raw_material_activity_data_bulk_*.xlsx"):
-        name = path.name
-        low = name.lower()
-        if low.endswith("_latest.xlsx") or "all_sites" in low or "by_site" in low:
-            continue
-        stat = path.stat()
-        site_name = name.replace("raw_material_activity_data_bulk_", "")
-        site_name = re.sub(r"_[0-9a-f]{10}\.xlsx$", "", site_name, flags=re.I)
-        rows.append({
-            "filename": name,
-            "production_site": site_name or "Unassigned",
-            "size_bytes": int(stat.st_size),
-            "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
-            "mtime": float(stat.st_mtime),
-            "download_url": f"/download/{name}",
-        })
-    rows.sort(key=lambda r: (float(r.get("mtime", 0) or 0), str(r.get("filename", ""))), reverse=True)
-    return rows
-
 def _find_latest_module2_raw_material_bulk() -> Path | None:
-    """Return the selected Module 2 site workbook, or the latest site workbook."""
-    global MODULE2_RAW_MATERIAL_BULK_PATH, MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH
-    if MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH and MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH.exists():
-        return MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH
+    """Return the most recent Module 2 raw material bulk output without creating a duplicate latest file."""
+    global MODULE2_RAW_MATERIAL_BULK_PATH
     if MODULE2_RAW_MATERIAL_BULK_PATH and MODULE2_RAW_MATERIAL_BULK_PATH.exists():
         return MODULE2_RAW_MATERIAL_BULK_PATH
-    options = _list_module2_site_raw_material_bulk_files()
-    if not options:
+    candidates = []
+    for path in OUTPUT_DIR.glob("raw_material_activity_data_bulk_*.xlsx"):
+        name = path.name.lower()
+        if "by_site" in name or name.endswith("_latest.xlsx"):
+            continue
+        candidates.append(path)
+    if not candidates:
         return None
-    latest = OUTPUT_DIR / str(options[0]["filename"])
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
     MODULE2_RAW_MATERIAL_BULK_PATH = latest
     return latest
 
@@ -1950,65 +1820,18 @@ def _find_latest_module2_raw_material_bulk() -> Path | None:
 @app.get("/module3/raw-material-bulk-source")
 def module3_raw_material_bulk_source():
     raw_path = _find_latest_module2_raw_material_bulk()
-    options = _list_module2_site_raw_material_bulk_files()
     if not raw_path:
         return {
             "ok": False,
             "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。",
-            "options": [],
-            "timezone": "Asia/Taipei",
         }
     stat = raw_path.stat()
     return {
         "ok": True,
         "filename": raw_path.name,
-        "selected_filename": raw_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
+        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         "download_url": f"/download/{raw_path.name}",
-        "options": options,
-        "timezone": "Asia/Taipei",
-    }
-
-
-@app.get("/module3/raw-material-bulk-options")
-def module3_raw_material_bulk_options():
-    options = _list_module2_site_raw_material_bulk_files()
-    selected = _find_latest_module2_raw_material_bulk()
-    return {
-        "ok": True,
-        "options": options,
-        "selected_filename": selected.name if selected else "",
-        "timezone": "Asia/Taipei",
-    }
-
-
-@app.post("/module3/select-raw-material-bulk")
-async def module3_select_raw_material_bulk(request: Request):
-    global MODULE2_RAW_MATERIAL_BULK_PATH, MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH
-    try:
-        payload = await request.json()
-    except Exception:
-        payload = {}
-    filename = str(payload.get("filename") or "").strip()
-    if not filename:
-        return JSONResponse({"ok": False, "message": "請選擇 Module 2 廠區 Raw Material Bulk 檔案。"}, status_code=400)
-    safe_name = Path(filename).name
-    path = OUTPUT_DIR / safe_name
-    if not path.exists() or path.suffix.lower() not in [".xlsx", ".xlsm", ".xls"]:
-        return JSONResponse({"ok": False, "message": "選擇的 Raw Material Bulk 檔案不存在。"}, status_code=404)
-    if not safe_name.lower().startswith("raw_material_activity_data_bulk_"):
-        return JSONResponse({"ok": False, "message": "檔案名稱不是 Module 2 Raw Material Bulk。"}, status_code=400)
-    MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH = path
-    MODULE2_RAW_MATERIAL_BULK_PATH = path
-    stat = path.stat()
-    return {
-        "ok": True,
-        "filename": path.name,
-        "selected_filename": path.name,
-        "size_bytes": stat.st_size,
-        "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
-        "download_url": f"/download/{path.name}",
     }
 
 # =========================================================
@@ -2045,7 +1868,7 @@ async def module3_apply_ccl_factors_job(
         message="CCL 係數對應已開始。",
         source_filename=raw_path.name,
         remaining_seconds=30,
-        created_at=_now_taipei().isoformat(timespec="seconds"),
+        created_at=datetime.now().isoformat(timespec="seconds"),
     )
     MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path)
     return {"ok": True, "job_id": job_id, "message": "CCL 係數對應已開始。", "source_filename": raw_path.name}
@@ -2105,10 +1928,7 @@ def _module3_factor_library_paths():
 
 @app.on_event("startup")
 def module3_preload_factor_libraries_on_startup():
-    """Preload APOS / Cut-off factor libraries only when Module 3B is enabled."""
-    if not ENABLE_MODULE3_ECOINVENT_DATABASE:
-        print("===== MODULE3 FACTOR LIBRARY PRELOAD: DISABLED_BY_SWITCH =====")
-        return
+    """Preload APOS / Cut-off factor libraries into memory for faster Module 3 searches."""
     try:
         apos_path, cutoff_path = _module3_factor_library_paths()
         summary = preload_factor_libraries(apos_path, cutoff_path)
@@ -2119,22 +1939,11 @@ def module3_preload_factor_libraries_on_startup():
 
 @app.get("/module3/factor-library-filters")
 def module3_factor_library_filters():
-    if not ENABLE_MODULE3_ECOINVENT_DATABASE:
-        return {
-            "ok": False,
-            "enabled": False,
-            "message": MODULE3_ECOINVENT_DISABLED_MESSAGE,
-            "geographies": [],
-            "sources": [],
-            "process_types": [],
-            "app_version": CMP_MAIN_VERSION,
-        }
     apos_path, cutoff_path = _module3_factor_library_paths()
     try:
         geographies = ["GLO", "RoW", "RER"]
         return {
             "ok": True,
-            "enabled": True,
             "geographies": geographies,
             "sources": ["APOS", "Cut-off"],
             "process_types": ["production", "market_for"],
@@ -2157,19 +1966,6 @@ def module3_search_factor_library(
     page: int = 1,
     page_size: int = 10,
 ):
-    if not ENABLE_MODULE3_ECOINVENT_DATABASE:
-        return {
-            "ok": False,
-            "enabled": False,
-            "message": MODULE3_ECOINVENT_DISABLED_MESSAGE,
-            "results": [],
-            "total_count": 0,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": 0,
-            "app_version": CMP_MAIN_VERSION,
-        }
-
     apos_path, cutoff_path = _module3_factor_library_paths()
     try:
         result = search_factor_library(
@@ -2200,7 +1996,7 @@ def module3_search_factor_library(
 # =========================================================
 @app.post("/process-bom-expansion")
 async def process_bom_expansion(request: Request):
-    global MODULE2_RAW_MATERIAL_BULK_PATH, MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH
+    global MODULE2_RAW_MATERIAL_BULK_PATH
     """Module 2 BOM Expansion.
 
     V13 supports multiple Standard BOM Excel files.
@@ -2314,62 +2110,81 @@ async def process_bom_expansion(request: Request):
     }
 
     try:
-        # CMP_PATCH_V22.1_STABLE:
-        # Generate Module 2 outputs in one pass. This avoids reading and exploding
-        # the same Standard BOM multiple times in Render.
-        summary = generate_module2_outputs_memory_optimized(
+        if step1_path is not None:
+            summary = generate_raw_material_bulk_files_by_site_zip(
+                bom_path=bom_paths,
+                raw_material_template_path=template_path,
+                output_dir=OUTPUT_DIR,
+                token=token,
+                step1_output_path=step1_path,
+                mapping=mapping,
+                supplier_paths=supplier_paths,
+                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
+                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
+            )
+            output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
+            summary["module1_step1_source_filename"] = step1_path.name
+            summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
+        else:
+            summary = generate_raw_material_bulk_file(
+                bom_path=bom_paths,
+                raw_material_template_path=template_path,
+                output_path=output_path,
+                mapping=mapping,
+                supplier_paths=supplier_paths,
+                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
+                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
+            )
+        bom_structure_summary = export_bom_structure_file(
             bom_path=bom_paths,
-            raw_material_template_path=template_path,
-            output_dir=OUTPUT_DIR,
-            token=token,
-            step1_output_path=step1_path,
-            bom_structure_output_path=LATEST_BOM_STRUCTURE_PATH,
-            working_hour_rollup_output_path=working_hour_rollup_output_path,
+            output_path=LATEST_BOM_STRUCTURE_PATH,
             mapping=mapping,
-            supplier_paths=supplier_paths,
-            supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths and supplier_bulk_template_path.exists() else None,
-            supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths and supplier_bulk_template_path.exists() else None,
         )
-        output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_{token}.xlsx"))
+        summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
+        summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
+        summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
+        summary["bom_files"] = int(bom_structure_summary.get("bom_files", summary.get("bom_files", len(bom_paths))))
+        summary["bom_rows_before_dedup"] = int(bom_structure_summary.get("bom_rows_before_dedup", summary.get("bom_rows_before_dedup", 0)))
+        summary["bom_rows_after_dedup"] = int(bom_structure_summary.get("bom_rows_after_dedup", summary.get("bom_rows_after_dedup", 0)))
+        summary["bom_duplicate_rows_removed"] = int(bom_structure_summary.get("bom_duplicate_rows_removed", summary.get("bom_duplicate_rows_removed", 0)))
 
-        # CMP V23.4: Module 2 produces site-specific xlsx files only. No ZIP and no all-site file.
-        # Default Module 3 source is the first generated site file; users can select another site in Module 3.
-        MODULE2_RAW_MATERIAL_BULK_PATH = None
-        MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH = None
-        for item in summary.get("production_site_files", []) or []:
-            candidate = OUTPUT_DIR / str(item.get("filename", ""))
-            if candidate.exists() and candidate.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
-                MODULE2_RAW_MATERIAL_BULK_PATH = candidate
-                MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH = candidate
-                summary["module2_raw_material_bulk_selected"] = candidate.name
-                summary["module2_raw_material_bulk_selected_download_url"] = f"/download/{candidate.name}"
-                break
+        if step1_path is not None:
+            rollup_summary = generate_working_hour_rollup_file(
+                step1_output_path=step1_path,
+                bom_structure_path=LATEST_BOM_STRUCTURE_PATH,
+                output_path=working_hour_rollup_output_path,
+            )
+            LATEST_WORKING_HOUR_ROLLUP_PATH.write_bytes(working_hour_rollup_output_path.read_bytes())
+            summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
+            summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
+            summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name
+            summary["working_hour_rollup_latest_download_url"] = f"/download/{LATEST_WORKING_HOUR_ROLLUP_PATH.name}"
+            summary["working_hour_rollup_rows"] = int(rollup_summary.get("summary_rows", 0))
+            summary["working_hour_rollup_detail_rows"] = int(rollup_summary.get("detail_rows", 0))
+            summary["working_hour_rollup_total_direct_hours"] = float(rollup_summary.get("total_direct_hours", 0))
+            summary["working_hour_rollup_total_semi_hours"] = float(rollup_summary.get("total_semi_hours", 0))
+            summary["working_hour_rollup_total_hours"] = float(rollup_summary.get("total_hours", 0))
+        else:
+            summary["working_hour_rollup_filename"] = ""
+            summary["working_hour_rollup_download_url"] = ""
+            summary["working_hour_rollup_rows"] = 0
 
-        summary["module1_step1_source_filename"] = step1_path.name
-        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
-        _write_latest_module2_manifest(summary, selected_filename=summary.get("module2_raw_material_bulk_selected", ""))
-        if summary.get("bom_structure_generated") and LATEST_BOM_STRUCTURE_PATH.exists():
-            summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
-            summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
-        if summary.get("working_hour_rollup_generated") and working_hour_rollup_output_path.exists():
-            try:
-                LATEST_WORKING_HOUR_ROLLUP_PATH.write_bytes(working_hour_rollup_output_path.read_bytes())
-                summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name
-                summary["working_hour_rollup_latest_download_url"] = f"/download/{LATEST_WORKING_HOUR_ROLLUP_PATH.name}"
-            except Exception:
-                traceback.print_exc()
+        if output_path.suffix.lower() == ".xlsx" and output_path.exists():
+            MODULE2_RAW_MATERIAL_BULK_PATH = output_path
+            summary["raw_material_bulk_filename"] = output_path.name
+            summary["raw_material_bulk_download_url"] = f"/download/{output_path.name}"
 
         summary["supplier_upload_files"] = len(supplier_paths)
-        summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_filename"))
-        if supplier_paths and not summary.get("supplier_bulk_generated"):
-            summary["supplier_status"] = summary.get("supplier_bulk_error") or "Supplier files uploaded, but no supplier bulk rows were generated."
-        elif supplier_paths:
-            summary["supplier_status"] = "Supplier Mapping completed."
+        if not supplier_paths:
+            summary["supplier_bulk_filename"] = ""
+            summary["supplier_bulk_download_url"] = ""
+            summary["supplier_bulk_rows"] = 0
+            summary["supplier_bulk_generated"] = False
+            summary["supplier_status"] = "Not Uploaded"
         else:
-            summary["supplier_status"] = "No supplier file uploaded."
-        summary["timezone"] = "Asia/Taipei"
-        summary["module2_manifest_filename"] = LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.name
-        summary["app_version"] = CMP_MAIN_VERSION
+            summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
+            summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
+        summary["app_version"] = "CMP_V16_2_SUPPLIER_BULK_OPTIONAL"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -2378,236 +2193,11 @@ async def process_bom_expansion(request: Request):
             status_code=400,
         )
 
-    try:
-        del bom_paths, supplier_paths
-        gc.collect()
-    except Exception:
-        pass
-
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": CMP_MAIN_VERSION,
+        "app_version": "CMP_V16_2_SUPPLIER_BULK_OPTIONAL",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
     }
-
-# =========================================================
-# Module 2 V25 · A/B/C independent execution endpoints
-# =========================================================
-
-def _read_json_file(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _write_module2_expanded_bom_master_manifest(summary: dict[str, Any]) -> None:
-    filename = Path(str(summary.get("expanded_bom_master_filename") or summary.get("output_filename") or "")).name
-    path = _safe_output_path(filename)
-    files = []
-    if path and path.exists():
-        stat = path.stat()
-        files.append({
-            "filename": path.name,
-            "size_bytes": int(stat.st_size),
-            "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
-            "mtime": float(stat.st_mtime),
-            "download_url": f"/download/{path.name}",
-        })
-    manifest = {
-        "ok": bool(files),
-        "timezone": "Asia/Taipei",
-        "updated_at": _now_taipei().isoformat(timespec="seconds"),
-        "selected_filename": filename,
-        "files": files,
-        "summary": summary,
-    }
-    LATEST_MODULE2_EXPANDED_BOM_MASTER_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _find_latest_module2_expanded_bom_master() -> Path | None:
-    manifest = _read_json_file(LATEST_MODULE2_EXPANDED_BOM_MASTER_MANIFEST_PATH)
-    for item in manifest.get("files", []) or []:
-        path = _safe_output_path(item.get("filename"))
-        if path and path.exists():
-            return path
-    candidates = sorted(OUTPUT_DIR.glob("expanded_bom_master_*.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0] if candidates else None
-
-
-@app.get("/module2/expanded-bom-master-source")
-def module2_expanded_bom_master_source():
-    path = _find_latest_module2_expanded_bom_master()
-    if not path:
-        return {"ok": False, "message": "尚未找到 Module 2A Expanded BOM Master，請先執行 Module 2A。", "timezone": "Asia/Taipei"}
-    stat = path.stat()
-    return {
-        "ok": True,
-        "filename": path.name,
-        "size_bytes": int(stat.st_size),
-        "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
-        "download_url": f"/download/{path.name}",
-        "timezone": "Asia/Taipei",
-    }
-
-
-@app.get("/module2/raw-material-bulk-source")
-def module2_raw_material_bulk_source():
-    options = _list_module2_site_raw_material_bulk_files()
-    if not options:
-        return {"ok": False, "message": "尚未找到 Module 2B Raw Material Bulk，請先執行 Module 2B。", "options": [], "timezone": "Asia/Taipei"}
-    return {"ok": True, "options": options, "selected_filename": options[0].get("filename", ""), "timezone": "Asia/Taipei"}
-
-
-@app.post("/module2a/expand-bom-master")
-async def module2a_expand_bom_master(request: Request):
-    try:
-        form = await request.form()
-        def is_upload_file_like(item) -> bool:
-            return bool(getattr(item, "filename", None)) and hasattr(item, "read")
-        bom_uploads = [item for item in form.getlist("bom_files") + form.getlist("bom_file") if is_upload_file_like(item)]
-        if not bom_uploads:
-            return JSONResponse({"ok": False, "message": "請至少上傳一個 Standard BOM Excel 檔案。"}, status_code=400)
-        token = uuid.uuid4().hex[:10]
-        bom_paths: list[Path] = []
-        for idx, bom_file in enumerate(bom_uploads, start=1):
-            filename = Path(str(getattr(bom_file, "filename", "") or f"bom_{idx}.xlsx")).name
-            if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-                return JSONResponse({"ok": False, "message": f"{filename} 不是 Standard BOM Excel 檔案。"}, status_code=400)
-            saved_path = UPLOAD_DIR / f"module2a_standard_bom_{token}_{idx}_{filename}"
-            saved_path.write_bytes(await bom_file.read())
-            bom_paths.append(saved_path)
-        mapping = {
-            "parent_col": str(form.get("parent_col") or ""),
-            "component_col": str(form.get("component_col") or ""),
-            "qty_col": str(form.get("qty_col") or ""),
-            "unit_col": str(form.get("unit_col") or ""),
-            "description_col": str(form.get("description_col") or ""),
-            "material_group_col": str(form.get("material_group_col") or ""),
-            "valid_from_col": str(form.get("valid_from_col") or ""),
-        }
-        output_path = OUTPUT_DIR / f"expanded_bom_master_{token}.xlsx"
-        summary = generate_expanded_bom_master_file(bom_paths, output_path, mapping=mapping)
-        summary["timezone"] = "Asia/Taipei"
-        summary["app_version"] = CMP_MAIN_VERSION
-        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
-        _write_module2_expanded_bom_master_manifest(summary)
-        return {"ok": True, "message": "Module 2A BOM Expansion Master completed.", "summary": summary, "download_url": summary.get("download_url")}
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-    finally:
-        gc.collect()
-
-
-@app.post("/module2b/generate-raw-material-bulk")
-async def module2b_generate_raw_material_bulk(template_file: UploadFile = File(...)):
-    global MODULE2_RAW_MATERIAL_BULK_PATH, MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH
-    try:
-        if not template_file or not template_file.filename:
-            return JSONResponse({"ok": False, "message": "請上傳 Raw Material Bulk Template。"}, status_code=400)
-        if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse({"ok": False, "message": "Raw Material Bulk Template 請上傳 Excel 檔案。"}, status_code=400)
-        expanded_master_path = _find_latest_module2_expanded_bom_master()
-        if not expanded_master_path:
-            return JSONResponse({"ok": False, "message": "尚未找到 Module 2A Expanded BOM Master，請先執行 Module 2A。"}, status_code=400)
-        step1_path = _find_latest_module1_step1_output()
-        if not step1_path:
-            return JSONResponse({"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"}, status_code=400)
-        token = uuid.uuid4().hex[:10]
-        template_path = UPLOAD_DIR / f"module2b_raw_material_template_{token}_{Path(template_file.filename).name}"
-        template_path.write_bytes(await template_file.read())
-        summary = generate_raw_material_bulk_from_expanded_master_by_site(
-            expanded_bom_master_path=expanded_master_path,
-            step1_output_path=step1_path,
-            raw_material_template_path=template_path,
-            output_dir=OUTPUT_DIR,
-            token=token,
-        )
-        MODULE2_RAW_MATERIAL_BULK_PATH = None
-        MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH = None
-        for item in summary.get("production_site_files", []) or []:
-            candidate = OUTPUT_DIR / str(item.get("filename", ""))
-            if candidate.exists():
-                MODULE2_RAW_MATERIAL_BULK_PATH = candidate
-                MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH = candidate
-                summary["module2_raw_material_bulk_selected"] = candidate.name
-                summary["module2_raw_material_bulk_selected_download_url"] = f"/download/{candidate.name}"
-                break
-        summary["module1_step1_source_filename"] = step1_path.name
-        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
-        summary["timezone"] = "Asia/Taipei"
-        summary["app_version"] = CMP_MAIN_VERSION
-        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
-        _write_latest_module2_manifest(summary, selected_filename=summary.get("module2_raw_material_bulk_selected", ""))
-        return {"ok": True, "message": "Module 2B Raw Material Bulk Generation completed.", "summary": summary, "download_url": summary.get("download_url")}
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-    finally:
-        gc.collect()
-
-
-@app.post("/module2c/supplier-mapping")
-async def module2c_supplier_mapping(request: Request):
-    try:
-        form = await request.form()
-        def is_upload_file_like(item) -> bool:
-            return bool(getattr(item, "filename", None)) and hasattr(item, "read")
-        supplier_uploads = [item for item in form.getlist("supplier_files") + form.getlist("supplier_file") if is_upload_file_like(item)]
-        if not supplier_uploads:
-            return JSONResponse({"ok": False, "message": "請上傳 Supplier Files。"}, status_code=400)
-        options = _list_module2_site_raw_material_bulk_files()
-        raw_paths = []
-        selected = str(form.get("raw_material_bulk_filename") or "").strip()
-        if selected:
-            path = _safe_output_path(selected)
-            if path and path.exists():
-                raw_paths.append(path)
-        if not raw_paths:
-            for item in options:
-                path = _safe_output_path(item.get("filename"))
-                if path and path.exists():
-                    raw_paths.append(path)
-        if not raw_paths:
-            return JSONResponse({"ok": False, "message": "尚未找到 Module 2B Raw Material Bulk，請先執行 Module 2B。"}, status_code=400)
-        token = uuid.uuid4().hex[:10]
-        supplier_paths: list[Path] = []
-        for idx, supplier_file in enumerate(supplier_uploads, start=1):
-            filename = Path(str(getattr(supplier_file, "filename", "") or f"supplier_{idx}.xlsx")).name
-            if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-                return JSONResponse({"ok": False, "message": f"{filename} 不是 Supplier Excel 檔案。"}, status_code=400)
-            saved_path = UPLOAD_DIR / f"module2c_supplier_{token}_{idx}_{filename}"
-            saved_path.write_bytes(await supplier_file.read())
-            supplier_paths.append(saved_path)
-        supplier_bulk_template_path = BASE_DIR / "templates" / "supplier_bulk_create_template_v1.xlsx"
-        supplier_bulk_output_path = OUTPUT_DIR / f"supplier_bulk_create_{token}.xlsx"
-        summary = generate_supplier_mapping_from_raw_material_bulk_files(
-            raw_material_bulk_paths=raw_paths,
-            supplier_paths=supplier_paths,
-            output_dir=OUTPUT_DIR,
-            token=token,
-            supplier_bulk_template_path=supplier_bulk_template_path if supplier_bulk_template_path.exists() else None,
-            supplier_bulk_output_path=supplier_bulk_output_path if supplier_bulk_template_path.exists() else None,
-        )
-        summary["timezone"] = "Asia/Taipei"
-        summary["app_version"] = CMP_MAIN_VERSION
-        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
-        LATEST_MODULE2_SUPPLIER_MANIFEST_PATH.write_text(json.dumps({
-            "ok": True,
-            "timezone": "Asia/Taipei",
-            "updated_at": _now_taipei().isoformat(timespec="seconds"),
-            "summary": summary,
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
-        return {"ok": True, "message": "Module 2C Supplier Mapping completed.", "summary": summary, "download_url": summary.get("download_url")}
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-    finally:
-        gc.collect()

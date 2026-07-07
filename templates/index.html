@@ -352,10 +352,8 @@
             </div>
 
             <form id="bulkForm" class="form-panel">
-              <div class="module3-source-card">
-                <b data-i18n="uploadStep1OutputFile">Module 1 Step 1 Output</b>
-                <p>來源：系統將自動使用 Module 1 Step 1 最新產出檔案（Asia/Taipei, UTC+8）。</p>
-              </div>
+              <label data-i18n="uploadStep1OutputFile">Upload Step 1 Output File</label>
+              <input id="step1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
               <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
@@ -380,7 +378,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="bulkStatusTitle">Ready for batch formatting</b>
-                  <p id="bulkStatusText">系統會自動使用 Module 1 Step 1 最新產出；請上傳 Bulk Template。</p>
+                  <p id="bulkStatusText">Upload Step 1 output and bulk template to generate formatted bulk file.</p>
                 </div>
                 <span id="bulkStatusTime" class="status-time">Idle</span>
               </div>
@@ -476,13 +474,8 @@
             <form id="module3CclForm" class="module3-action-panel" enctype="multipart/form-data">
               <div id="module3RawBulkSource" class="module3-source-card">
                 <b>Raw Material Activity Data</b>
-                <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...（Asia/Taipei, UTC+8）</p>
+                <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...</p>
               </div>
-
-              <label for="module3RawBulkSelect">選擇 Module 2 廠區資料</label>
-              <select id="module3RawBulkSelect">
-                <option value="">尚未載入 Module 2 廠區檔案</option>
-              </select>
 
               <label data-i18n="module3UploadCclMapping">上傳光寶 CCL 係數組配表</label>
               <input id="module3CclMappingFile" name="ccl_mapping_file" type="file" accept=".xlsx,.xls,.xlsm" required />
@@ -605,18 +598,13 @@
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <div id="bomStep1Source" class="module3-source-card">
-                <b data-i18n="uploadStep1OutputForRollup">Module 1 Step 1 Output（Auto）</b>
-                <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...（Asia/Taipei, UTC+8）</p>
-              </div>
-
-              <div class="module3-source-card">
-                <b>Module 2 Efficient One-step Mode</b>
-                <p>本版本維持一段式流程：上傳 Standard BOM、Raw Material Bulk Template 與選填 Supplier Files 後，系統只展 BOM 一次；Raw Material Bulk 直接提供 Module 3 使用，Supplier Mapping / Supplier Bulk 會在有上傳供應商檔案時同步產出。</p>
+                <b data-i18n="uploadStep1OutputForRollup">Upload Annual Product Output & Classification Result</b>
+                <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
               </div>
 
               <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
               <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
-              <p class="form-hint">選填。若上傳供應商檔案，Module 2 會在同一次 BOM 展開結果上執行 Supplier Mapping，不會重複展 BOM。</p>
+              <p class="form-hint" data-i18n="supplierFilesHint">Optional. Supports multiple Excel files. Uses Raw Material Code + Vendor number to write Supplier Name. Transportation Origin uses Supplier Address or Country + City + Street. Also exports supplier_bulk_create from the built-in template.</p>
 
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⌘</span>
@@ -629,7 +617,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="bomStatusTitle">Ready for BOM Expansion</b>
-                  <p id="bomStatusText">Upload standard BOM and raw material bulk template to generate site-specific Raw Material Bulk files.</p>
+                  <p id="bomStatusText">Upload standard BOM and raw material bulk template to start processing.</p>
                 </div>
                 <span id="bomStatusTime" class="status-time">Idle</span>
               </div>
@@ -638,11 +626,9 @@
               </div>
             </div>
 
-            <a id="bomDownload" class="download disabled" href="#" style="display:none;"><span>Download Raw Material Bulk</span></a>
-            <div id="module2SiteDownloads" class="download-row"></div>
-            <a id="workingHourRollupDownload" class="download disabled" href="#" style="display:none;"><span>Download Working Hour Roll-up</span></a>
-
-            <a id="supplierBulkDownload" class="download disabled" href="#" style="display:none;"><span>Download Supplier Bulk Create</span></a>
+            <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk</span></a>
+            <a id="workingHourRollupDownload" class="download disabled" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
+            <a id="supplierBulkDownload" class="download disabled" href="#"><span data-i18n="downloadSupplierBulk">Download Supplier Bulk Create</span></a>
 
 
           </section>
@@ -903,7 +889,6 @@ const homeButton = document.getElementById('homeButton');
 
 const bomForm = document.getElementById('bomForm');
 const bomDownload = document.getElementById('bomDownload');
-const module2SiteDownloads = document.getElementById('module2SiteDownloads');
 const workingHourRollupDownload = document.getElementById('workingHourRollupDownload');
 const supplierBulkDownload = document.getElementById('supplierBulkDownload');
 const bomProcessingStatus = document.getElementById('bomProcessingStatus');
@@ -913,7 +898,6 @@ const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
 const bomStep1SourceText = document.getElementById('bomStep1SourceText');
-const bomStep1File = null; // V23.0: Module 2 auto-uses latest Module 1 Step 1 output
 const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
 const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
@@ -922,7 +906,6 @@ const module3CclStatusTime = document.getElementById('module3CclStatusTime');
 const module3CclProgressBar = document.getElementById('module3CclProgressBar');
 const module3CclDownload = document.getElementById('module3CclDownload');
 const module3RawBulkSourceText = document.getElementById('module3RawBulkSourceText');
-const module3RawBulkSelect = document.getElementById('module3RawBulkSelect');
 const module3FactorActivityKeyword = document.getElementById('module3FactorActivityKeyword');
 const module3FactorReferenceKeyword = document.getElementById('module3FactorReferenceKeyword');
 const module3FactorSource = document.getElementById('module3FactorSource');
@@ -1218,10 +1201,7 @@ async function refreshBomStep1Source() {
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'Module 1 Step 1 output';
     const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    const mode = data.source_mode || '';
-    let sourceLabel = 'Module 1 Step 1 最新產出';
-    if (mode === 'session_uploaded' || mode === 'cached_upload') sourceLabel = '已上傳 Step1 Output，可直接沿用';
-    bomStep1SourceText.textContent = `來源：${sourceLabel}｜檔案：${filename}${modified ? `｜建立時間：${modified}（Asia/Taipei, UTC+8）` : ''}`;
+    bomStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
   } catch (err) {
     bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
   }
@@ -1250,11 +1230,13 @@ function startBomEstimatedProgress() {
     bomProgressBar.style.width = `${progress}%`;
 
     const stages = [
-      'Fast Mode：讀取 Standard BOM...',
-      'Fast Mode：偵測半成品與展開多階 BOM...',
-      'Fast Mode：依 Production Site 分檔...',
-      'Fast Mode：使用 XlsxWriter constant_memory 寫入各廠區 Raw Material Bulk...',
-      'Fast Mode：完成後更新 Module 1 / Module 3 最新檔案來源...'
+      cmpT('stageReadingBomStructure', 'Reading and merging BOM file(s)...'),
+      cmpT('stageDetectingSemiFinished', 'Detecting semi-finished components...'),
+      cmpT('stageExpandingMultiLevelBom', 'Expanding multi-level BOM...'),
+      cmpT('stageCalculatingRollup', 'Calculating material quantity roll-up...'),
+      cmpT('stageCopyingRawMaterialTemplate', 'Copying raw material bulk template...'),
+      cmpT('stageMatchingSupplierData', 'Matching supplier files and dropdown options...'),
+      cmpT('stageWritingActivityRawMaterial', 'Writing Activity Data and Raw Material sheets...')
     ];
     const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
     bomStatusText.textContent = stages[stageIndex];
@@ -1263,34 +1245,20 @@ function startBomEstimatedProgress() {
 
 function stopBomProgressSuccess(summary) {
   clearInterval(progressTimer);
-  const siteCount = Number(summary.production_site_count || ((summary.production_site_files || []).length) || 0);
+  const supplierUploaded = Number(summary.supplier_upload_files || 0) > 0;
+  const supplierStatusText = supplierUploaded
+    ? `Supplier files: ${summary.supplier_upload_files || 0}; Supplier bulk rows: ${summary.supplier_bulk_rows || 0};`
+    : 'Supplier files: Not Uploaded; Supplier bulk: Not Generated;';
   setBomProcessingState(
     'success',
-    'BOM Expansion completed',
-    `BOM Files: ${summary.bom_files || 1}; Rows: ${summary.bom_rows_after_dedup || 0}; Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}; Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Site files: ${siteCount}; Max BOM Level: ${summary.max_level}.`,
+    cmpT('bomExpansionCompleted', 'BOM Expansion completed'),
+    `BOM Files: ${summary.bom_files || 1}; Rows: ${summary.bom_rows_after_dedup || 0}; Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}; Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; ${supplierStatusText} Max BOM Level: ${summary.max_level}; Working Hour Roll-up rows: ${summary.working_hour_rollup_rows || 0}.`,
     cmpT('completed', 'Completed'),
     100
   );
 
   bomLog.textContent =
-    `Completed - Efficient One-step Mode.
-BOM Files: ${summary.bom_files || 1}
-BOM Rows Before Dedup: ${summary.bom_rows_before_dedup || 0}
-BOM Rows After Dedup: ${summary.bom_rows_after_dedup || 0}
-Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}
-Products: ${summary.products}
-Semi-finished Components: ${summary.semi_finished}
-Activity Data Rows: ${summary.activity_rows}
-Raw Materials: ${summary.raw_materials}
-Production Site Files: ${siteCount}
-Supplier Uploaded Files: ${summary.supplier_upload_files || 0}
-Supplier Matched Rows: ${summary.supplier_matched_rows || 0}
-Supplier Expanded Rows: ${summary.supplier_expanded_rows || 0}
-Supplier Bulk Rows: ${summary.supplier_bulk_rows || 0}
-Supplier Status: ${summary.supplier_status || ''}
-Raw Material Writer: ${summary.raw_material_writer || 'xlsxwriter_constant_memory'}
-Module 3 Source: Raw Material Bulk files from Module 2 manifest
-Timezone: Asia/Taipei (UTC+8)`;
+    `Completed.\nBOM Files: ${summary.bom_files || 1}\nBOM Rows Before Dedup: ${summary.bom_rows_before_dedup || 0}\nBOM Rows After Dedup: ${summary.bom_rows_after_dedup || 0}\nDuplicates Removed: ${summary.bom_duplicate_rows_removed || 0}\nProducts: ${summary.products}\nSemi-finished Components: ${summary.semi_finished}\nActivity Data Rows: ${summary.activity_rows}\nRaw Materials: ${summary.raw_materials}\nSupplier Files: ${supplierUploaded ? (summary.supplier_upload_files || 0) : 'Not Uploaded'}\nSupplier Mapped Materials: ${supplierUploaded ? (summary.supplier_mapped_materials || 0) : 'Not Generated'}\nSupplier Mapped Suppliers: ${supplierUploaded ? (summary.supplier_mapped_suppliers || 0) : 'Not Generated'}\nSupplier Expanded Rows: ${supplierUploaded ? (summary.supplier_expanded_rows || 0) : 'Not Generated'}\nSupplier Dropdown Matched Rows: ${supplierUploaded ? (summary.supplier_dropdown_matched_rows || 0) : 'Not Generated'}\nSupplier Dropdown Missing Rows: ${supplierUploaded ? (summary.supplier_dropdown_missing_rows || 0) : 'Not Generated'}\nSupplier Bulk Rows: ${supplierUploaded ? (summary.supplier_bulk_rows || 0) : 'Not Generated'}\nMax BOM Level: ${summary.max_level}\nWorking Hour Roll-up Rows: ${summary.working_hour_rollup_rows || 0}\nSemi Working Hours: ${summary.working_hour_rollup_total_semi_hours || 0}`;
 }
 
 function stopBomProgressError(message) {
@@ -1334,18 +1302,13 @@ bomForm.addEventListener('submit', async (e) => {
 
   bomDownload.classList.add('disabled');
   bomDownload.href = '#';
-  if (module2SiteDownloads) {
-    module2SiteDownloads.innerHTML = '';
-  }
   if (workingHourRollupDownload) {
     workingHourRollupDownload.classList.add('disabled');
     workingHourRollupDownload.href = '#';
-    workingHourRollupDownload.style.display = 'none';
   }
   if (supplierBulkDownload) {
     supplierBulkDownload.classList.add('disabled');
     supplierBulkDownload.href = '#';
-    supplierBulkDownload.style.display = 'none';
   }
   bomLog.textContent = cmpT('processingBomExpansion', 'Processing BOM Expansion...');
 
@@ -1353,7 +1316,6 @@ bomForm.addEventListener('submit', async (e) => {
   await refreshBomStep1Source();
 
   const fd = new FormData(bomForm);
-  bomStatusText.textContent = 'Using latest Module 1 Step 1 Output automatically.';
 
   try {
     const res = await fetch('/process-bom-expansion', { method: 'POST', body: fd });
@@ -1361,44 +1323,17 @@ bomForm.addEventListener('submit', async (e) => {
 
     if (!data.ok) throw new Error(data.message || cmpT('bomExpansionFailed', 'BOM Expansion failed'));
 
-    const siteFiles = (data.summary && data.summary.production_site_files) || [];
-    if (siteFiles.length > 0) {
-      if (bomDownload) {
-        bomDownload.href = '#';
-        bomDownload.classList.add('disabled');
-        bomDownload.style.display = 'none';
-      }
-      if (module2SiteDownloads) {
-        module2SiteDownloads.innerHTML = '';
-        siteFiles.forEach((item) => {
-          const a = document.createElement('a');
-          a.className = 'link-button';
-          a.href = item.download_url || `/download/${item.filename}`;
-          const site = item.production_site || item.filename;
-          const rows = item.activity_rows ? ` (${Number(item.activity_rows).toLocaleString()} rows)` : '';
-          a.textContent = `下載 ${site} Raw Material Bulk${rows}`;
-          module2SiteDownloads.appendChild(a);
-        });
-      }
-    } else if (data.download_url && bomDownload) {
-      bomDownload.href = data.download_url;
-      bomDownload.classList.remove('disabled');
-      bomDownload.style.display = '';
+    bomDownload.href = data.download_url;
+    bomDownload.classList.remove('disabled');
+    if (workingHourRollupDownload && data.summary && data.summary.working_hour_rollup_download_url) {
+      workingHourRollupDownload.href = data.summary.working_hour_rollup_download_url;
+      workingHourRollupDownload.classList.remove('disabled');
     }
-    if (workingHourRollupDownload) workingHourRollupDownload.style.display = 'none';
-    if (supplierBulkDownload) {
-      const supplierUrl = data.summary && data.summary.supplier_bulk_download_url;
-      if (supplierUrl) {
-        supplierBulkDownload.href = supplierUrl;
-        supplierBulkDownload.classList.remove('disabled');
-        supplierBulkDownload.style.display = '';
-      } else {
-        supplierBulkDownload.style.display = 'none';
-      }
+    if (supplierBulkDownload && data.summary && Number(data.summary.supplier_upload_files || 0) > 0 && data.summary.supplier_bulk_download_url) {
+      supplierBulkDownload.href = data.summary.supplier_bulk_download_url;
+      supplierBulkDownload.classList.remove('disabled');
     }
     stopBomProgressSuccess(data.summary);
-    await refreshModule3RawBulkSource();
-    await refreshBomStep1Source();
   } catch (err) {
     stopBomProgressError(err.message);
   }
@@ -1434,57 +1369,12 @@ async function refreshModule3RawBulkSource() {
   try {
     const res = await fetch('/module3/raw-material-bulk-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
-    const filename = data.selected_filename || data.filename || 'raw material bulk';
+    const filename = data.filename || 'raw material bulk';
     const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    const selectedOption = (data.options || []).find((item) => item.filename === filename) || {};
-    const siteName = selectedOption.production_site || data.production_site || '未指定廠區';
-    module3RawBulkSourceText.textContent = `來源：Module 2 Raw Material Bulk｜廠區：${siteName}｜檔案名稱：${filename}${modified ? `｜建立日期：${modified}（Asia/Taipei, UTC+8）` : ''}｜狀態：Ready`;
-
-    if (module3RawBulkSelect) {
-      const options = data.options || [];
-      module3RawBulkSelect.innerHTML = '';
-      if (!options.length) {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = '尚未找到 Module 2 廠區檔案';
-        module3RawBulkSelect.appendChild(opt);
-      } else {
-        options.forEach((item) => {
-          const opt = document.createElement('option');
-          opt.value = item.filename;
-          const site = item.production_site || item.filename;
-          opt.textContent = `${site}｜${item.filename}`;
-          if (item.filename === filename) opt.selected = true;
-          module3RawBulkSelect.appendChild(opt);
-        });
-      }
-    }
+    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
   } catch (err) {
     module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
-    if (module3RawBulkSelect) {
-      module3RawBulkSelect.innerHTML = '<option value="">尚未找到 Module 2 廠區檔案</option>';
-    }
   }
-}
-
-if (module3RawBulkSelect) {
-  module3RawBulkSelect.addEventListener('change', async () => {
-    const filename = module3RawBulkSelect.value;
-    if (!filename) return;
-    try {
-      const res = await fetch('/module3/select-raw-material-bulk', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({filename})
-      });
-      const data = await readJsonOrThrow(res);
-      const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-      const site = data.production_site || (module3RawBulkSelect.options[module3RawBulkSelect.selectedIndex] ? module3RawBulkSelect.options[module3RawBulkSelect.selectedIndex].textContent.split('｜')[0] : '未指定廠區');
-      module3RawBulkSourceText.textContent = `來源：Module 2 Raw Material Bulk｜廠區：${site}｜檔案名稱：${data.filename}${modified ? `｜建立日期：${modified}（Asia/Taipei, UTC+8）` : ''}｜狀態：Ready`;
-    } catch (err) {
-      module3RawBulkSourceText.textContent = err.message || '切換 Module 2 廠區檔案失敗。';
-    }
-  });
 }
 
 function startModule3CclPolling(jobId, startTime) {
@@ -2069,7 +1959,7 @@ function startBulkEstimatedProgress() {
   setBulkProcessingState(
     'running',
     cmpT('batchFormattingInProgress', 'Batch formatting in progress'),
-    cmpT('readingStep1ValidatingBulk', 'Reading latest Module 1 Step 1 output and validating the bulk template.'),
+    cmpT('readingStep1ValidatingBulk', 'Reading Step 1 output and validating the bulk template.'),
     cmpRemainingText(estimatedSeconds),
     8
   );
@@ -2217,233 +2107,6 @@ ruleForm.onsubmit = async (e) => {
     ruleLog.textContent = cmpT('errorPrefix', 'Error: ') + err.message;
   }
 };
-
-
-// =========================================================
-// CMP V25.0 Module 2 A/B/C front-end override
-// =========================================================
-(function setupModule2ABC(){
-  const primaryCard = document.querySelector('#bom-expansion .primary-card');
-  if (!primaryCard) return;
-  primaryCard.innerHTML = `
-    <div class="section-title">
-      <div>
-        <h2>Module 2 · BOM Expansion</h2>
-        <p>三階段執行：A 展開 BOM Master、B 產出 Raw Material Bulk、C 供應商分列展開。</p>
-      </div>
-      <span class="step-chip">A / B / C</span>
-    </div>
-
-    <div class="module3-source-card">
-      <b>設計原則</b>
-      <p>BOM 只在 Module 2A 展開一次；Module 2B 與 2C 直接沿用已產出的檔案，避免重複展 BOM 與 CPU / 記憶體過載。</p>
-    </div>
-
-    <div class="divider"></div>
-
-    <form id="module2AForm" class="form-panel">
-      <div class="section-title">
-        <div>
-          <h2>A. BOM Expansion Master</h2>
-          <p>上傳所有 Standard BOM，展開成一份成品料號對應最終原物料使用量的主檔。半品會拆成原物料並加總。</p>
-        </div>
-        <span class="step-chip">2A</span>
-      </div>
-      <label>Upload Standard BOM Files</label>
-      <input id="module2ABomFiles" name="bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
-
-      <div class="logic-mapping-table">
-        <div class="logic-mapping-row" data-default="Parent Node"><span class="logic-mapping-label">Parent Material</span><div class="logic-mapping-control"><input name="parent_col" type="text" placeholder="Parent Node" /><button class="mapping-default-btn" type="button">Default</button><button class="mapping-confirm-btn" type="button">Confirm</button><div class="mapping-current">Current Setting: <b>Parent Node</b></div></div></div>
-        <div class="logic-mapping-row" data-default="Component"><span class="logic-mapping-label">Component</span><div class="logic-mapping-control"><input name="component_col" type="text" placeholder="Component" /><button class="mapping-default-btn" type="button">Default</button><button class="mapping-confirm-btn" type="button">Confirm</button><div class="mapping-current">Current Setting: <b>Component</b></div></div></div>
-        <div class="logic-mapping-row" data-default="CS03 Qty"><span class="logic-mapping-label">Quantity</span><div class="logic-mapping-control"><input name="qty_col" type="text" placeholder="CS03 Qty" /><button class="mapping-default-btn" type="button">Default</button><button class="mapping-confirm-btn" type="button">Confirm</button><div class="mapping-current">Current Setting: <b>CS03 Qty</b></div></div></div>
-        <div class="logic-mapping-row" data-default="CS03 UoM"><span class="logic-mapping-label">Unit</span><div class="logic-mapping-control"><input name="unit_col" type="text" placeholder="CS03 UoM" /><button class="mapping-default-btn" type="button">Default</button><button class="mapping-confirm-btn" type="button">Confirm</button><div class="mapping-current">Current Setting: <b>CS03 UoM</b></div></div></div>
-        <div class="logic-mapping-row" data-default="Component Description"><span class="logic-mapping-label">Component Description</span><div class="logic-mapping-control"><input name="description_col" type="text" placeholder="Component Description" /><button class="mapping-default-btn" type="button">Default</button><button class="mapping-confirm-btn" type="button">Confirm</button><div class="mapping-current">Current Setting: <b>Component Description</b></div></div></div>
-        <div class="logic-mapping-row" data-default="Material group"><span class="logic-mapping-label">Material Group</span><div class="logic-mapping-control"><input name="material_group_col" type="text" placeholder="Material group" /><button class="mapping-default-btn" type="button">Default</button><button class="mapping-confirm-btn" type="button">Confirm</button><div class="mapping-current">Current Setting: <b>Material group</b></div></div></div>
-        <div class="logic-mapping-row" data-default="BOM Valid From"><span class="logic-mapping-label">Valid From</span><div class="logic-mapping-control"><input name="valid_from_col" type="text" placeholder="BOM Valid From" /><button class="mapping-default-btn" type="button">Default</button><button class="mapping-confirm-btn" type="button">Confirm</button><div class="mapping-current">Current Setting: <b>BOM Valid From</b></div></div></div>
-      </div>
-
-      <button type="submit" class="btn-secondary"><span class="btn-icon">A</span><span>Run Module 2A</span></button>
-    </form>
-    <div id="module2AStatus" class="processing-status idle"><div class="status-header"><div class="spinner"></div><div><b id="module2AStatusTitle">Ready for Module 2A</b><p id="module2AStatusText">Upload Standard BOM files to generate Expanded BOM Master.</p></div><span id="module2AStatusTime" class="status-time">Idle</span></div><div class="progress-track"><div id="module2AProgressBar" class="progress-bar"></div></div></div>
-    <div id="module2ADownloads" class="download-row"></div>
-
-    <div class="divider"></div>
-
-    <form id="module2BForm" class="form-panel">
-      <div class="section-title"><div><h2>B. Raw Material Bulk Generation</h2><p>自動使用 Module 1 最新年度產品產量與分類結果，以及 Module 2A Expanded BOM Master；只針對 Module 1 成品料號寫入 Raw Material Bulk Template。</p></div><span class="step-chip">2B</span></div>
-      <div class="module3-source-card"><b>Module 1 Step 1 Output</b><p id="module2BStep1SourceText">來源檢查中...</p></div>
-      <div class="module3-source-card"><b>Module 2A Expanded BOM Master</b><p id="module2BMasterSourceText">來源檢查中...</p></div>
-      <label>Upload Raw Material Bulk Template</label>
-      <input id="module2BTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
-      <button type="submit" class="btn-secondary"><span class="btn-icon">B</span><span>Run Module 2B</span></button>
-    </form>
-    <div id="module2BStatus" class="processing-status idle"><div class="status-header"><div class="spinner"></div><div><b id="module2BStatusTitle">Ready for Module 2B</b><p id="module2BStatusText">Upload Raw Material Bulk Template to generate site files.</p></div><span id="module2BStatusTime" class="status-time">Idle</span></div><div class="progress-track"><div id="module2BProgressBar" class="progress-bar"></div></div></div>
-    <div id="module2BDownloads" class="download-row"></div>
-
-    <div class="divider"></div>
-
-    <form id="module2CForm" class="form-panel">
-      <div class="section-title"><div><h2>C. Supplier Mapping</h2><p>以上一步 Module 2B Raw Material Bulk 為基礎，依供應商檔案展開；一料多供應商會分列，不重新展 BOM。</p></div><span class="step-chip">2C</span></div>
-      <div class="module3-source-card"><b>Module 2B Raw Material Bulk</b><p id="module2CRawBulkSourceText">來源檢查中...</p></div>
-      <label>選擇 Raw Material Bulk 廠區資料</label>
-      <select id="module2CRawBulkSelect" name="raw_material_bulk_filename"><option value="">使用全部 Module 2B 廠區檔案</option></select>
-      <label>Upload Supplier Files</label>
-      <input id="module2CSupplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
-      <button type="submit" class="btn-secondary"><span class="btn-icon">C</span><span>Run Module 2C</span></button>
-    </form>
-    <div id="module2CStatus" class="processing-status idle"><div class="status-header"><div class="spinner"></div><div><b id="module2CStatusTitle">Ready for Module 2C</b><p id="module2CStatusText">Upload supplier files to expand Raw Material Bulk by suppliers.</p></div><span id="module2CStatusTime" class="status-time">Idle</span></div><div class="progress-track"><div id="module2CProgressBar" class="progress-bar"></div></div></div>
-    <div id="module2CDownloads" class="download-row"></div>
-  `;
-
-  function setABCState(prefix, mode, title, text, timeText, progress) {
-    const box = document.getElementById(`${prefix}Status`);
-    const titleEl = document.getElementById(`${prefix}StatusTitle`);
-    const textEl = document.getElementById(`${prefix}StatusText`);
-    const timeEl = document.getElementById(`${prefix}StatusTime`);
-    const bar = document.getElementById(`${prefix}ProgressBar`);
-    if (!box) return;
-    box.classList.remove('idle', 'running', 'success', 'error');
-    box.classList.add(mode);
-    if (titleEl) titleEl.textContent = title;
-    if (textEl) textEl.textContent = text;
-    if (timeEl) timeEl.textContent = timeText || '';
-    if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
-  }
-
-  function addDownload(containerId, label, href) {
-    const container = document.getElementById(containerId);
-    if (!container || !href) return;
-    const a = document.createElement('a');
-    a.className = 'link-button';
-    a.href = href;
-    a.textContent = label;
-    container.appendChild(a);
-  }
-
-  function setDownloadList(containerId, items) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-    container.innerHTML = '';
-    (items || []).forEach(item => addDownload(containerId, item.label, item.href));
-  }
-
-  async function getJson(url, options) {
-    const res = await fetch(url, options || {cache:'no-store'});
-    const data = await res.json();
-    if (!res.ok || data.ok === false) throw new Error(data.message || 'Request failed');
-    return data;
-  }
-
-  async function refreshModule2ABCSourceCards() {
-    const step1 = document.getElementById('module2BStep1SourceText');
-    const master = document.getElementById('module2BMasterSourceText');
-    const rawText = document.getElementById('module2CRawBulkSourceText');
-    const rawSelect = document.getElementById('module2CRawBulkSelect');
-    try {
-      const data = await getJson('/module2/step1-output-source');
-      if (step1) step1.textContent = `檔案：${data.filename || '-'}｜建立時間：${(data.modified_at || '').replace('T',' ')}（Asia/Taipei, UTC+8）`;
-    } catch (err) {
-      if (step1) step1.textContent = err.message || '尚未找到 Module 1 Step1。';
-    }
-    try {
-      const data = await getJson('/module2/expanded-bom-master-source');
-      if (master) master.textContent = `檔案：${data.filename || '-'}｜建立時間：${(data.modified_at || '').replace('T',' ')}（Asia/Taipei, UTC+8）`;
-    } catch (err) {
-      if (master) master.textContent = err.message || '尚未找到 Module 2A Expanded BOM Master。';
-    }
-    try {
-      const data = await getJson('/module2/raw-material-bulk-source');
-      const options = data.options || [];
-      if (rawText) rawText.textContent = options.length ? `已找到 ${options.length} 個 Module 2B Raw Material Bulk 檔案。` : '尚未找到 Module 2B Raw Material Bulk。';
-      if (rawSelect) {
-        rawSelect.innerHTML = '<option value="">使用全部 Module 2B 廠區檔案</option>';
-        options.forEach(item => {
-          const opt = document.createElement('option');
-          opt.value = item.filename;
-          opt.textContent = `${item.production_site || 'Unassigned'}｜${item.filename}`;
-          rawSelect.appendChild(opt);
-        });
-      }
-    } catch (err) {
-      if (rawText) rawText.textContent = err.message || '尚未找到 Module 2B Raw Material Bulk。';
-      if (rawSelect) rawSelect.innerHTML = '<option value="">使用全部 Module 2B 廠區檔案</option>';
-    }
-  }
-
-  document.querySelectorAll('#module2AForm .logic-mapping-row[data-default]').forEach(row => {
-    const input = row.querySelector('input');
-    const current = row.querySelector('.mapping-current b');
-    const defaultBtn = row.querySelector('.mapping-default-btn');
-    const confirmBtn = row.querySelector('.mapping-confirm-btn');
-    const defaultValue = row.dataset.default || '';
-    defaultBtn.addEventListener('click', () => { input.value = defaultValue; current.textContent = defaultValue; });
-    confirmBtn.addEventListener('click', () => { const v = input.value.trim() || defaultValue; input.value = v; current.textContent = v; });
-  });
-
-  document.getElementById('module2AForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    setDownloadList('module2ADownloads', []);
-    setABCState('module2A', 'running', 'Module 2A running', '展開 Standard BOM 並彙總成品對應原物料...', 'Running', 15);
-    try {
-      const data = await getJson('/module2a/expand-bom-master', {method:'POST', body:new FormData(e.currentTarget)});
-      const s = data.summary || {};
-      setABCState('module2A', 'success', 'Module 2A completed', `Expanded rows: ${Number(s.activity_rows || 0).toLocaleString()}｜Products: ${s.products || 0}｜Raw materials: ${s.raw_materials || 0}`, 'Completed', 100);
-      setDownloadList('module2ADownloads', [{label:`下載 Expanded BOM Master｜${s.output_filename || ''}`, href:data.download_url || s.download_url}]);
-      if (bomLog) bomLog.textContent = `Module 2A completed\nExpanded BOM Master: ${s.output_filename || ''}\nRows: ${s.activity_rows || 0}\nProducts: ${s.products || 0}\nRaw Materials: ${s.raw_materials || 0}\nTimezone: Asia/Taipei`;
-      await refreshModule2ABCSourceCards();
-    } catch (err) {
-      setABCState('module2A', 'error', 'Module 2A failed', err.message, 'Error', 100);
-      if (bomLog) bomLog.textContent = `Module 2A Error: ${err.message}`;
-    }
-  });
-
-  document.getElementById('module2BForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    setDownloadList('module2BDownloads', []);
-    setABCState('module2B', 'running', 'Module 2B running', '依 Module 1 成品料號篩選 Expanded BOM Master，並寫入 Raw Material Bulk Template...', 'Running', 20);
-    try {
-      const data = await getJson('/module2b/generate-raw-material-bulk', {method:'POST', body:new FormData(e.currentTarget)});
-      const s = data.summary || {};
-      setABCState('module2B', 'success', 'Module 2B completed', `Generated site files: ${(s.production_site_files || []).length}｜Rows: ${Number(s.activity_rows || 0).toLocaleString()}`, 'Completed', 100);
-      const items = (s.production_site_files || []).map(item => ({label:`下載 ${item.production_site || 'Site'} Raw Material Bulk｜${Number(item.activity_rows || 0).toLocaleString()} rows`, href:item.download_url || `/download/${item.filename}`}));
-      setDownloadList('module2BDownloads', items);
-      if (bomLog) bomLog.textContent = `Module 2B completed\nSite Files: ${(s.production_site_files || []).length}\nRows: ${s.activity_rows || 0}\nModule 1 missing in BOM: ${s.module1_products_missing_in_bom || 0}\nModule 3 Source: Module 2B Raw Material Bulk manifest\nTimezone: Asia/Taipei`;
-      await refreshModule2ABCSourceCards();
-      if (typeof refreshModule3RawBulkSource === 'function') await refreshModule3RawBulkSource();
-    } catch (err) {
-      setABCState('module2B', 'error', 'Module 2B failed', err.message, 'Error', 100);
-      if (bomLog) bomLog.textContent = `Module 2B Error: ${err.message}`;
-    }
-  });
-
-  document.getElementById('module2CForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    setDownloadList('module2CDownloads', []);
-    setABCState('module2C', 'running', 'Module 2C running', '依 Supplier Files 將 Raw Material Bulk 分列展開...', 'Running', 25);
-    try {
-      const data = await getJson('/module2c/supplier-mapping', {method:'POST', body:new FormData(e.currentTarget)});
-      const s = data.summary || {};
-      setABCState('module2C', 'success', 'Module 2C completed', `Supplier expanded rows: ${Number(s.activity_rows || 0).toLocaleString()}｜Supplier bulk rows: ${Number(s.supplier_bulk_rows || 0).toLocaleString()}`, 'Completed', 100);
-      const items = [];
-      if (s.supplier_expanded_raw_material_bulk_download_url) items.push({label:`下載 Supplier-expanded Raw Material Bulk｜${s.supplier_expanded_raw_material_bulk_filename || ''}`, href:s.supplier_expanded_raw_material_bulk_download_url});
-      if (s.supplier_bulk_download_url) items.push({label:`下載 Supplier Bulk Create｜${s.supplier_bulk_filename || ''}`, href:s.supplier_bulk_download_url});
-      setDownloadList('module2CDownloads', items);
-      if (bomLog) bomLog.textContent = `Module 2C completed\nSupplier Files: ${s.supplier_files || 0}\nSupplier Matched Rows: ${s.supplier_matched_rows || 0}\nSupplier Expanded Rows: ${s.supplier_expanded_rows || 0}\nSupplier Bulk Rows: ${s.supplier_bulk_rows || 0}\nTimezone: Asia/Taipei`;
-      await refreshModule2ABCSourceCards();
-    } catch (err) {
-      setABCState('module2C', 'error', 'Module 2C failed', err.message, 'Error', 100);
-      if (bomLog) bomLog.textContent = `Module 2C Error: ${err.message}`;
-    }
-  });
-
-  const oldActivateBomPage = window.activateBomPage;
-  // The original activateBomPage is a function declaration in this script, so refresh sources through a lightweight interval after page activation.
-  document.querySelectorAll('[data-main="bom"], [data-dashboard-target="bom"]').forEach(btn => {
-    btn.addEventListener('click', () => setTimeout(refreshModule2ABCSourceCards, 250));
-  });
-  refreshModule2ABCSourceCards();
-})();
-
 </script>
 <script src="/static/i18n.js"></script>
 </body>
