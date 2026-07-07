@@ -16,7 +16,26 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
+BOM_FORMATTER_VERSION = "CMP_V24_1_MODULE2_PROGRESS_UI"
+
+
+def _report_progress(progress_callback: Any | None, **payload: Any) -> None:
+    """Best-effort progress callback for Module 2 long-running tasks.
+
+    The calculation logic does not depend on progress reporting; callback errors
+    are intentionally ignored so UI telemetry cannot break BOM processing.
+    """
+    if not callable(progress_callback):
+        return
+    try:
+        progress_callback(**payload)
+    except TypeError:
+        try:
+            progress_callback(payload.get("progress", 0), payload.get("step", ""), payload.get("remaining_seconds"))
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 DEFAULT_MAPPING = {
@@ -1200,11 +1219,13 @@ def generate_raw_material_bulk_files_by_site_zip(
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
+    _report_progress(progress_callback, status="running", step="Reading annual quantity from Module 1 Step 1", stage="reading_annual_quantity", progress=32)
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
     # Production mode: do not generate bom_trace_detail_*.xlsx.
     # That file was only for BOM debugging and must not be included in the Module 2 ZIP,
     # because Module 3 consumes every Excel in the package as raw-material bulk input.
     trace_summary: dict[str, Any] = {}
+    _report_progress(progress_callback, status="running", step="Calculating annual raw material usage", stage="calculating_annual_usage", progress=38)
     exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
     exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
@@ -2063,7 +2084,12 @@ def _first_text(row: pd.Series, names: list[str]) -> str:
     return ""
 
 
-def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supplier_bulk_template_path: str | Path, output_path: str | Path) -> Dict[str, Any]:
+def _write_supplier_bulk_create_file(
+    expanded_with_suppliers: pd.DataFrame,
+    supplier_bulk_template_path: str | Path,
+    output_path: str | Path,
+    progress_callback: Any | None = None,
+) -> Dict[str, Any]:
     supplier_bulk_template_path = Path(supplier_bulk_template_path)
     output_path = Path(output_path)
     if expanded_with_suppliers is None or expanded_with_suppliers.empty:
@@ -2132,8 +2158,29 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
         })
 
     _clear_template_columns(ws, DATA_START_ROW, list(cols.values()), data_row_count=len(rows))
+    supplier_total = int(len(rows))
+    _report_progress(
+        progress_callback,
+        status="running",
+        step="Writing Supplier Bulk",
+        stage="writing_supplier_bulk",
+        processed_rows=0,
+        total_rows=supplier_total,
+        progress=92,
+    )
 
     for offset, row in enumerate(rows):
+        processed = offset + 1
+        if processed == supplier_total or processed % 500 == 0:
+            _report_progress(
+                progress_callback,
+                status="running",
+                step="Writing Supplier Bulk",
+                stage="writing_supplier_bulk",
+                processed_rows=processed,
+                total_rows=supplier_total,
+                progress=min(97, 92 + int((processed / max(1, supplier_total)) * 5)),
+            )
         row_idx = DATA_START_ROW + offset
         _write_template_row(ws, row_idx, {
             cols["supplier_name"]: row["supplier_name"],
@@ -2143,6 +2190,15 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
             cols["unit_name"]: row["unit_name"],
         })
 
+    _report_progress(
+        progress_callback,
+        status="running",
+        step="Saving Supplier Bulk",
+        stage="saving_supplier_bulk",
+        processed_rows=supplier_total,
+        total_rows=supplier_total,
+        progress=98,
+    )
     wb.save(output_path)
     return {
         "supplier_bulk_rows": int(len(rows)),
@@ -2158,6 +2214,10 @@ def _write_raw_material_bulk_from_exploded(
     output_path: str | Path,
     supplier_map: dict[str, list[dict[str, str]]] | None = None,
     return_expanded: bool = False,
+    progress_callback: Any | None = None,
+    progress_start: int = 55,
+    progress_end: int = 90,
+    progress_label: str = "Writing Raw Material Bulk",
 ) -> Dict[str, Any] | tuple[Dict[str, Any], pd.DataFrame]:
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
@@ -2211,6 +2271,18 @@ def _write_raw_material_bulk_from_exploded(
         tbc_supplier_map=tbc_supplier_map,
     )
 
+    total_activity_rows = int(len(expanded))
+    _report_progress(
+        progress_callback,
+        status="running",
+        step=progress_label,
+        stage="writing_raw_material_bulk",
+        current_file=output_path.name,
+        processed_rows=0,
+        total_rows=total_activity_rows,
+        progress=int(progress_start),
+    )
+
     # Large-data optimization: clear only the data area required for this run.
     # This avoids iterating through far-down template formatting rows.
     _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()), data_row_count=len(expanded))
@@ -2237,6 +2309,19 @@ def _write_raw_material_bulk_from_exploded(
     ]
 
     for offset, values in enumerate(expanded[activity_source_cols].itertuples(index=False, name=None)):
+        processed = offset + 1
+        if processed == total_activity_rows or processed % 500 == 0:
+            activity_progress = int(progress_start + ((progress_end - progress_start) * 0.78 * processed / max(1, total_activity_rows)))
+            _report_progress(
+                progress_callback,
+                status="running",
+                step=progress_label,
+                stage="writing_raw_material_bulk",
+                current_file=output_path.name,
+                processed_rows=processed,
+                total_rows=total_activity_rows,
+                progress=activity_progress,
+            )
         (
             raw_material, valid_from, usage, unit, supplier_name, transport_origin,
             transport_destination, target_product, material_group, net_weight,
@@ -2270,6 +2355,17 @@ def _write_raw_material_bulk_from_exploded(
         activity_ws.cell(row=row_idx, column=activity_cols["start_date"]).number_format = "yyyy/mm/dd"
         activity_ws.cell(row=row_idx, column=activity_cols["end_date"]).number_format = "yyyy/mm/dd"
 
+    _report_progress(
+        progress_callback,
+        status="running",
+        step="Writing Raw Material master",
+        stage="writing_raw_material_master",
+        current_file=output_path.name,
+        processed_rows=total_activity_rows,
+        total_rows=total_activity_rows,
+        progress=int(progress_start + ((progress_end - progress_start) * 0.82)),
+    )
+
     raw_unique = (
         expanded[["raw_material", "description"]]
         .sort_values(["raw_material"])
@@ -2278,7 +2374,21 @@ def _write_raw_material_bulk_from_exploded(
         else pd.DataFrame(columns=["raw_material", "description"])
     )
     _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()), data_row_count=len(raw_unique))
+    raw_total_rows = int(len(raw_unique))
     for offset, values in enumerate(raw_unique[["raw_material", "description"]].itertuples(index=False, name=None)):
+        processed_raw = offset + 1
+        if processed_raw == raw_total_rows or processed_raw % 500 == 0:
+            raw_progress = int(progress_start + ((progress_end - progress_start) * (0.82 + 0.10 * processed_raw / max(1, raw_total_rows))))
+            _report_progress(
+                progress_callback,
+                status="running",
+                step="Writing Raw Material master",
+                stage="writing_raw_material_master",
+                current_file=output_path.name,
+                processed_rows=processed_raw,
+                total_rows=raw_total_rows,
+                progress=raw_progress,
+            )
         raw_material, description = values
         row_idx = DATA_START_ROW + offset
         _write_template_row(raw_ws, row_idx, {
@@ -2287,7 +2397,27 @@ def _write_raw_material_bulk_from_exploded(
             raw_cols["description"]: description,
         })
 
+    _report_progress(
+        progress_callback,
+        status="running",
+        step="Saving Raw Material Bulk",
+        stage="saving_raw_material_bulk",
+        current_file=output_path.name,
+        processed_rows=total_activity_rows,
+        total_rows=total_activity_rows,
+        progress=max(int(progress_end) - 1, int(progress_start)),
+    )
     wb.save(output_path)
+    _report_progress(
+        progress_callback,
+        status="running",
+        step="Raw Material Bulk saved",
+        stage="raw_material_bulk_saved",
+        current_file=output_path.name,
+        processed_rows=total_activity_rows,
+        total_rows=total_activity_rows,
+        progress=int(progress_end),
+    )
     result = {
         "output_filename": output_path.name,
         "activity_template_columns": activity_cols,
@@ -2312,10 +2442,14 @@ def generate_raw_material_bulk_file(
     supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
     supplier_bulk_template_path: str | Path | None = None,
     supplier_bulk_output_path: str | Path | None = None,
+    progress_callback: Any | None = None,
 ) -> Dict[str, Any]:
     output_path = Path(output_path)
+    _report_progress(progress_callback, status="running", step="Reading and merging BOM file(s)", stage="reading_bom", progress=8)
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    _report_progress(progress_callback, status="running", step="Reading supplier files", stage="reading_supplier", progress=18)
     supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+    _report_progress(progress_callback, status="running", step="Expanding multi-level BOM", stage="expanding_bom", progress=28)
     exploded, summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
@@ -2327,11 +2461,15 @@ def generate_raw_material_bulk_file(
         output_path=output_path,
         supplier_map=supplier_map,
         return_expanded=True,
+        progress_callback=progress_callback,
+        progress_start=55,
+        progress_end=90,
+        progress_label="Writing Raw Material Bulk",
     )
     summary.update(write_summary)
     summary.update(supplier_summary)
     if supplier_bulk_template_path and supplier_bulk_output_path:
-        summary.update(_write_supplier_bulk_create_file(expanded, supplier_bulk_template_path, supplier_bulk_output_path))
+        summary.update(_write_supplier_bulk_create_file(expanded, supplier_bulk_template_path, supplier_bulk_output_path, progress_callback=progress_callback))
     summary["used_columns"] = used_columns
     summary["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
     summary["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
@@ -2350,20 +2488,27 @@ def generate_raw_material_bulk_files_by_site_zip(
     supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
     supplier_bulk_template_path: str | Path | None = None,
     supplier_bulk_output_path: str | Path | None = None,
+    progress_callback: Any | None = None,
 ) -> Dict[str, Any]:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    _report_progress(progress_callback, status="running", step="Reading and merging BOM file(s)", stage="reading_bom", progress=8)
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    _report_progress(progress_callback, status="running", step="Reading supplier files", stage="reading_supplier", progress=16)
     supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+    _report_progress(progress_callback, status="running", step="Expanding multi-level BOM", stage="expanding_bom", progress=24)
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    _report_progress(progress_callback, status="running", step="Reading annual quantity from Module 1 Step 1", stage="reading_annual_quantity", progress=32)
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
     # Production mode: do not generate bom_trace_detail_*.xlsx.
     # That file was only for BOM debugging and must not be included in the Module 2 ZIP,
     # because Module 3 consumes every Excel in the package as raw-material bulk input.
     trace_summary: dict[str, Any] = {}
+    _report_progress(progress_callback, status="running", step="Calculating annual raw material usage", stage="calculating_annual_usage", progress=38)
     exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
     exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    _report_progress(progress_callback, status="running", step="Calculating working hour roll-up", stage="calculating_working_hours", progress=44)
     total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(step1_output_path=step1_output_path, bom_df=bom_df)
     exploded, zero_total_working_hour_rows_excluded = _exclude_zero_total_working_hour_target_rows(exploded=exploded, total_hour_by_material=total_hour_by_target)
     base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
@@ -2376,6 +2521,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
     base_summary.update(working_hour_summary)
 
+    _report_progress(progress_callback, status="running", step="Mapping Production Site", stage="mapping_production_site", progress=50)
     site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
     work = exploded.copy()
     if work.empty:
@@ -2405,12 +2551,20 @@ def generate_raw_material_bulk_files_by_site_zip(
             site_df = work[work["_production_site"] == site].copy().drop(columns=["_target_key", "_production_site"], errors="ignore")
             safe_site = _sanitize_filename_part(site)
             file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
+            site_index = len(generated_files)
+            site_count = max(1, len(site_values))
+            site_progress_start = 55 + int((site_index / site_count) * 34)
+            site_progress_end = 55 + int(((site_index + 1) / site_count) * 34)
             write_summary, expanded_site = _write_raw_material_bulk_from_exploded(
                 exploded=site_df,
                 raw_material_template_path=raw_material_template_path,
                 output_path=file_path,
                 supplier_map=supplier_map,
                 return_expanded=True,
+                progress_callback=progress_callback,
+                progress_start=site_progress_start,
+                progress_end=site_progress_end,
+                progress_label=f"Writing Raw Material Bulk ({site})",
             )
             expanded_all.append(expanded_site)
             supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
@@ -2429,7 +2583,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     combined_expanded = pd.concat(expanded_all, ignore_index=True) if expanded_all else pd.DataFrame()
     supplier_bulk_summary = {}
     if supplier_bulk_template_path and supplier_bulk_output_path:
-        supplier_bulk_summary = _write_supplier_bulk_create_file(combined_expanded, supplier_bulk_template_path, supplier_bulk_output_path)
+        supplier_bulk_summary = _write_supplier_bulk_create_file(combined_expanded, supplier_bulk_template_path, supplier_bulk_output_path, progress_callback=progress_callback)
 
     unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
     summary = dict(base_summary)
@@ -2459,4 +2613,4 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
+BOM_FORMATTER_VERSION = "CMP_V24_1_MODULE2_PROGRESS_UI"

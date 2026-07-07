@@ -634,8 +634,14 @@
           </section>
 
           <section class="card insight-card">
-            <h2 data-i18n="bomExpansionLogic">BOM Expansion Logic</h2>
-            <p data-i18n="bomColumnMappingHint">Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.</p>
+            <details id="bomLogicDetails" class="module2-logic-details" open>
+              <summary class="module2-logic-summary">
+                <span>
+                  <b data-i18n="bomExpansionLogic">BOM Expansion Logic</b>
+                  <small data-i18n="bomColumnMappingHint">Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.</small>
+                </span>
+                <span class="module2-logic-toggle" aria-hidden="true">⌄</span>
+              </summary>
 
             <div class="logic-mapping-table">
               <div class="logic-mapping-row" data-default="Parent Node">
@@ -718,9 +724,24 @@
                 <div class="logic-readonly-value" data-i18n="quantityRollUpDesc">Multiply quantities across all BOM levels</div>
               </div>
             </div>
+            </details>
 
             <h2 data-i18n="rawMaterialBulkOutput">Raw Material Bulk Output</h2>
             <p data-i18n="rawMaterialBulkOutputHint">Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.</p>
+
+            <div id="bomLiveStatus" class="module2-live-status idle">
+              <div class="module2-live-header">
+                <b id="bomLiveTitle">MODULE 2 Processing</b>
+                <span id="bomLiveBadge">Idle</span>
+              </div>
+              <div class="module2-live-grid">
+                <div><span>Step</span><b id="bomLiveStep">Ready</b></div>
+                <div><span>Rows</span><b id="bomLiveRows">0 / 0</b></div>
+                <div><span>Elapsed</span><b id="bomLiveElapsed">00:00</b></div>
+                <div><span>Last update</span><b id="bomLiveUpdated">-</b></div>
+                <div><span>Status</span><b id="bomLiveState">Idle</b></div>
+              </div>
+            </div>
 
             <pre id="bomLog" class="rule-log">BOM Expansion is ready.</pre>
           </section>
@@ -896,6 +917,14 @@ const bomStatusTitle = document.getElementById('bomStatusTitle');
 const bomStatusText = document.getElementById('bomStatusText');
 const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
+const bomLiveStatus = document.getElementById('bomLiveStatus');
+const bomLiveTitle = document.getElementById('bomLiveTitle');
+const bomLiveBadge = document.getElementById('bomLiveBadge');
+const bomLiveStep = document.getElementById('bomLiveStep');
+const bomLiveRows = document.getElementById('bomLiveRows');
+const bomLiveElapsed = document.getElementById('bomLiveElapsed');
+const bomLiveUpdated = document.getElementById('bomLiveUpdated');
+const bomLiveState = document.getElementById('bomLiveState');
 const bomLog = document.getElementById('bomLog');
 const bomStep1SourceText = document.getElementById('bomStep1SourceText');
 const module3CclForm = document.getElementById('module3CclForm');
@@ -1053,6 +1082,7 @@ if (ruleManagementSet) {
 }
 
 let progressTimer = null;
+let bomJobPollTimer = null;
 
 const moduleMessages = {
   prep: {
@@ -1232,44 +1262,130 @@ async function refreshBomStep1Source() {
   }
 }
 
+function cmpFormatInteger(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return '0';
+  return Math.trunc(n).toLocaleString('en-US');
+}
+
+function cmpFormatElapsedSeconds(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function cmpJobElapsedText(job) {
+  const createdRaw = job && job.created_at ? String(job.created_at) : '';
+  const created = createdRaw ? new Date(createdRaw) : null;
+  if (!created || Number.isNaN(created.getTime())) return '00:00';
+  return cmpFormatElapsedSeconds((Date.now() - created.getTime()) / 1000);
+}
+
+function setBomLiveStatusFromJob(job) {
+  if (!bomLiveStatus) return;
+  const data = job || {};
+  const status = String(data.status || 'idle').toLowerCase();
+  const mode = status === 'success' ? 'success' : (status === 'error' || status === 'failed' ? 'error' : (status === 'idle' ? 'idle' : 'running'));
+  bomLiveStatus.classList.remove('idle', 'running', 'success', 'error');
+  bomLiveStatus.classList.add(mode);
+  if (bomLiveTitle) bomLiveTitle.textContent = 'MODULE 2 Processing';
+  if (bomLiveBadge) bomLiveBadge.textContent = status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Idle';
+  if (bomLiveStep) bomLiveStep.textContent = data.step || 'Ready';
+  if (bomLiveRows) bomLiveRows.textContent = `${cmpFormatInteger(data.processed_rows)} / ${cmpFormatInteger(data.total_rows)}`;
+  if (bomLiveElapsed) bomLiveElapsed.textContent = cmpJobElapsedText(data);
+  if (bomLiveUpdated) bomLiveUpdated.textContent = data.updated_at ? cmpFormatTaipeiTime(data.updated_at) : '-';
+  if (bomLiveState) bomLiveState.textContent = status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Idle';
+}
+
 function startBomEstimatedProgress() {
   clearInterval(progressTimer);
-
-  const estimatedSeconds = 45;
-  const start = Date.now();
+  clearInterval(bomJobPollTimer);
 
   setBomProcessingState(
     'running',
     cmpT('bomExpansionInProgress', 'BOM Expansion in progress'),
-    cmpT('readingBomValidatingTemplate', 'Reading standard BOM file(s) and validating raw material bulk template.'),
-    cmpRemainingText(estimatedSeconds),
-    6
+    cmpT('readingBomValidatingTemplate', 'Creating background job and validating uploaded files.'),
+    cmpT('running', 'Running'),
+    3
   );
 
-  progressTimer = setInterval(() => {
-    const elapsed = Math.floor((Date.now() - start) / 1000);
-    const remaining = Math.max(1, estimatedSeconds - elapsed);
-    const progress = Math.min(92, 6 + (elapsed / estimatedSeconds) * 86);
-
-    bomStatusTime.textContent = cmpRemainingText(remaining);
-    bomProgressBar.style.width = `${progress}%`;
-
-    const stages = [
-      cmpT('stageReadingBomStructure', 'Reading and merging BOM file(s)...'),
-      cmpT('stageDetectingSemiFinished', 'Detecting semi-finished components...'),
-      cmpT('stageExpandingMultiLevelBom', 'Expanding multi-level BOM...'),
-      cmpT('stageCalculatingRollup', 'Calculating material quantity roll-up...'),
-      cmpT('stageCopyingRawMaterialTemplate', 'Copying raw material bulk template...'),
-      cmpT('stageMatchingSupplierData', 'Matching supplier files and dropdown options...'),
-      cmpT('stageWritingActivityRawMaterial', 'Writing Activity Data and Raw Material sheets...')
-    ];
-    const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
-    bomStatusText.textContent = stages[stageIndex];
-  }, 1000);
+  setBomLiveStatusFromJob({
+    status: 'queued',
+    step: 'Creating Module 2 background job',
+    processed_rows: 0,
+    total_rows: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
 }
 
+function applyBomJobDownloads(job) {
+  const summary = job.summary || {};
+  const downloadUrl = job.download_url || summary.download_url || '#';
+  if (downloadUrl && downloadUrl !== '#') {
+    bomDownload.href = downloadUrl;
+    bomDownload.classList.remove('disabled');
+  }
+  if (workingHourRollupDownload && summary.working_hour_rollup_download_url) {
+    workingHourRollupDownload.href = summary.working_hour_rollup_download_url;
+    workingHourRollupDownload.classList.remove('disabled');
+  }
+  if (supplierBulkDownload && Number(summary.supplier_upload_files || 0) > 0 && summary.supplier_bulk_download_url) {
+    supplierBulkDownload.href = summary.supplier_bulk_download_url;
+    supplierBulkDownload.classList.remove('disabled');
+  }
+}
+
+function startBomJobPolling(jobId) {
+  clearInterval(bomJobPollTimer);
+
+  const poll = async () => {
+    try {
+      const res = await fetch(`/module2/bom-job/${jobId}`, { cache: 'no-store' });
+      const data = await readJsonOrThrow(res);
+      const job = data.job || {};
+      const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
+      const rowsText = `${cmpFormatInteger(job.processed_rows)} / ${cmpFormatInteger(job.total_rows)}`;
+      const stepText = job.step || cmpT('processingBomExpansion', 'Processing BOM Expansion...');
+      setBomLiveStatusFromJob(job);
+
+      if (job.status === 'success') {
+        clearInterval(bomJobPollTimer);
+        applyBomJobDownloads(job);
+        stopBomProgressSuccess(job.summary || {});
+        setBomLiveStatusFromJob(job);
+        return;
+      }
+
+      if (job.status === 'error' || job.status === 'failed') {
+        clearInterval(bomJobPollTimer);
+        stopBomProgressError(job.message || cmpT('bomExpansionFailed', 'BOM Expansion failed'));
+        setBomLiveStatusFromJob(job);
+        return;
+      }
+
+      setBomProcessingState(
+        'running',
+        cmpT('bomExpansionInProgress', 'BOM Expansion in progress'),
+        `${stepText} | Rows: ${rowsText}`,
+        cmpJobElapsedText(job),
+        progress
+      );
+    } catch (err) {
+      clearInterval(bomJobPollTimer);
+      stopBomProgressError(err.message);
+    }
+  };
+
+  poll();
+  bomJobPollTimer = setInterval(poll, 1500);
+}
 function stopBomProgressSuccess(summary) {
   clearInterval(progressTimer);
+  clearInterval(bomJobPollTimer);
   const supplierUploaded = Number(summary.supplier_upload_files || 0) > 0;
   const supplierStatusText = supplierUploaded
     ? `Supplier files: ${summary.supplier_upload_files || 0}; Supplier bulk rows: ${summary.supplier_bulk_rows || 0};`
@@ -1288,6 +1404,7 @@ function stopBomProgressSuccess(summary) {
 
 function stopBomProgressError(message) {
   clearInterval(progressTimer);
+  clearInterval(bomJobPollTimer);
   setBomProcessingState(
     'error',
     cmpT('bomExpansionFailed', 'BOM Expansion failed'),
@@ -1344,21 +1461,36 @@ bomForm.addEventListener('submit', async (e) => {
 
   try {
     const res = await fetch('/process-bom-expansion', { method: 'POST', body: fd });
-    const data = await res.json();
+    const data = await readJsonOrThrow(res);
 
-    if (!data.ok) throw new Error(data.message || cmpT('bomExpansionFailed', 'BOM Expansion failed'));
+    if (data.job_id) {
+      setBomProcessingState(
+        'running',
+        cmpT('bomExpansionInProgress', 'BOM Expansion in progress'),
+        cmpT('processingBomExpansion', 'Background job started. Waiting for live progress...'),
+        cmpT('running', 'Running'),
+        5
+      );
+      startBomJobPolling(data.job_id);
+      return;
+    }
 
-    bomDownload.href = data.download_url;
-    bomDownload.classList.remove('disabled');
-    if (workingHourRollupDownload && data.summary && data.summary.working_hour_rollup_download_url) {
-      workingHourRollupDownload.href = data.summary.working_hour_rollup_download_url;
-      workingHourRollupDownload.classList.remove('disabled');
+    // Backward compatibility if the backend returns the legacy synchronous response.
+    if (data.summary) {
+      applyBomJobDownloads({ summary: data.summary, download_url: data.download_url });
+      stopBomProgressSuccess(data.summary);
+      setBomLiveStatusFromJob({
+        status: 'success',
+        step: 'MODULE 2 Completed',
+        processed_rows: data.summary.activity_rows || 0,
+        total_rows: data.summary.activity_rows || 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      return;
     }
-    if (supplierBulkDownload && data.summary && Number(data.summary.supplier_upload_files || 0) > 0 && data.summary.supplier_bulk_download_url) {
-      supplierBulkDownload.href = data.summary.supplier_bulk_download_url;
-      supplierBulkDownload.classList.remove('disabled');
-    }
-    stopBomProgressSuccess(data.summary);
+
+    throw new Error(data.message || '後端未回傳 job_id。');
   } catch (err) {
     stopBomProgressError(err.message);
   }

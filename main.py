@@ -50,6 +50,10 @@ print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
 
+# Module 2 is CPU / memory intensive, so keep one background job at a time by default.
+MODULE2_BOM_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+MODULE2_BOM_JOBS: Dict[str, Dict[str, Any]] = {}
+
 CMP_TIMEZONE = ZoneInfo("Asia/Taipei")
 
 def _cmp_now_iso() -> str:
@@ -114,6 +118,151 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
             step="CCL 係數對應失敗",
             message=str(exc),
         )
+
+
+def _set_module2_bom_job(job_id: str, **updates: Any) -> None:
+    job = MODULE2_BOM_JOBS.setdefault(job_id, {})
+    job.update(updates)
+    job["updated_at"] = _cmp_now_iso()
+
+
+def _run_module2_bom_job(
+    job_id: str,
+    token: str,
+    bom_paths: list[Path],
+    template_path: Path,
+    output_path: Path,
+    working_hour_rollup_output_path: Path,
+    supplier_paths: list[Path],
+    supplier_bulk_template_path: Path,
+    supplier_bulk_output_path: Path,
+    step1_path: Path | None,
+    mapping: dict[str, str | None],
+) -> None:
+    global MODULE2_RAW_MATERIAL_BULK_PATH
+
+    def report(**payload: Any) -> None:
+        progress = int(payload.get("progress", MODULE2_BOM_JOBS.get(job_id, {}).get("progress", 0)) or 0)
+        update: Dict[str, Any] = {
+            "status": payload.get("status", "running"),
+            "progress": max(0, min(100, progress)),
+            "step": payload.get("step") or "MODULE 2 Processing",
+            "stage": payload.get("stage", "processing"),
+        }
+        for key in ("processed_rows", "total_rows", "current_file", "remaining_seconds"):
+            if key in payload and payload.get(key) is not None:
+                update[key] = payload.get(key)
+        _set_module2_bom_job(job_id, **update)
+
+    try:
+        report(status="running", progress=3, step="MODULE 2 Processing", stage="started", processed_rows=0, total_rows=0)
+        if step1_path is not None:
+            summary = generate_raw_material_bulk_files_by_site_zip(
+                bom_path=bom_paths,
+                raw_material_template_path=template_path,
+                output_dir=OUTPUT_DIR,
+                token=token,
+                step1_output_path=step1_path,
+                mapping=mapping,
+                supplier_paths=supplier_paths,
+                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
+                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
+                progress_callback=report,
+            )
+            output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
+            summary["module1_step1_source_filename"] = step1_path.name
+            summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
+        else:
+            summary = generate_raw_material_bulk_file(
+                bom_path=bom_paths,
+                raw_material_template_path=template_path,
+                output_path=output_path,
+                mapping=mapping,
+                supplier_paths=supplier_paths,
+                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
+                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
+                progress_callback=report,
+            )
+
+        report(status="running", progress=90, step="Exporting BOM Structure", stage="exporting_bom_structure")
+        bom_structure_summary = export_bom_structure_file(
+            bom_path=bom_paths,
+            output_path=LATEST_BOM_STRUCTURE_PATH,
+            mapping=mapping,
+        )
+        summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
+        summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
+        summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
+        summary["bom_files"] = int(bom_structure_summary.get("bom_files", summary.get("bom_files", len(bom_paths))))
+        summary["bom_rows_before_dedup"] = int(bom_structure_summary.get("bom_rows_before_dedup", summary.get("bom_rows_before_dedup", 0)))
+        summary["bom_rows_after_dedup"] = int(bom_structure_summary.get("bom_rows_after_dedup", summary.get("bom_rows_after_dedup", 0)))
+        summary["bom_duplicate_rows_removed"] = int(bom_structure_summary.get("bom_duplicate_rows_removed", summary.get("bom_duplicate_rows_removed", 0)))
+
+        if step1_path is not None:
+            report(status="running", progress=94, step="Generating Working Hour Roll-up", stage="working_hour_rollup")
+            rollup_summary = generate_working_hour_rollup_file(
+                step1_output_path=step1_path,
+                bom_structure_path=LATEST_BOM_STRUCTURE_PATH,
+                output_path=working_hour_rollup_output_path,
+            )
+            LATEST_WORKING_HOUR_ROLLUP_PATH.write_bytes(working_hour_rollup_output_path.read_bytes())
+            summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
+            summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
+            summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name
+            summary["working_hour_rollup_latest_download_url"] = f"/download/{LATEST_WORKING_HOUR_ROLLUP_PATH.name}"
+            summary["working_hour_rollup_rows"] = int(rollup_summary.get("summary_rows", 0))
+            summary["working_hour_rollup_detail_rows"] = int(rollup_summary.get("detail_rows", 0))
+            summary["working_hour_rollup_total_direct_hours"] = float(rollup_summary.get("total_direct_hours", 0))
+            summary["working_hour_rollup_total_semi_hours"] = float(rollup_summary.get("total_semi_hours", 0))
+            summary["working_hour_rollup_total_hours"] = float(rollup_summary.get("total_hours", 0))
+        else:
+            summary["working_hour_rollup_filename"] = ""
+            summary["working_hour_rollup_download_url"] = ""
+            summary["working_hour_rollup_rows"] = 0
+
+        if output_path.suffix.lower() == ".xlsx" and output_path.exists():
+            MODULE2_RAW_MATERIAL_BULK_PATH = output_path
+            summary["raw_material_bulk_filename"] = output_path.name
+            summary["raw_material_bulk_download_url"] = f"/download/{output_path.name}"
+
+        summary["supplier_upload_files"] = len(supplier_paths)
+        if not supplier_paths:
+            summary["supplier_bulk_filename"] = ""
+            summary["supplier_bulk_download_url"] = ""
+            summary["supplier_bulk_rows"] = 0
+            summary["supplier_bulk_generated"] = False
+            summary["supplier_status"] = "Not Uploaded"
+        else:
+            summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
+            summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
+        summary["app_version"] = "CMP_V16_3_MODULE2_JOB_PROGRESS"
+        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
+
+        _set_module2_bom_job(
+            job_id,
+            status="success",
+            progress=100,
+            step="MODULE 2 Completed",
+            stage="completed",
+            message="BOM Expansion completed successfully.",
+            processed_rows=int(summary.get("activity_rows", 0) or 0),
+            total_rows=int(summary.get("activity_rows", 0) or 0),
+            summary=summary,
+            download_url=summary.get("download_url", f"/download/{output_path.name}"),
+            app_version="CMP_V16_3_MODULE2_JOB_PROGRESS",
+            bom_formatter_version=BOM_FORMATTER_VERSION,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        _set_module2_bom_job(
+            job_id,
+            status="error",
+            progress=100,
+            step="MODULE 2 Failed",
+            stage="failed",
+            message=str(exc),
+        )
+
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -2155,95 +2304,47 @@ async def process_bom_expansion(request: Request):
         "valid_from_col": valid_from_col,
     }
 
-    try:
-        if step1_path is not None:
-            summary = generate_raw_material_bulk_files_by_site_zip(
-                bom_path=bom_paths,
-                raw_material_template_path=template_path,
-                output_dir=OUTPUT_DIR,
-                token=token,
-                step1_output_path=step1_path,
-                mapping=mapping,
-                supplier_paths=supplier_paths,
-                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
-                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
-            )
-            output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
-            summary["module1_step1_source_filename"] = step1_path.name
-            summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
-        else:
-            summary = generate_raw_material_bulk_file(
-                bom_path=bom_paths,
-                raw_material_template_path=template_path,
-                output_path=output_path,
-                mapping=mapping,
-                supplier_paths=supplier_paths,
-                supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
-                supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
-            )
-        bom_structure_summary = export_bom_structure_file(
-            bom_path=bom_paths,
-            output_path=LATEST_BOM_STRUCTURE_PATH,
-            mapping=mapping,
-        )
-        summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
-        summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
-        summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
-        summary["bom_files"] = int(bom_structure_summary.get("bom_files", summary.get("bom_files", len(bom_paths))))
-        summary["bom_rows_before_dedup"] = int(bom_structure_summary.get("bom_rows_before_dedup", summary.get("bom_rows_before_dedup", 0)))
-        summary["bom_rows_after_dedup"] = int(bom_structure_summary.get("bom_rows_after_dedup", summary.get("bom_rows_after_dedup", 0)))
-        summary["bom_duplicate_rows_removed"] = int(bom_structure_summary.get("bom_duplicate_rows_removed", summary.get("bom_duplicate_rows_removed", 0)))
-
-        if step1_path is not None:
-            rollup_summary = generate_working_hour_rollup_file(
-                step1_output_path=step1_path,
-                bom_structure_path=LATEST_BOM_STRUCTURE_PATH,
-                output_path=working_hour_rollup_output_path,
-            )
-            LATEST_WORKING_HOUR_ROLLUP_PATH.write_bytes(working_hour_rollup_output_path.read_bytes())
-            summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
-            summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
-            summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name
-            summary["working_hour_rollup_latest_download_url"] = f"/download/{LATEST_WORKING_HOUR_ROLLUP_PATH.name}"
-            summary["working_hour_rollup_rows"] = int(rollup_summary.get("summary_rows", 0))
-            summary["working_hour_rollup_detail_rows"] = int(rollup_summary.get("detail_rows", 0))
-            summary["working_hour_rollup_total_direct_hours"] = float(rollup_summary.get("total_direct_hours", 0))
-            summary["working_hour_rollup_total_semi_hours"] = float(rollup_summary.get("total_semi_hours", 0))
-            summary["working_hour_rollup_total_hours"] = float(rollup_summary.get("total_hours", 0))
-        else:
-            summary["working_hour_rollup_filename"] = ""
-            summary["working_hour_rollup_download_url"] = ""
-            summary["working_hour_rollup_rows"] = 0
-
-        if output_path.suffix.lower() == ".xlsx" and output_path.exists():
-            MODULE2_RAW_MATERIAL_BULK_PATH = output_path
-            summary["raw_material_bulk_filename"] = output_path.name
-            summary["raw_material_bulk_download_url"] = f"/download/{output_path.name}"
-
-        summary["supplier_upload_files"] = len(supplier_paths)
-        if not supplier_paths:
-            summary["supplier_bulk_filename"] = ""
-            summary["supplier_bulk_download_url"] = ""
-            summary["supplier_bulk_rows"] = 0
-            summary["supplier_bulk_generated"] = False
-            summary["supplier_status"] = "Not Uploaded"
-        else:
-            summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
-            summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
-        summary["app_version"] = "CMP_V16_2_SUPPLIER_BULK_OPTIONAL"
-        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse(
-            {"ok": False, "message": str(exc)},
-            status_code=400,
-        )
+    job_id = token
+    _set_module2_bom_job(
+        job_id,
+        status="queued",
+        progress=0,
+        step="MODULE 2 Processing",
+        stage="queued",
+        message="BOM Expansion 已建立背景工作。",
+        processed_rows=0,
+        total_rows=0,
+        created_at=_cmp_now_iso(),
+        updated_at=_cmp_now_iso(),
+    )
+    MODULE2_BOM_EXECUTOR.submit(
+        _run_module2_bom_job,
+        job_id,
+        token,
+        bom_paths,
+        template_path,
+        output_path,
+        working_hour_rollup_output_path,
+        supplier_paths,
+        supplier_bulk_template_path,
+        supplier_bulk_output_path,
+        step1_path,
+        mapping,
+    )
 
     return {
         "ok": True,
-        "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_V16_2_SUPPLIER_BULK_OPTIONAL",
+        "job_id": job_id,
+        "message": "BOM Expansion background job started.",
+        "app_version": "CMP_V16_3_MODULE2_JOB_PROGRESS",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
-        "summary": summary,
-        "download_url": summary.get("download_url", f"/download/{output_path.name}"),
+        "status_url": f"/module2/bom-job/{job_id}",
     }
+
+
+@app.get("/module2/bom-job/{job_id}")
+def module2_get_bom_job(job_id: str):
+    job = MODULE2_BOM_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "message": "找不到 Module 2 BOM Expansion 工作，請重新執行。"}, status_code=404)
+    return {"ok": True, "job": job}
