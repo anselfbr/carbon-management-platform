@@ -3820,7 +3820,7 @@ def generate_module2_outputs_memory_optimized(
 # C. Raw Material Bulk + Supplier Files -> Supplier-expanded Raw Material Bulk + Supplier Bulk Create
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_MODULE2_ABC"
+BOM_FORMATTER_VERSION = "CMP_V25_0_1_MODULE2A_MASTER_FIX"
 EXPANDED_BOM_MASTER_SHEET_NAME = "Expanded BOM Master"
 
 
@@ -3903,14 +3903,46 @@ def generate_expanded_bom_master_file(
             "weight_uom": "Weight UoM",
             "level": "Max Level",
         })
-        with pd.ExcelWriter(output_path, engine="xlsxwriter", engine_kwargs={"options": {"constant_memory": True}}) as writer:
-            output_df.to_excel(writer, index=False, sheet_name=EXPANDED_BOM_MASTER_SHEET_NAME)
-            ws = writer.sheets[EXPANDED_BOM_MASTER_SHEET_NAME]
+        # CMP V25.0.1 fix:
+        # Do not use pandas.DataFrame.to_excel() with XlsxWriter constant_memory here.
+        # Pandas writes cells in a pattern that is not compatible with constant_memory,
+        # causing only the first column to be retained while later columns become blank.
+        # Write headers and data row-by-row instead, which preserves constant-memory
+        # behavior and keeps the Expanded BOM Master complete.
+        try:
+            import xlsxwriter as _cmp_xlsxwriter
+        except Exception as exc:
+            raise RuntimeError("XlsxWriter is required for Module 2A Expanded BOM Master output.") from exc
+
+        workbook = _cmp_xlsxwriter.Workbook(str(output_path), {
+            "constant_memory": True,
+            "strings_to_urls": False,
+            "nan_inf_to_errors": True,
+        })
+        try:
+            ws = workbook.add_worksheet(EXPANDED_BOM_MASTER_SHEET_NAME[:31])
+            header_fmt = workbook.add_format({"bold": True})
+            date_fmt = workbook.add_format({"num_format": "yyyy/mm/dd"})
+            headers = list(output_df.columns)
+            for col_idx, header in enumerate(headers):
+                ws.write(0, col_idx, header, header_fmt)
+
+            for row_idx, row in enumerate(output_df.itertuples(index=False, name=None), start=1):
+                for col_idx, value in enumerate(row):
+                    if pd.isna(value):
+                        value = ""
+                    if isinstance(value, date):
+                        ws.write_datetime(row_idx, col_idx, datetime(value.year, value.month, value.day), date_fmt)
+                    else:
+                        ws.write(row_idx, col_idx, value)
+
             ws.freeze_panes(1, 0)
             ws.set_column(0, 1, 22)
             ws.set_column(2, 3, 14)
             ws.set_column(4, 4, 42)
             ws.set_column(5, 10, 16)
+        finally:
+            workbook.close()
         summary.update({
             "output_filename": output_path.name,
             "download_url": f"/download/{output_path.name}",
