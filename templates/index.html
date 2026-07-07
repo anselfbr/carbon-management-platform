@@ -602,6 +602,10 @@
                 <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
               </div>
 
+              <label data-i18n="uploadModule1Step1OutputFile">Upload Module 1 Step 1 Output File</label>
+              <input id="bomStep1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" />
+              <p class="form-hint" data-i18n="bomStep1FileHint">Required for the first Module 2 run. If left blank later, the system reuses the latest uploaded Step 1 Output in this session.</p>
+
               <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
               <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
               <p class="form-hint" data-i18n="supplierFilesHint">Optional. Supports multiple Excel files. Uses Raw Material Code + Vendor number to write Supplier Name. Transportation Origin uses Supplier Address or Country + City + Street. Also exports supplier_bulk_create from the built-in template.</p>
@@ -898,6 +902,7 @@ const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
 const bomStep1SourceText = document.getElementById('bomStep1SourceText');
+const bomStep1File = document.getElementById('bomStep1File');
 const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
 const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
@@ -1201,9 +1206,12 @@ async function refreshBomStep1Source() {
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'Module 1 Step 1 output';
     const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    bomStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
+    const mode = data.source_mode || '';
+    let sourceLabel = 'Module 1 Step 1 最新產出';
+    if (mode === 'session_uploaded' || mode === 'cached_upload') sourceLabel = '已上傳 Step1 Output，可直接沿用';
+    bomStep1SourceText.textContent = `來源：${sourceLabel}｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
   } catch (err) {
-    bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
+    bomStep1SourceText.textContent = err.message || '尚未找到可沿用的 Step1 Output；第一次執行 Module 2 請上傳 Module 1 Step1 Output。';
   }
 }
 
@@ -1296,6 +1304,16 @@ document.querySelectorAll('.logic-mapping-row[data-default]').forEach(row => {
     row.classList.add('mapping-custom');
   });
 });
+if (bomStep1File) {
+  bomStep1File.addEventListener('change', () => {
+    if (bomStep1File.files && bomStep1File.files.length) {
+      bomStep1SourceText.textContent = `來源：即將使用新上傳 Step1 Output｜檔案：${bomStep1File.files[0].name}`;
+    } else {
+      refreshBomStep1Source();
+    }
+  });
+}
+
 
 bomForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -1316,6 +1334,11 @@ bomForm.addEventListener('submit', async (e) => {
   await refreshBomStep1Source();
 
   const fd = new FormData(bomForm);
+  if (bomStep1File && bomStep1File.files && bomStep1File.files.length) {
+    bomStatusText.textContent = `Using uploaded Step1 Output: ${bomStep1File.files[0].name}`;
+  } else {
+    bomStatusText.textContent = 'No new Step1 Output selected. Reusing session/latest Step1 Output if available.';
+  }
 
   try {
     const res = await fetch('/process-bom-expansion', { method: 'POST', body: fd });
