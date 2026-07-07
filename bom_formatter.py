@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V17_4_MATERIAL_SCOPED_BOM"
+BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
 
 
 DEFAULT_MAPPING = {
@@ -30,6 +30,9 @@ DEFAULT_MAPPING = {
     "valid_from_col": "BOM Valid From",
     "altitem_group_col": "Altitem group",
     "usage_probability_col": "Usage probability%",
+    "net_weight_col": "Net weight",
+    "gross_weight_col": "Gross weight",
+    "weight_uom_col": "Weight UoM",
 }
 
 
@@ -314,6 +317,11 @@ def _find_template_column(ws, aliases: list[str], fallback_col: int | None = Non
     raise ValueError(f"Bulk template 缺少必要欄位：{', '.join(aliases)}")
 
 
+def _find_template_optional_column(ws, aliases: list[str]) -> int | None:
+    cols = _find_template_columns(ws, aliases)
+    return int(cols[0]) if cols else None
+
+
 def _write_template_value(ws, row_idx: int, col_idx: int | None, value: Any) -> None:
     if col_idx:
         ws.cell(row_idx, int(col_idx)).value = value
@@ -341,6 +349,9 @@ SUPPLIER_NAME_ALIASES = ["supplier_name", "Supplier Name (optional)", "Supplier 
 PRODUCT_LINK_ALIASES = ["allocated_target_product_service", "Allocated Target Product/Service", "Target Product", "Product Code", "Product Name", "產品代碼", "產品名稱"]
 COMMENT_ALIASES = ["comment", "Comment (optional)", "Comment", "備註"]
 MATERIAL_GROUP_ALIASES = ["material_group", "Material Group", "Material group", "物料群組"]
+NET_WEIGHT_ALIASES = ["net_weight", "Net Weight (optional)", "Net Weight", "Net weight", "淨重"]
+GROSS_WEIGHT_ALIASES = ["gross_weight", "Gross Weight (optional)", "Gross Weight", "Gross weight", "毛重"]
+WEIGHT_UNIT_ALIASES = ["weight_unit", "Weight Unit (optional)", "Weight Unit", "Weight UoM", "Weight UOM", "重量單位"]
 
 
 def _sheet_has_dropdown_label(wb, dropdown_column_name: str, label: str) -> bool:
@@ -389,6 +400,9 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     valid_from_col = _find_optional_column(df, m["valid_from_col"])
     altitem_group_col = _find_optional_column(df, m["altitem_group_col"])
     usage_probability_col = _find_optional_column(df, m["usage_probability_col"])
+    net_weight_col = _find_optional_column(df, m.get("net_weight_col", "Net weight"))
+    gross_weight_col = _find_optional_column(df, m.get("gross_weight_col", "Gross weight"))
+    weight_uom_col = _find_optional_column(df, m.get("weight_uom_col", "Weight UoM"))
 
     df = df.copy()
     df["_bom_material"] = df[material_col].apply(_safe_text) if material_col else ""
@@ -401,6 +415,9 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     df["_valid_from"] = df[valid_from_col].apply(_date_from_value) if valid_from_col else date(datetime.now().year, 1, 1)
     df["_altitem_group"] = df[altitem_group_col].apply(_normalize_altitem_group) if altitem_group_col else ""
     df["_usage_probability_ratio"] = df[usage_probability_col].apply(_usage_probability_ratio) if usage_probability_col else None
+    df["_net_weight"] = df[net_weight_col].apply(_safe_number) if net_weight_col else ""
+    df["_gross_weight"] = df[gross_weight_col].apply(_safe_number) if gross_weight_col else ""
+    df["_weight_uom"] = df[weight_uom_col].apply(_safe_text) if weight_uom_col else ""
 
     df = df[(df["_parent"] != "") & (df["_component"] != "")].copy()
     df, altitem_summary = _apply_altitem_usage_probability(df)
@@ -416,6 +433,9 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
         "valid_from_col": valid_from_col or "",
         "altitem_group_col": altitem_group_col or "",
         "usage_probability_col": usage_probability_col or "",
+        "net_weight_col": net_weight_col or "",
+        "gross_weight_col": gross_weight_col or "",
+        "weight_uom_col": weight_uom_col or "",
         **altitem_summary,
     }
     return df, used_columns
@@ -467,7 +487,7 @@ def _read_boms(
 
     merged = pd.concat(frames, ignore_index=True)
     before_dedup = int(len(merged))
-    dedup_subset = ["_bom_material", "_parent", "_component", "_qty", "_uom", "_description", "_material_group", "_valid_from", "_altitem_group", "_usage_probability_ratio"]
+    dedup_subset = ["_bom_material", "_parent", "_component", "_qty", "_uom", "_description", "_material_group", "_valid_from", "_altitem_group", "_usage_probability_ratio", "_net_weight", "_gross_weight", "_weight_uom"]
     merged = merged.drop_duplicates(subset=dedup_subset, keep="first").reset_index(drop=True)
     after_dedup = int(len(merged))
 
@@ -664,6 +684,9 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
                 "description": r["_description"],
                 "material_group": r["_material_group"],
                 "valid_from": r["_valid_from"],
+                "net_weight": r.get("_net_weight", ""),
+                "gross_weight": r.get("_gross_weight", ""),
+                "weight_uom": r.get("_weight_uom", ""),
                 "source_file": r.get("_source_file", ""),
             }
             children[row["parent"]].append(row)
@@ -696,6 +719,9 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
                             "unit": child["uom"],
                             "description": child["description"],
                             "material_group": child["material_group"],
+                            "net_weight": child.get("net_weight", ""),
+                            "gross_weight": child.get("gross_weight", ""),
+                            "weight_uom": child.get("weight_uom", ""),
                             "valid_from": child["valid_from"],
                             "level": next_level,
                             "immediate_parent": current_parent,
@@ -730,6 +756,9 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
                 "usage": "sum",
                 "description": "first",
                 "material_group": "first",
+                "net_weight": "first",
+                "gross_weight": "first",
+                "weight_uom": "first",
                 "valid_from": "first",
                 "level": "max",
             })
@@ -798,6 +827,9 @@ def _write_raw_material_bulk_from_exploded(
         "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
         "comment": _find_template_column(activity_ws, COMMENT_ALIASES, 18),
         "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
+        "net_weight": _find_template_optional_column(activity_ws, NET_WEIGHT_ALIASES),
+        "gross_weight": _find_template_optional_column(activity_ws, GROSS_WEIGHT_ALIASES),
+        "weight_unit": _find_template_optional_column(activity_ws, WEIGHT_UNIT_ALIASES),
     }
     raw_cols = {
         "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
@@ -836,6 +868,9 @@ def _write_raw_material_bulk_from_exploded(
         _write_template_value(activity_ws, row_idx, activity_cols["target_product"], target_product)
         _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
+        _write_template_value(activity_ws, row_idx, activity_cols.get("net_weight"), r.get("net_weight", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols.get("gross_weight"), r.get("gross_weight", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols.get("weight_unit"), r.get("weight_uom", ""))
 
         activity_ws.cell(row_idx, activity_cols["start_date"]).number_format = "yyyy/mm/dd"
         activity_ws.cell(row_idx, activity_cols["end_date"]).number_format = "yyyy/mm/dd"
@@ -1562,6 +1597,14 @@ def _normalize_vendor_code(value: Any) -> str:
     return text
 
 
+def _format_supplier_display_name(vendor_code: Any, vendor_name: Any) -> str:
+    vendor = _normalize_vendor_code(vendor_code)
+    name = _safe_text(vendor_name)
+    if vendor and name:
+        return f"{vendor} - {name}"
+    return vendor or name
+
+
 def _supplier_header_key(value: Any) -> str:
     return re.sub(r"[^0-9A-Z]+", "", str(value or "").upper())
 
@@ -1698,6 +1741,7 @@ def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ..
                 "vendor_code": vendor_code,
                 "supplier_code": vendor_code,
                 "supplier_master_name": vendor_name,
+                "supplier_name": _format_supplier_display_name(vendor_code, vendor_name),
                 "country_area": country,
                 "supplier_address": supplier_address,
                 "transport_origin": supplier_address,
@@ -1926,7 +1970,9 @@ def _apply_supplier_mapping_to_exploded(
             new_row["transport_destination"] = destination
             supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
             supplier_code = info.get("supplier_code", "") or info.get("vendor_code", "")
-            supplier_name = _select_supplier_name_option(supplier_options, destination, supplier_code)
+            supplier_name = info.get("supplier_name", "") or _format_supplier_display_name(supplier_code, info.get("supplier_master_name", ""))
+            if not supplier_name:
+                supplier_name = _select_supplier_name_option(supplier_options, destination, supplier_code)
             new_row["transport_origin"] = supplier_address
             new_row["supplier_code"] = supplier_code
             new_row["supplier_master_name"] = info.get("supplier_master_name", "") or _supplier_name_from_option(supplier_name)
@@ -2068,6 +2114,9 @@ def _write_raw_material_bulk_from_exploded(
         "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
         "comment": _find_template_column(activity_ws, COMMENT_ALIASES, 18),
         "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
+        "net_weight": _find_template_optional_column(activity_ws, NET_WEIGHT_ALIASES),
+        "gross_weight": _find_template_optional_column(activity_ws, GROSS_WEIGHT_ALIASES),
+        "weight_unit": _find_template_optional_column(activity_ws, WEIGHT_UNIT_ALIASES),
     }
     raw_cols = {
         "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
@@ -2110,6 +2159,9 @@ def _write_raw_material_bulk_from_exploded(
         _write_template_value(activity_ws, row_idx, activity_cols["target_product"], r["target_product"])
         _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
+        _write_template_value(activity_ws, row_idx, activity_cols.get("net_weight"), r.get("net_weight", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols.get("gross_weight"), r.get("gross_weight", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols.get("weight_unit"), r.get("weight_uom", ""))
         activity_ws.cell(row_idx, activity_cols["start_date"]).number_format = "yyyy/mm/dd"
         activity_ws.cell(row_idx, activity_cols["end_date"]).number_format = "yyyy/mm/dd"
         row_idx += 1
@@ -2294,4 +2346,4 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V17_4_MATERIAL_SCOPED_BOM"
+BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
