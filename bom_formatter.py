@@ -17,7 +17,7 @@ from openpyxl import load_workbook, Workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
+BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
 
 
 DEFAULT_MAPPING = {
@@ -166,13 +166,16 @@ def _usage_probability_ratio(value: Any) -> float | None:
 
 
 def _apply_altitem_usage_probability(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Apply alternative-item usage probability to CS03 quantity.
+    """Apply SAP Alternative Item usage probability to CS03 quantity.
 
-    Rule: within the same parent material, rows with the same non-empty
-    Altitem group are alternative materials. For such duplicated groups,
-    effective quantity = CS03 Qty × Usage probability%.
+    CMP rule confirmed for Module 2A:
+    - If Altitem Group has a value, effective quantity = CS03 Qty × Usage probability%.
+    - If Altitem Group is blank, effective quantity = CS03 Qty.
 
-    Memory V1: operate on the already-normalized BOM frame in-place.
+    This rule is intentionally not limited to duplicated Altitem Group rows.
+    SAP exports may contain only one visible row for an alternative group after
+    filtering/deduplication, but the row is still an alternative item and should
+    use its Usage probability when the Altitem Group is present.
     """
     work = df
     if "_altitem_group" not in work.columns:
@@ -180,39 +183,54 @@ def _apply_altitem_usage_probability(df: pd.DataFrame) -> tuple[pd.DataFrame, di
     if "_usage_probability_ratio" not in work.columns:
         work["_usage_probability_ratio"] = None
 
+    work["_qty_original"] = work["_qty"]
+
     alt_mask = work["_altitem_group"].astype(str).str.strip() != ""
     if not alt_mask.any():
-        work["_qty_original"] = work["_qty"]
         work["_qty_adjusted_by_altitem"] = False
         return work, {
             "altitem_rows": 0,
             "altitem_groups": 0,
             "altitem_adjusted_rows": 0,
             "altitem_probability_missing_rows": 0,
+            "altitem_probability_sum_warning_groups": 0,
+            "altitem_rule": "Altitem Group blank: Effective CS03 Qty = CS03 Qty.",
         }
 
-    group_keys = ["_parent", "_altitem_group"]
-    group_sizes = work.groupby(group_keys, dropna=False)["_component"].transform("count")
-    duplicated_alt_group = alt_mask & (group_sizes > 1)
     has_probability = work["_usage_probability_ratio"].apply(lambda x: x is not None)
-    apply_mask = duplicated_alt_group & has_probability
+    apply_mask = alt_mask & has_probability
 
-    work["_qty_original"] = work["_qty"]
-    work.loc[apply_mask, "_qty"] = work.loc[apply_mask, "_qty"] * work.loc[apply_mask, "_usage_probability_ratio"].astype(float)
+    # Only rows with a non-empty Altitem Group use Usage probability%.
+    # Blank Altitem Group rows remain unchanged even when Usage probability exists.
+    work.loc[apply_mask, "_qty"] = (
+        work.loc[apply_mask, "_qty"].astype(float)
+        * work.loc[apply_mask, "_usage_probability_ratio"].astype(float)
+    )
     work["_qty_adjusted_by_altitem"] = apply_mask
 
-    alt_groups = (
-        work.loc[duplicated_alt_group, group_keys]
-        .drop_duplicates()
-        .shape[0]
-    )
-    missing_probability_rows = int((duplicated_alt_group & ~has_probability).sum())
+    group_keys = ["_parent", "_altitem_group"]
+    alt_group_rows = work.loc[alt_mask, group_keys + ["_usage_probability_ratio"]].copy()
+    alt_groups = int(alt_group_rows[group_keys].drop_duplicates().shape[0])
+    missing_probability_rows = int((alt_mask & ~has_probability).sum())
+
+    probability_sum_warning_groups = 0
+    try:
+        prob_sum = (
+            alt_group_rows.dropna(subset=["_usage_probability_ratio"])
+            .groupby(group_keys, dropna=False)["_usage_probability_ratio"]
+            .sum()
+        )
+        probability_sum_warning_groups = int(((prob_sum - 1.0).abs() > 0.0001).sum())
+    except Exception:
+        probability_sum_warning_groups = 0
+
     return work, {
-        "altitem_rows": int(duplicated_alt_group.sum()),
+        "altitem_rows": int(alt_mask.sum()),
         "altitem_groups": int(alt_groups),
         "altitem_adjusted_rows": int(apply_mask.sum()),
         "altitem_probability_missing_rows": missing_probability_rows,
-        "altitem_rule": "Effective CS03 Qty = CS03 Qty × Usage probability% for duplicated Altitem group within the same Parent Node.",
+        "altitem_probability_sum_warning_groups": probability_sum_warning_groups,
+        "altitem_rule": "If Altitem Group has value: Effective CS03 Qty = CS03 Qty × Usage probability%; if Altitem Group is blank: Effective CS03 Qty = CS03 Qty.",
     }
 
 
@@ -2142,7 +2160,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
+BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
 
 
 # =========================================================
@@ -2792,7 +2810,7 @@ def _calculate_total_working_hour_by_target(
 # - Module 3 can directly select one generated site workbook.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
+BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
 
 RAW_MATERIAL_ACTIVITY_HEADERS_V23_4 = [
     "Raw Material Name", "Raw Material Code", "Doc. Start Date", "Doc. End Date",
@@ -3149,7 +3167,7 @@ def generate_module2_outputs_memory_optimized(
 # - Keep Module 3 site-file selection compatible.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
+BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
 
 
 def _template_layout_for_fast_raw_only(template_path: str | Path) -> dict[str, Any]:
@@ -3513,7 +3531,7 @@ def generate_module2_outputs_memory_optimized(
 # - Keep Module 3 compatible: site-specific Raw Material Bulk xlsx files.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V24_0_SUPPLIER_RESTORE_EFFICIENT_ONE_STEP"
+BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
 
 
 def _write_raw_material_bulk_from_exploded_fast_raw_only(
@@ -3860,7 +3878,7 @@ def generate_module2_outputs_memory_optimized(
 # C. Raw Material Bulk + Supplier Files -> Supplier-expanded Raw Material Bulk + Supplier Bulk Create
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_2_ALTITEM_USAGE_COLUMN_FIX"
+BOM_FORMATTER_VERSION = "CMP_V25_0_3_ALTITEM_GROUP_USAGE_RULE"
 EXPANDED_BOM_MASTER_SHEET_NAME = "Expanded BOM Master"
 
 
