@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import shutil
+import tempfile
+import zipfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
@@ -152,6 +154,7 @@ def apply_ccl_factors_to_raw_material_bulk(
     ccl_mapping_path: str | Path,
     output_path: str | Path,
     progress_callback: Callable[..., None] | None = None,
+    ccl_map: Dict[str, Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     """Fill Module 3 CCL factor fields into a Module 2 raw-material bulk workbook.
 
@@ -171,7 +174,8 @@ def apply_ccl_factors_to_raw_material_bulk(
     perf["copy_template"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
+    if ccl_map is None:
+        ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
     perf["read_ccl_and_build_dict"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
@@ -259,6 +263,100 @@ def apply_ccl_factors_to_raw_material_bulk(
         "total_rows": non_empty_material_rows,
         "performance_seconds": {k: round(v, 3) for k, v in perf.items()},
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
+    }
+
+
+def apply_ccl_factors_to_raw_material_bulk_package(
+    raw_material_bulk_path: str | Path,
+    ccl_mapping_path: str | Path,
+    output_path: str | Path,
+    progress_callback: Callable[..., None] | None = None,
+) -> Dict[str, Any]:
+    """Apply CCL factors to a Module 2 raw-material bulk Excel or ZIP package.
+
+    ZIP input is treated as a Module 2 by-site package: every Excel workbook inside
+    the ZIP is processed and the filled workbooks are returned in one output ZIP.
+    The CCL mapping is loaded only once to keep CPU and memory usage low.
+    """
+    raw_material_bulk_path = Path(raw_material_bulk_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if raw_material_bulk_path.suffix.lower() != ".zip":
+        return apply_ccl_factors_to_raw_material_bulk(
+            raw_material_bulk_path,
+            ccl_mapping_path,
+            output_path,
+            progress_callback=progress_callback,
+        )
+
+    _emit_progress(progress_callback, 2, "讀取 Module 2 ZIP 內原物料 Bulk 檔案", 60)
+    with zipfile.ZipFile(raw_material_bulk_path, "r") as zin:
+        excel_members = [
+            info for info in zin.infolist()
+            if not info.is_dir()
+            and not Path(info.filename).name.startswith("~$")
+            and Path(info.filename).suffix.lower() in {".xlsx", ".xlsm", ".xls"}
+        ]
+        if not excel_members:
+            raise ValueError("Module 2 ZIP 內找不到原物料 Bulk Excel 檔案。")
+
+        ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
+        totals = {
+            "ccl_mapping_rows": len(ccl_map),
+            "matched_rows": 0,
+            "unmatched_rows": 0,
+            "written_rows": 0,
+            "total_rows": 0,
+        }
+        processed_files: list[dict[str, Any]] = []
+
+        with tempfile.TemporaryDirectory(prefix="cmp_module3_zip_") as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            output_files: list[Path] = []
+            total_files = len(excel_members)
+            for idx, info in enumerate(excel_members, start=1):
+                original_name = Path(info.filename).name
+                input_file = tmpdir_path / f"input_{idx}_{original_name}"
+                filled_name = f"factor_filled_{original_name}"
+                filled_file = tmpdir_path / filled_name
+                with zin.open(info, "r") as src, input_file.open("wb") as dst:
+                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+                pct = 10 + int((idx - 1) / max(1, total_files) * 75)
+                _emit_progress(progress_callback, pct, f"處理 ZIP 內第 {idx}/{total_files} 個 Bulk：{original_name}", 60)
+                summary = apply_ccl_factors_to_raw_material_bulk(
+                    input_file,
+                    ccl_mapping_path,
+                    filled_file,
+                    progress_callback=None,
+                    ccl_map=ccl_map,
+                )
+                output_files.append(filled_file)
+                processed_files.append({
+                    "filename": original_name,
+                    "output_filename": filled_name,
+                    "matched_rows": summary.get("matched_rows", 0),
+                    "unmatched_rows": summary.get("unmatched_rows", 0),
+                    "written_rows": summary.get("written_rows", 0),
+                    "total_rows": summary.get("total_rows", 0),
+                })
+                for key in ["matched_rows", "unmatched_rows", "written_rows", "total_rows"]:
+                    totals[key] += int(summary.get(key, 0) or 0)
+
+            _emit_progress(progress_callback, 92, "壓縮已填入係數的 Bulk 檔案", 10)
+            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
+                for file_path in output_files:
+                    zout.write(file_path, arcname=file_path.name)
+
+    _emit_progress(progress_callback, 100, "ZIP 內全部 Bulk 係數對應完成", 0)
+    return {
+        "output_filename": output_path.name,
+        "download_url": f"/download/{output_path.name}",
+        "input_package_filename": raw_material_bulk_path.name,
+        "processed_file_count": len(processed_files),
+        "processed_files": processed_files,
+        "factor_selector_version": FACTOR_SELECTOR_VERSION,
+        **totals,
     }
 
 def _resolve_lcia_target_column(ws) -> int:

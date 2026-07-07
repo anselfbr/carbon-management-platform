@@ -5,6 +5,7 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -15,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
 from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file
-from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
+from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, apply_ccl_factors_to_raw_material_bulk_package, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -49,10 +50,35 @@ print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
 
+CMP_TIMEZONE = ZoneInfo("Asia/Taipei")
+
+def _cmp_now_iso() -> str:
+    return datetime.now(CMP_TIMEZONE).isoformat(timespec="seconds")
+
+def _cmp_mtime_iso(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, CMP_TIMEZONE).isoformat(timespec="seconds")
+
+def _extract_source_version_date(filename: str) -> Dict[str, str]:
+    text = filename or ""
+    version = ""
+    date = ""
+    version_match = re.search(r"(?:^|[_\-\s])(?:v|V)(\d+(?:\.\d+)*)", text)
+    if version_match:
+        version = f"v{version_match.group(1)}"
+    date_match = re.search(r"(20\d{6})", text)
+    if date_match:
+        raw = date_match.group(1)
+        date = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    else:
+        date_match = re.search(r"(20\d{2})[-_/\.](\d{1,2})[-_/\.](\d{1,2})", text)
+        if date_match:
+            date = f"{int(date_match.group(1)):04d}-{int(date_match.group(2)):02d}-{int(date_match.group(3)):02d}"
+    return {"source_version": version, "source_date": date, "timezone": "Asia/Taipei"}
+
 def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
     job = MODULE3_CCL_JOBS.setdefault(job_id, {})
     job.update(updates)
-    job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    job["updated_at"] = _cmp_now_iso()
 
 def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
     def report(progress: int, step: str, remaining_seconds: int | None = None) -> None:
@@ -67,7 +93,7 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
 
     try:
         report(1, "建立 CCL 係數對應工作", 45)
-        summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path, progress_callback=report)
+        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, progress_callback=report)
         summary["app_version"] = "CMP_MODULE3_CCL_PERFORMANCE_V2"
         _set_module3_ccl_job(
             job_id,
@@ -1794,22 +1820,37 @@ def module2_step1_output_source():
         "ok": True,
         "filename": step1_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": _cmp_mtime_iso(step1_path),
         "download_url": f"/download/{step1_path.name}",
+        **_source_meta_for_path(step1_path, "Module 1 Step 1"),
     }
 
 
+def _source_meta_for_path(path: Path, default_version: str = "") -> Dict[str, str]:
+    meta = _extract_source_version_date(path.name)
+    if not meta.get("source_date"):
+        meta["source_date"] = datetime.fromtimestamp(path.stat().st_mtime, CMP_TIMEZONE).date().isoformat()
+    if default_version and not meta.get("source_version"):
+        meta["source_version"] = default_version
+    return meta
+
 def _find_latest_module2_raw_material_bulk() -> Path | None:
-    """Return the most recent Module 2 raw material bulk output without creating a duplicate latest file."""
+    """Return the most recent Module 2 raw material bulk package/file.
+
+    Module 2 now normally exports by-site raw material bulk as ZIP. Module 3
+    accepts that ZIP directly and processes every Excel inside it. Single Excel
+    output remains supported for backward compatibility.
+    """
     global MODULE2_RAW_MATERIAL_BULK_PATH
     if MODULE2_RAW_MATERIAL_BULK_PATH and MODULE2_RAW_MATERIAL_BULK_PATH.exists():
         return MODULE2_RAW_MATERIAL_BULK_PATH
-    candidates = []
-    for path in OUTPUT_DIR.glob("raw_material_activity_data_bulk_*.xlsx"):
-        name = path.name.lower()
-        if "by_site" in name or name.endswith("_latest.xlsx"):
-            continue
-        candidates.append(path)
+    candidates: list[Path] = []
+    for pattern in ("raw_material_activity_data_bulk_by_site_*.zip", "raw_material_activity_data_bulk_*.zip", "raw_material_activity_data_bulk_*.xlsx"):
+        for path in OUTPUT_DIR.glob(pattern):
+            name = path.name.lower()
+            if name.endswith("_latest.xlsx"):
+                continue
+            candidates.append(path)
     if not candidates:
         return None
     latest = max(candidates, key=lambda p: p.stat().st_mtime)
@@ -1826,12 +1867,15 @@ def module3_raw_material_bulk_source():
             "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。",
         }
     stat = raw_path.stat()
+    meta = _source_meta_for_path(raw_path, "Module 2 ZIP" if raw_path.suffix.lower() == ".zip" else "Module 2 Excel")
     return {
         "ok": True,
         "filename": raw_path.name,
+        "source_type": "zip_package" if raw_path.suffix.lower() == ".zip" else "excel_file",
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": _cmp_mtime_iso(raw_path),
         "download_url": f"/download/{raw_path.name}",
+        **meta,
     }
 
 # =========================================================
@@ -1857,7 +1901,7 @@ async def module3_apply_ccl_factors_job(
         return JSONResponse({"ok": False, "message": "CCL 係數組配表 請上傳 Excel 檔案"}, status_code=400)
 
     ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_mapping_file.filename).name}"
-    output_path = OUTPUT_DIR / f"module3_ccl_factor_filled_{token}.xlsx"
+    output_path = OUTPUT_DIR / (f"module3_ccl_factor_filled_{token}.zip" if raw_path.suffix.lower() == ".zip" else f"module3_ccl_factor_filled_{token}.xlsx")
     ccl_path.write_bytes(await ccl_mapping_file.read())
 
     _set_module3_ccl_job(
@@ -1867,11 +1911,12 @@ async def module3_apply_ccl_factors_job(
         step="工作已建立，等待背景處理",
         message="CCL 係數對應已開始。",
         source_filename=raw_path.name,
+        source_meta=_source_meta_for_path(raw_path, "Module 2 ZIP" if raw_path.suffix.lower() == ".zip" else "Module 2 Excel"),
         remaining_seconds=30,
-        created_at=datetime.now().isoformat(timespec="seconds"),
+        created_at=_cmp_now_iso(),
     )
     MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path)
-    return {"ok": True, "job_id": job_id, "message": "CCL 係數對應已開始。", "source_filename": raw_path.name}
+    return {"ok": True, "job_id": job_id, "message": "CCL 係數對應已開始。", "source_filename": raw_path.name, **_source_meta_for_path(raw_path, "Module 2 ZIP" if raw_path.suffix.lower() == ".zip" else "Module 2 Excel")}
 
 
 @app.get("/module3/ccl-job/{job_id}")
@@ -1900,13 +1945,14 @@ async def module3_apply_ccl_factors(
         return JSONResponse({"ok": False, "message": "CCL 係數組配表 請上傳 Excel 檔案"}, status_code=400)
 
     ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_mapping_file.filename).name}"
-    output_path = OUTPUT_DIR / f"module3_ccl_factor_filled_{token}.xlsx"
+    output_path = OUTPUT_DIR / (f"module3_ccl_factor_filled_{token}.zip" if raw_path.suffix.lower() == ".zip" else f"module3_ccl_factor_filled_{token}.xlsx")
     ccl_path.write_bytes(await ccl_mapping_file.read())
 
     try:
-        summary = apply_ccl_factors_to_raw_material_bulk(raw_path, ccl_path, output_path)
+        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path)
         summary["app_version"] = "CMP_MODULE3_DIRECT_MODULE2_BULK_V2_2"
         summary["source_filename"] = raw_path.name
+        summary.update(_source_meta_for_path(raw_path, "Module 2 ZIP" if raw_path.suffix.lower() == ".zip" else "Module 2 Excel"))
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)

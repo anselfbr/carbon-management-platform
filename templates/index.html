@@ -970,6 +970,32 @@ function formatDynamic(templateKey, fallback, values) {
   return text;
 }
 
+function cmpFormatTaipeiTime(value) {
+  if (!value) return '';
+  const raw = String(value);
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return raw.replace('T', ' ');
+  return date.toLocaleString('zh-TW', {
+    timeZone: 'Asia/Taipei',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).replace(/\//g, '-');
+}
+
+function cmpSourceMetaText(data) {
+  const parts = [];
+  if (data && data.source_version) parts.push(`版次：${data.source_version}`);
+  if (data && data.source_date) parts.push(`日期：${data.source_date}`);
+  if (data && data.modified_at) parts.push(`建立時間：${cmpFormatTaipeiTime(data.modified_at)} Asia/Taipei`);
+  return parts.length ? `｜${parts.join('｜')}` : '';
+}
+
 function cmpRemainingText(seconds) {
   const lang = cmpLang();
   return lang === 'zh' ? `約 ${seconds} 秒` : `~${seconds}s remaining`;
@@ -1200,8 +1226,7 @@ async function refreshBomStep1Source() {
     const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'Module 1 Step 1 output';
-    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    bomStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
+    bomStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${cmpSourceMetaText(data)}`;
   } catch (err) {
     bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
   }
@@ -1370,8 +1395,8 @@ async function refreshModule3RawBulkSource() {
     const res = await fetch('/module3/raw-material-bulk-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'raw material bulk';
-    const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
+    const typeText = data.source_type === 'zip_package' ? 'ZIP 原物料 Bulk 包' : '原物料 Bulk 檔';
+    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜類型：${typeText}｜檔案：${filename}${cmpSourceMetaText(data)}`;
   } catch (err) {
     module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
   }
@@ -1385,14 +1410,16 @@ function startModule3CclPolling(jobId, startTime) {
       const data = await readJsonOrThrow(res);
       const job = data.job || {};
       const progress = Number(job.progress || 0);
+      const sourceText = job.source_filename ? `來源檔：${job.source_filename}${job.source_meta ? cmpSourceMetaText(job.source_meta) : ''}` : '';
       const remaining = Number.isFinite(Number(job.remaining_seconds)) ? Math.max(0, Number(job.remaining_seconds)) : 30;
       if (job.status === 'success') {
         clearInterval(module3CclPollTimer);
         const summary = job.summary || {};
+        const fileCount = summary.processed_file_count ? `｜處理檔案：${summary.processed_file_count} 個` : '';
         const text = formatDynamic('module3CclSuccessText', '完成：已寫入 {written} 筆，未對應 {unmatched} 筆。', {
           written: summary.written_rows ?? 0,
           unmatched: summary.unmatched_rows ?? 0
-        });
+        }) + fileCount + (sourceText ? `｜${sourceText}` : '');
         setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), text, cmpT('completed', 'Completed'), 100);
         if (module3CclDownload && job.download_url) {
           module3CclDownload.href = job.download_url;
@@ -1405,7 +1432,7 @@ function startModule3CclPolling(jobId, startTime) {
         setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), job.message || cmpT('module3CclFailed', 'CCL 係數對應失敗'), cmpT('error', 'Error'), 100);
         return;
       }
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。'), cmpRemainingText(remaining), progress);
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), `${job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。')}${sourceText ? `｜${sourceText}` : ''}`, cmpRemainingText(remaining), progress);
     } catch (err) {
       clearInterval(module3CclPollTimer);
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
@@ -2079,7 +2106,7 @@ ruleForm.onsubmit = async (e) => {
 
     const importedRuleSet = data.rule_set || selectedRuleSet;
     const count = data.count || 0;
-    const importedAt = new Date().toLocaleString('zh-TW', { hour12: false });
+    const importedAt = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }) + ' Asia/Taipei';
 
     setRuleImportStatus(
       'success',
