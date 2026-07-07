@@ -270,11 +270,41 @@ def _year_end(d: date) -> date:
     return date(d.year, 12, 31)
 
 
-def _clear_target_cells(ws, start_row: int, columns: list[int]) -> None:
-    max_row = max(ws.max_row, start_row)
+TEMPLATE_CLEAR_EXTRA_ROWS = 100
+TEMPLATE_CLEAR_FULL_MAX_ROWS = 5000
+
+
+def _clear_target_cells(
+    ws,
+    start_row: int,
+    columns: list[int],
+    data_row_count: int | None = None,
+    extra_rows: int = TEMPLATE_CLEAR_EXTRA_ROWS,
+) -> None:
+    """Clear target template values without scanning a whole formatted worksheet.
+
+    Some bulk templates carry formatting/data-validation far below the real data
+    area, so ``ws.max_row`` can be much larger than the rows that actually need
+    clearing.  Clearing every formatted row is slow and can trigger high memory
+    usage in Render.  For newly-copied templates we only need to clear existing
+    sample rows plus the rows that will be written in this run.
+    """
+    unique_columns = sorted({int(c) for c in columns if c})
+    if not unique_columns:
+        return
+
+    actual_data_rows = max(0, int(data_row_count or 0))
+    required_last_row = start_row + actual_data_rows + max(0, int(extra_rows or 0)) - 1
+    if ws.max_row <= TEMPLATE_CLEAR_FULL_MAX_ROWS:
+        max_row = max(ws.max_row, required_last_row, start_row)
+    else:
+        # Large max_row usually means styles/validations extend far down the sheet.
+        # Avoid clearing those empty formatted rows; they do not contain run output.
+        max_row = max(required_last_row, start_row)
+
     for row_idx in range(start_row, max_row + 1):
-        for col_idx in columns:
-            ws.cell(row_idx, col_idx).value = None
+        for col_idx in unique_columns:
+            ws.cell(row=row_idx, column=col_idx).value = None
 
 def _normalize_template_header(value: Any) -> str:
     """Normalize a bulk-template header for resilient column matching."""
@@ -324,13 +354,34 @@ def _find_template_optional_column(ws, aliases: list[str]) -> int | None:
 
 def _write_template_value(ws, row_idx: int, col_idx: int | None, value: Any) -> None:
     if col_idx:
-        ws.cell(row_idx, int(col_idx)).value = value
+        ws.cell(row=row_idx, column=int(col_idx)).value = value
 
 
-def _clear_template_columns(ws, start_row: int, columns: list[int]) -> None:
+def _write_template_row(ws, row_idx: int, values_by_column: dict[int | None, Any]) -> None:
+    """Write one sparse template row with fewer helper calls in the hot path."""
+    for col_idx, value in values_by_column.items():
+        if col_idx:
+            ws.cell(row=row_idx, column=int(col_idx)).value = value
+
+
+def _clear_template_columns(
+    ws,
+    start_row: int,
+    columns: list[int],
+    data_row_count: int | None = None,
+    extra_rows: int = TEMPLATE_CLEAR_EXTRA_ROWS,
+) -> None:
     unique_columns = sorted({int(c) for c in columns if c})
     if unique_columns:
-        _clear_target_cells(ws, start_row, unique_columns)
+        _clear_target_cells(ws, start_row, unique_columns, data_row_count=data_row_count, extra_rows=extra_rows)
+
+
+def _ensure_dataframe_columns(df: pd.DataFrame, defaults: dict[str, Any]) -> pd.DataFrame:
+    """Ensure optional output columns exist without rebuilding the DataFrame."""
+    for col, default in defaults.items():
+        if col not in df.columns:
+            df[col] = default
+    return df
 
 RAW_MATERIAL_NAME_ALIASES = ["raw_material_name", "Raw Material Name", "原物料名稱", "原料名稱"]
 RAW_MATERIAL_CODE_ALIASES = ["raw_material_code", "Raw Material Code", "Raw Material ID", "Raw Material Number", "原物料代碼", "原料代碼"]
@@ -2031,20 +2082,43 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
         "supplier_address": _find_template_column(ws, SUPPLIER_BULK_ADDRESS_ALIASES, 4),
         "unit_name": _find_template_column(ws, SUPPLIER_BULK_UNIT_ALIASES, 5),
     }
-    _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
-
     rows: list[dict[str, str]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
-    for _, row in expanded_with_suppliers.iterrows():
-        supplier_code = _normalize_vendor_code(_first_text(row, ["supplier_code", "vendor_code", "Vendor", "Vender", "Supplier Code"]))
+
+    # Large-data optimization: avoid DataFrame.iterrows() in the supplier bulk
+    # hot path.  ``itertuples(name=None)`` is faster and avoids building a Series
+    # object for every row.
+    supplier_source_cols = [
+        "supplier_code", "vendor_code", "Vendor", "Vender", "Supplier Code",
+        "transport_destination", "Transportation Destination", "transportation_destination",
+        "production_site", "Production Site", "Unit Name",
+        "supplier_name", "Supplier Name", "Supplier Name (optional)",
+        "supplier_master_name", "Vendor Name", "Search Term",
+        "supplier_country_area", "Country/Area", "country_area", "Country",
+        "supplier_address", "Supplier Address", "transport_origin", "Transportation Origin",
+    ]
+    supplier_source_cols = list(dict.fromkeys([c for c in supplier_source_cols if c in expanded_with_suppliers.columns]))
+    source_index = {col: idx for idx, col in enumerate(supplier_source_cols)}
+
+    def tuple_first_text(values: tuple[Any, ...], names: list[str]) -> str:
+        for name in names:
+            idx = source_index.get(name)
+            if idx is not None:
+                text = _safe_text(values[idx])
+                if text:
+                    return text
+        return ""
+
+    for values in expanded_with_suppliers[supplier_source_cols].itertuples(index=False, name=None):
+        supplier_code = _normalize_vendor_code(tuple_first_text(values, ["supplier_code", "vendor_code", "Vendor", "Vender", "Supplier Code"]))
         if not supplier_code:
             continue
-        unit_name = _first_text(row, ["transport_destination", "Transportation Destination", "transportation_destination", "production_site", "Production Site", "Unit Name"])
-        supplier_name = _first_text(row, ["supplier_name", "Supplier Name", "Supplier Name (optional)"])
+        unit_name = tuple_first_text(values, ["transport_destination", "Transportation Destination", "transportation_destination", "production_site", "Production Site", "Unit Name"])
+        supplier_name = tuple_first_text(values, ["supplier_name", "Supplier Name", "Supplier Name (optional)"])
         if not supplier_name:
-            supplier_name = _first_text(row, ["supplier_master_name", "Vendor Name", "Search Term"])
-        country_area = _first_text(row, ["supplier_country_area", "Country/Area", "country_area", "Country"])
-        supplier_address = _first_text(row, ["supplier_address", "Supplier Address", "transport_origin", "Transportation Origin"])
+            supplier_name = tuple_first_text(values, ["supplier_master_name", "Vendor Name", "Search Term"])
+        country_area = tuple_first_text(values, ["supplier_country_area", "Country/Area", "country_area", "Country"])
+        supplier_address = tuple_first_text(values, ["supplier_address", "Supplier Address", "transport_origin", "Transportation Origin"])
         key = (supplier_name, supplier_code, country_area, supplier_address, unit_name)
         if key in seen:
             continue
@@ -2057,14 +2131,17 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
             "unit_name": unit_name,
         })
 
-    row_idx = DATA_START_ROW
-    for row in rows:
-        _write_template_value(ws, row_idx, cols["supplier_name"], row["supplier_name"])
-        _write_template_value(ws, row_idx, cols["supplier_code"], row["supplier_code"])
-        _write_template_value(ws, row_idx, cols["country_area"], row["country_area"])
-        _write_template_value(ws, row_idx, cols["supplier_address"], row["supplier_address"])
-        _write_template_value(ws, row_idx, cols["unit_name"], row["unit_name"])
-        row_idx += 1
+    _clear_template_columns(ws, DATA_START_ROW, list(cols.values()), data_row_count=len(rows))
+
+    for offset, row in enumerate(rows):
+        row_idx = DATA_START_ROW + offset
+        _write_template_row(ws, row_idx, {
+            cols["supplier_name"]: row["supplier_name"],
+            cols["supplier_code"]: row["supplier_code"],
+            cols["country_area"]: row["country_area"],
+            cols["supplier_address"]: row["supplier_address"],
+            cols["unit_name"]: row["unit_name"],
+        })
 
     wb.save(output_path)
     return {
@@ -2134,45 +2211,81 @@ def _write_raw_material_bulk_from_exploded(
         tbc_supplier_map=tbc_supplier_map,
     )
 
-    _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
-    _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()))
+    # Large-data optimization: clear only the data area required for this run.
+    # This avoids iterating through far-down template formatting rows.
+    _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()), data_row_count=len(expanded))
 
-    row_idx = DATA_START_ROW
-    for _, r in expanded.iterrows():
-        valid_from = r["valid_from"]
+    expanded = _ensure_dataframe_columns(expanded, {
+        "raw_material": "",
+        "valid_from": None,
+        "usage": 0.0,
+        "unit": "",
+        "supplier_name": "",
+        "transport_origin": "",
+        "transport_destination": "",
+        "target_product": "",
+        "material_group": "",
+        "net_weight": "",
+        "gross_weight": "",
+        "weight_uom": "",
+        "description": "",
+    })
+    activity_source_cols = [
+        "raw_material", "valid_from", "usage", "unit", "supplier_name",
+        "transport_origin", "transport_destination", "target_product",
+        "material_group", "net_weight", "gross_weight", "weight_uom",
+    ]
+
+    for offset, values in enumerate(expanded[activity_source_cols].itertuples(index=False, name=None)):
+        (
+            raw_material, valid_from, usage, unit, supplier_name, transport_origin,
+            transport_destination, target_product, material_group, net_weight,
+            gross_weight, weight_uom,
+        ) = values
         if not isinstance(valid_from, date):
             valid_from = _date_from_value(valid_from)
-        usage_value = float(r["usage"]) if not pd.isna(r["usage"]) else 0
-        _write_template_value(activity_ws, row_idx, activity_cols["raw_name"], r["raw_material"])
-        _write_template_value(activity_ws, row_idx, activity_cols["raw_code"], r["raw_material"])
-        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], _year_start(valid_from))
-        _write_template_value(activity_ws, row_idx, activity_cols["end_date"], _year_end(valid_from))
-        _write_template_value(activity_ws, row_idx, activity_cols["document_type"], document_type_value)
-        _write_template_value(activity_ws, row_idx, activity_cols["document_number"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["usage"], usage_value)
-        _write_template_value(activity_ws, row_idx, activity_cols["unit"], r["unit"])
-        _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
-        _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], r.get("supplier_name", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], r.get("transport_origin", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], r.get("transport_destination", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols["target_product"], r["target_product"])
-        _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
-        _write_template_value(activity_ws, row_idx, activity_cols.get("net_weight"), r.get("net_weight", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols.get("gross_weight"), r.get("gross_weight", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols.get("weight_unit"), r.get("weight_uom", ""))
-        activity_ws.cell(row_idx, activity_cols["start_date"]).number_format = "yyyy/mm/dd"
-        activity_ws.cell(row_idx, activity_cols["end_date"]).number_format = "yyyy/mm/dd"
-        row_idx += 1
+        usage_value = float(usage) if not pd.isna(usage) else 0
+        row_idx = DATA_START_ROW + offset
+        _write_template_row(activity_ws, row_idx, {
+            activity_cols["raw_name"]: raw_material,
+            activity_cols["raw_code"]: raw_material,
+            activity_cols["start_date"]: _year_start(valid_from),
+            activity_cols["end_date"]: _year_end(valid_from),
+            activity_cols["document_type"]: document_type_value,
+            activity_cols["document_number"]: "",
+            activity_cols["usage"]: usage_value,
+            activity_cols["unit"]: unit,
+            activity_cols["data_source"]: "SAP",
+            activity_cols["data_source_other"]: "",
+            activity_cols["supplier_name"]: supplier_name,
+            activity_cols["transport_origin"]: transport_origin,
+            activity_cols["transport_destination"]: transport_destination,
+            activity_cols["target_product"]: target_product,
+            activity_cols["comment"]: "",
+            activity_cols["material_group"]: material_group,
+            activity_cols.get("net_weight"): net_weight,
+            activity_cols.get("gross_weight"): gross_weight,
+            activity_cols.get("weight_unit"): weight_uom,
+        })
+        activity_ws.cell(row=row_idx, column=activity_cols["start_date"]).number_format = "yyyy/mm/dd"
+        activity_ws.cell(row=row_idx, column=activity_cols["end_date"]).number_format = "yyyy/mm/dd"
 
-    raw_unique = expanded.sort_values(["raw_material"]).drop_duplicates(subset=["raw_material"])[["raw_material", "description"]] if not expanded.empty else pd.DataFrame(columns=["raw_material", "description"])
-    row_idx = DATA_START_ROW
-    for _, r in raw_unique.iterrows():
-        _write_template_value(raw_ws, row_idx, raw_cols["raw_name"], r["raw_material"])
-        _write_template_value(raw_ws, row_idx, raw_cols["raw_code"], r["raw_material"])
-        _write_template_value(raw_ws, row_idx, raw_cols["description"], r["description"])
-        row_idx += 1
+    raw_unique = (
+        expanded[["raw_material", "description"]]
+        .sort_values(["raw_material"])
+        .drop_duplicates(subset=["raw_material"])
+        if not expanded.empty
+        else pd.DataFrame(columns=["raw_material", "description"])
+    )
+    _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()), data_row_count=len(raw_unique))
+    for offset, values in enumerate(raw_unique[["raw_material", "description"]].itertuples(index=False, name=None)):
+        raw_material, description = values
+        row_idx = DATA_START_ROW + offset
+        _write_template_row(raw_ws, row_idx, {
+            raw_cols["raw_name"]: raw_material,
+            raw_cols["raw_code"]: raw_material,
+            raw_cols["description"]: description,
+        })
 
     wb.save(output_path)
     result = {
