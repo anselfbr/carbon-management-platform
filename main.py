@@ -16,7 +16,15 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_module2_outputs_memory_optimized
+from bom_formatter import (
+    BOM_FORMATTER_VERSION,
+    generate_raw_material_bulk_file,
+    generate_raw_material_bulk_files_by_site_zip,
+    export_bom_structure_file,
+    generate_working_hour_rollup_file,
+    generate_module2_outputs_memory_optimized,
+    generate_supplier_mapped_raw_material_bulk_file,
+)
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -31,7 +39,7 @@ MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE2_STEP1_OUTPUT_PATH: Optional[Path] = None
 LATEST_MODULE2_STEP1_OUTPUT_PATH = UPLOAD_DIR / "module2_step1_output_latest.xlsx"
 
-CMP_MAIN_VERSION = "CMP_PATCH_V22_6_STABLE"
+CMP_MAIN_VERSION = "CMP_PATCH_V22_7_MEMORY_SAFE_SPLIT_SUPPLIER"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -1899,6 +1907,104 @@ def module3_raw_material_bulk_source():
         "download_url": f"/download/{raw_path.name}",
     }
 
+
+
+# =========================================================
+# Module 2B · Supplier Mapping
+# Raw Material Bulk + Supplier Master -> Supplier-filled Raw Material Bulk
+# =========================================================
+@app.post("/process-supplier-mapping")
+async def process_supplier_mapping(request: Request):
+    """Apply supplier master data after Module 2A BOM Expansion.
+
+    Memory-safe design:
+    - Module 2A expands BOM only.
+    - Module 2B reads the generated Raw Material Bulk xlsx and applies the
+      Raw Material × Supplier one-to-many expansion in a separate request.
+    """
+    try:
+        form = await request.form()
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": f"無法讀取上傳表單：{exc}"}, status_code=400)
+
+    def is_upload_file_like(item) -> bool:
+        return bool(getattr(item, "filename", None)) and hasattr(item, "read")
+
+    raw_bulk_file = (
+        form.get("raw_material_bulk_file")
+        or form.get("raw_bulk_file")
+        or form.get("module2_raw_material_bulk_file")
+    )
+
+    supplier_uploads = []
+    for item in form.getlist("supplier_files") + form.getlist("supplier_file"):
+        if is_upload_file_like(item):
+            supplier_uploads.append(item)
+
+    if not raw_bulk_file or not getattr(raw_bulk_file, "filename", None):
+        return JSONResponse(
+            {"ok": False, "message": "請上傳 Module 2A 產出的 Raw Material Bulk xlsx 檔案。建議使用 all-sites xlsx。"},
+            status_code=400,
+        )
+
+    raw_filename = str(getattr(raw_bulk_file, "filename", "") or "")
+    if not raw_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "Raw Material Bulk 請上傳 Excel 檔案，不支援直接上傳 ZIP。"}, status_code=400)
+
+    if not supplier_uploads:
+        return JSONResponse({"ok": False, "message": "請至少上傳一個 Supplier Master Excel 檔案。"}, status_code=400)
+
+    for supplier_file in supplier_uploads:
+        filename = str(getattr(supplier_file, "filename", "") or "")
+        if filename and not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{filename} 不是 Supplier Excel 檔案"}, status_code=400)
+
+    token = uuid.uuid4().hex[:10]
+    raw_bulk_path = UPLOAD_DIR / f"module2b_raw_bulk_{token}_{Path(raw_filename).name}"
+    raw_bulk_path.write_bytes(await raw_bulk_file.read())
+
+    supplier_paths: list[Path] = []
+    for idx, supplier_file in enumerate(supplier_uploads, start=1):
+        filename = str(getattr(supplier_file, "filename", "") or f"supplier_{idx}.xlsx")
+        supplier_path = UPLOAD_DIR / f"module2b_supplier_{token}_{idx}_{Path(filename).name}"
+        supplier_path.write_bytes(await supplier_file.read())
+        supplier_paths.append(supplier_path)
+
+    supplier_bulk_template_path = BASE_DIR / "templates" / "supplier_bulk_create_template_v1.xlsx"
+    supplier_bulk_output_path = OUTPUT_DIR / f"supplier_bulk_create_{token}.xlsx"
+
+    try:
+        summary = generate_supplier_mapped_raw_material_bulk_file(
+            raw_material_bulk_path=raw_bulk_path,
+            supplier_paths=supplier_paths,
+            output_dir=OUTPUT_DIR,
+            token=token,
+            supplier_bulk_template_path=supplier_bulk_template_path if supplier_bulk_template_path.exists() else None,
+            supplier_bulk_output_path=supplier_bulk_output_path,
+        )
+        summary["supplier_upload_files"] = len(supplier_paths)
+        summary["app_version"] = CMP_MAIN_VERSION
+        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    finally:
+        try:
+            del supplier_paths
+            gc.collect()
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "message": "Supplier Mapping completed successfully.",
+        "summary": summary,
+        "download_url": summary.get("download_url", ""),
+        "app_version": CMP_MAIN_VERSION,
+        "bom_formatter_version": BOM_FORMATTER_VERSION,
+    }
+
 # =========================================================
 # Module 3 · Carbon Emission Factor Selection
 # CCL Mapping + Factor Library Search
@@ -2284,7 +2390,7 @@ async def process_bom_expansion(request: Request):
         else:
             summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
             summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
-        summary["app_version"] = "CMP_PATCH_V22_6_STABLE"
+        summary["app_version"] = "CMP_PATCH_V22_7_MEMORY_SAFE_SPLIT_SUPPLIER"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -2302,7 +2408,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_PATCH_V22_6_STABLE",
+        "app_version": "CMP_PATCH_V22_7_MEMORY_SAFE_SPLIT_SUPPLIER",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
