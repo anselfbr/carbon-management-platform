@@ -1115,10 +1115,10 @@ def generate_raw_material_bulk_files_by_site_zip(
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
-    trace_detail = exploded.attrs.get("trace_detail", pd.DataFrame())
-    trace_filename = f"bom_trace_detail_{token}.xlsx"
-    trace_path = output_dir / trace_filename
-    trace_summary = _write_bom_trace_detail_file(trace_detail, annual_qty_map, trace_path)
+    # Production mode: do not generate bom_trace_detail_*.xlsx.
+    # That file was only for BOM debugging and must not be included in the Module 2 ZIP,
+    # because Module 3 consumes every Excel in the package as raw-material bulk input.
+    trace_summary: dict[str, Any] = {}
     exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
     exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
@@ -1166,8 +1166,6 @@ def generate_raw_material_bulk_files_by_site_zip(
     zip_path = output_dir / zip_filename
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        if trace_path.exists():
-            zf.write(trace_path, arcname=trace_path.name)
         for site in site_values:
             site_df = work[work["_production_site"] == site].copy()
             site_df = site_df.drop(columns=["_target_key", "_production_site"], errors="ignore")
@@ -2195,10 +2193,10 @@ def generate_raw_material_bulk_files_by_site_zip(
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
-    trace_detail = exploded.attrs.get("trace_detail", pd.DataFrame())
-    trace_filename = f"bom_trace_detail_{token}.xlsx"
-    trace_path = output_dir / trace_filename
-    trace_summary = _write_bom_trace_detail_file(trace_detail, annual_qty_map, trace_path)
+    # Production mode: do not generate bom_trace_detail_*.xlsx.
+    # That file was only for BOM debugging and must not be included in the Module 2 ZIP,
+    # because Module 3 consumes every Excel in the package as raw-material bulk input.
+    trace_summary: dict[str, Any] = {}
     exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
     exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(step1_output_path=step1_output_path, bom_df=bom_df)
@@ -2238,8 +2236,6 @@ def generate_raw_material_bulk_files_by_site_zip(
     zip_path = output_dir / zip_filename
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        if trace_path.exists():
-            zf.write(trace_path, arcname=trace_path.name)
         for site in site_values:
             site_df = work[work["_production_site"] == site].copy().drop(columns=["_target_key", "_production_site"], errors="ignore")
             safe_site = _sanitize_filename_part(site)
