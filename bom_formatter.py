@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import gc
+import os
+import resource
 import re
 import shutil
 import tempfile
@@ -17,9 +19,74 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V22_8_BOM_ENGINE_ROW_LIMIT_SAFE"
+BOM_FORMATTER_VERSION = "CMP_V22_9_BOM_ENGINE_DIAGNOSTIC"
 EXCEL_MAX_ROWS = 1048576
 EXCEL_SAFE_DATA_ROWS = 900000  # keep buffer for template/header rows
+
+
+# =========================================================
+# V22.9 Diagnostic helpers
+# Purpose: identify where Module 2 exceeds Render 2GB memory.
+# Logs are written both to stdout and outputs/module2_memory_log_<token>.txt.
+# =========================================================
+_DIAG_LOG_PATH: Path | None = None
+
+def _rss_mb() -> float:
+    """Return current process resident memory in MB where available."""
+    try:
+        # Linux ru_maxrss is KB. macOS is bytes, but Render is Linux.
+        return float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) / 1024.0
+    except Exception:
+        return -1.0
+
+
+def _df_memory_mb(df: pd.DataFrame | None) -> float:
+    try:
+        if df is None:
+            return 0.0
+        return float(df.memory_usage(deep=True).sum()) / 1024.0 / 1024.0
+    except Exception:
+        return -1.0
+
+
+def _diag_set_log_path(path: str | Path | None) -> None:
+    global _DIAG_LOG_PATH
+    _DIAG_LOG_PATH = Path(path) if path else None
+    if _DIAG_LOG_PATH:
+        try:
+            _DIAG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _DIAG_LOG_PATH.write_text("", encoding="utf-8")
+        except Exception:
+            _DIAG_LOG_PATH = None
+
+
+def _diag_log(step: str, **metrics: Any) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    parts = [f"[{now}] [Module2Diag] {step}", f"rss_mb={_rss_mb():.1f}"]
+    for key, value in metrics.items():
+        try:
+            if isinstance(value, float):
+                parts.append(f"{key}={value:.3f}")
+            else:
+                parts.append(f"{key}={value}")
+        except Exception:
+            parts.append(f"{key}={value}")
+    line = " | ".join(parts)
+    print(line, flush=True)
+    if _DIAG_LOG_PATH:
+        try:
+            with _DIAG_LOG_PATH.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except Exception:
+            pass
+
+
+def _diag_df(name: str, df: pd.DataFrame | None) -> None:
+    if df is None:
+        _diag_log(name, rows=0, cols=0, df_memory_mb=0.0)
+        return
+    _diag_log(name, rows=int(len(df)), cols=int(len(df.columns)), df_memory_mb=_df_memory_mb(df))
+
 
 
 DEFAULT_MAPPING = {
@@ -2104,7 +2171,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V22_8_BOM_ENGINE_ROW_LIMIT_SAFE"
+BOM_FORMATTER_VERSION = "CMP_V22_9_BOM_ENGINE_DIAGNOSTIC"
 
 
 # =========================================================
@@ -2250,17 +2317,29 @@ def generate_module2_outputs_memory_optimized(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    diag_log_path = output_dir / f"module2_memory_log_{token}.txt"
+    _diag_set_log_path(diag_log_path)
+    _diag_log("Module 2A start", token=token, version=BOM_FORMATTER_VERSION)
 
     if supplier_paths:
         # Keep compatibility with old callers but do not expand supplier rows in Module 2A.
         supplier_paths = []
 
+    _diag_log("Reading Standard BOM files")
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    _diag_df("BOM normalized DataFrame", bom_df)
+    _diag_log("BOM read summary", bom_files=used_columns.get("bom_files", 1) if isinstance(used_columns, dict) else 1, rows_before_dedup=used_columns.get("bom_rows_before_dedup", 0) if isinstance(used_columns, dict) else 0, rows_after_dedup=used_columns.get("bom_rows_after_dedup", 0) if isinstance(used_columns, dict) else 0)
     try:
+        _diag_log("BOM explosion start")
         exploded, base_summary = _explode_bom(bom_df)
+        _diag_df("Exploded BOM DataFrame", exploded)
+        _diag_log("BOM explosion summary", **base_summary)
         exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+        _diag_df("Exploded BOM after zero-usage filter", exploded)
 
+        _diag_log("Read Step1 product master maps start")
         site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
+        _diag_log("Read Step1 product master maps done", mapped_materials=step1_summary.get("step1_mapped_materials", 0), step1_rows=step1_summary.get("step1_rows", 0))
         if exploded.empty:
             work = exploded.assign(_production_site="Unassigned", transport_destination="Unassigned")
         else:
@@ -2271,6 +2350,13 @@ def generate_module2_outputs_memory_optimized(
             work["transport_destination"] = work["_production_site"]
             if "material_group" not in work.columns:
                 work["material_group"] = ""
+
+        _diag_df("Work DataFrame with production site", work)
+        try:
+            site_counts = work["_production_site"].value_counts(dropna=False).head(20).to_dict() if not work.empty and "_production_site" in work.columns else {}
+            _diag_log("Top production-site row counts", top_sites=site_counts)
+        except Exception as exc:
+            _diag_log("Top production-site row counts failed", error=str(exc))
 
         base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
         base_summary["activity_rows"] = int(len(work))
@@ -2287,7 +2373,9 @@ def generate_module2_outputs_memory_optimized(
         unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
 
         for site in site_values:
+            _diag_log("Writing site start", site=site)
             site_df = work.loc[work["_production_site"].eq(site)].drop(columns=["_target_key", "_production_site"], errors="ignore")
+            _diag_df(f"Site DataFrame: {site}", site_df)
             safe_site = _sanitize_filename_part(site)
             site_generated, site_paths = _write_raw_material_bulk_parts_to_zip(
                 exploded=site_df,
@@ -2301,8 +2389,10 @@ def generate_module2_outputs_memory_optimized(
             generated_files.extend(site_generated)
             if first_xlsx_path is None and site_paths:
                 first_xlsx_path = site_paths[0]
+            _diag_log("Writing site done", site=site, generated_parts=len(site_paths))
             del site_df
             gc.collect()
+            _diag_log("GC after site", site=site)
 
         all_sites_rows = int(len(work))
         all_sites_output_filename = ""
@@ -2315,6 +2405,7 @@ def generate_module2_outputs_memory_optimized(
 
         # Create a single all-sites workbook only when it is Excel-safe. If too large,
         # create a ZIP of parts instead and do not pretend it is a complete Module 3 source.
+        _diag_log("All-sites export decision", all_sites_rows=all_sites_rows, excel_safe_data_rows=EXCEL_SAFE_DATA_ROWS)
         if all_sites_rows <= EXCEL_SAFE_DATA_ROWS:
             all_sites_path = output_dir / f"raw_material_activity_data_bulk_all_sites_{token}.xlsx"
             all_sites_df = work.drop(columns=["_target_key", "_production_site"], errors="ignore")
@@ -2391,8 +2482,12 @@ def generate_module2_outputs_memory_optimized(
             "working_hour_rollup_rows": 0,
             "working_hour_rollup_skip_reason": "Skipped in V22.8 memory-safe mode to avoid additional large Excel output.",
             "memory_optimization_version": BOM_FORMATTER_VERSION,
+            "diagnostic_log_filename": diag_log_path.name,
+            "diagnostic_log_download_url": f"/download/{diag_log_path.name}",
+            "diagnostic_peak_rss_mb": float(_rss_mb()),
         })
         summary.update(step1_summary)
+        _diag_log("Module 2A success", output_filename=zip_filename, rows=all_sites_rows, peak_rss_mb=_rss_mb())
         return summary
     finally:
         for name in ["bom_df", "exploded", "work"]:
@@ -2402,6 +2497,7 @@ def generate_module2_outputs_memory_optimized(
                 except Exception:
                     pass
         gc.collect()
+        _diag_log("Module 2A finally after cleanup", peak_rss_mb=_rss_mb())
 
 
 def process_supplier_mapping_file(
@@ -2562,7 +2658,7 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
             "activity_rows": 0,
             "max_level": 0,
             "cycles_skipped": 0,
-            "bom_engine_version": "CMP_V22_0_BOM_ENGINE_REWRITE",
+            "bom_engine_version": "CMP_V22_9_DIAGNOSTIC",
         }
 
     parent_set = set(df["_parent"].dropna().astype(str).str.strip())
@@ -2573,6 +2669,7 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     semi_finished_set = parent_set.intersection(component_set)
     roots = sorted(parent_set - component_set) or sorted(parent_set)
     children = _build_bom_children_index(df)
+    _diag_log("BOM graph built", parents=len(parent_set), components=len(component_set), roots=len(roots), semi_finished=len(semi_finished_set), child_parent_nodes=len(children))
 
     expansion_cache: dict[str, tuple[tuple[Any, ...], ...]] = {}
     cycle_count = 0
@@ -2646,7 +2743,9 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
     # Aggregate while traversing to avoid building a huge intermediate DataFrame.
     aggregated: dict[tuple[str, str, Any], list[Any]] = {}
 
-    for root in roots:
+    for idx, root in enumerate(roots, start=1):
+        if idx == 1 or idx % 50 == 0 or idx == len(roots):
+            _diag_log("BOM explosion root progress", root_index=idx, root_total=len(roots), aggregated_keys=len(aggregated), cache_nodes=len(expansion_cache))
         root_rows = expand_node(root, (root,))
         for row in root_rows:
             (
@@ -2679,6 +2778,7 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
                 if int(relative_level or 0) > int(current[7] or 0):
                     current[7] = int(relative_level or 0)
 
+    _diag_log("BOM aggregation complete", aggregated_keys=len(aggregated), cache_nodes=len(expansion_cache), cycles_skipped=cycle_count)
     if aggregated:
         records = [
             (
@@ -2696,6 +2796,7 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
             )
             for (target_product, raw_material, unit), values in aggregated.items()
         ]
+        _diag_log("Creating exploded DataFrame from records", records=len(records))
         exploded = pd.DataFrame.from_records(
             records,
             columns=[
@@ -2718,7 +2819,7 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
         "activity_rows": int(len(exploded)),
         "max_level": int(exploded["level"].max()) if not exploded.empty else 0,
         "cycles_skipped": int(cycle_count),
-        "bom_engine_version": "CMP_V22_0_BOM_ENGINE_REWRITE",
+        "bom_engine_version": "CMP_V22_9_DIAGNOSTIC",
         "bom_engine_cached_nodes": int(len(expansion_cache)),
     }
     return exploded, summary

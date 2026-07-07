@@ -30,7 +30,7 @@ LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE2_STEP1_OUTPUT_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_PATCH_V22_8_ROW_LIMIT_SAFE"
+CMP_MAIN_VERSION = "CMP_PATCH_V22_9_DIAGNOSTIC"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -2310,7 +2310,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_PATCH_V22_8_ROW_LIMIT_SAFE",
+        "app_version": CMP_MAIN_VERSION,
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
