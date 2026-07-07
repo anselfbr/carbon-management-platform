@@ -354,7 +354,7 @@
             <form id="bulkForm" class="form-panel">
               <div class="module3-source-card">
                 <b data-i18n="uploadStep1OutputFile">Module 1 Step 1 Output</b>
-                <p>來源：系統將自動使用 Module 1 Step 1 最新產出檔案。</p>
+                <p>來源：系統將自動使用 Module 1 Step 1 最新產出檔案（UTC+8）。</p>
               </div>
 
               <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
@@ -476,7 +476,7 @@
             <form id="module3CclForm" class="module3-action-panel" enctype="multipart/form-data">
               <div id="module3RawBulkSource" class="module3-source-card">
                 <b>Raw Material Activity Data</b>
-                <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...</p>
+                <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...（UTC+8）</p>
               </div>
 
               <label data-i18n="module3UploadCclMapping">上傳光寶 CCL 係數組配表</label>
@@ -601,7 +601,7 @@
 
               <div id="bomStep1Source" class="module3-source-card">
                 <b data-i18n="uploadStep1OutputForRollup">Module 1 Step 1 Output（Auto）</b>
-                <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+                <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...（UTC+8）</p>
               </div>
 
               <p class="form-hint" data-i18n="module2SupplierSplitHint">Supplier mapping has been separated into Module 2B. V22.8 also splits Raw Material Bulk into part files when output exceeds Excel row limits.</p>
@@ -1253,7 +1253,7 @@ async function refreshBomStep1Source() {
     const mode = data.source_mode || '';
     let sourceLabel = 'Module 1 Step 1 最新產出';
     if (mode === 'session_uploaded' || mode === 'cached_upload') sourceLabel = '已上傳 Step1 Output，可直接沿用';
-    bomStep1SourceText.textContent = `來源：${sourceLabel}｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
+    bomStep1SourceText.textContent = `來源：${sourceLabel}｜檔案：${filename}${modified ? `｜建立時間：${modified}（UTC+8）` : ''}`;
   } catch (err) {
     bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
   }
@@ -1518,7 +1518,7 @@ async function refreshModule3RawBulkSource() {
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'raw material bulk';
     const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}` : ''}`;
+    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}（UTC+8）` : ''}`;
   } catch (err) {
     module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
   }

@@ -7,6 +7,7 @@ import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -16,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_module2_outputs_memory_optimized, process_supplier_mapping_file
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_module2_outputs_memory_optimized
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -28,9 +29,8 @@ FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
-MODULE2_STEP1_OUTPUT_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_PATCH_V23_0_EXCEL_STREAMING_AUTO_STEP1"
+CMP_MAIN_VERSION = "CMP_PATCH_V23_1_ONE_STEP_AUTO_STEP1_TAIPEI_M1_LIGHT"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -48,6 +48,13 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
+
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+
+def format_file_mtime_taipei(path: Path) -> str:
+    """Return file modified time in Asia/Taipei timezone for UI display."""
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=TAIPEI_TZ).isoformat(timespec="seconds")
+
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
 print(f"===== CMP MAIN VERSION: {CMP_MAIN_VERSION} =====")
@@ -1478,11 +1485,14 @@ def process_files(
         out_export = out_export.drop(columns=["Labor HR.Act"], errors="ignore")
         annual_export = annual_export.drop(columns=["年度人員工時"], errors="ignore")
 
-    # CMP V19.2 Step1 Output:
-    # Always include 工單明細_已分類 while keeping V19 CPU optimizations and fixed-width export.
-    include_detail_output = True
+    # CMP V23.1 Module 1 Memory Safe:
+    # Do not write 工單明細_已分類 by default. The annual summary sheets are the
+    # downstream source for Module 1 Step2 and Module 2, and skipping the row-level
+    # detail worksheet avoids openpyxl memory spikes on Render.
+    include_detail_output = False
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
+        if include_detail_output:
+            out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
         annual_export.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
         type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
 
@@ -1632,8 +1642,8 @@ async def process(request: Request):
     labor_mode = normalize_labor_mode(form.get("labor_mode") or "both")
     rule_set = normalize_rule_set(form.get("rule_set") or DEFAULT_RULE_SET)
     year = form.get("year")
-    # V19.2: Always export 工單明細_已分類. Frontend no longer shows or sends an optional detail-output flag.
-    include_detail_output = True
+    # V23.1: Memory-safe Step1 output. Row-level detail sheet is disabled by default.
+    include_detail_output = False
 
     saved_paths: list[Path] = []
     for upload in upload_files:
@@ -1674,7 +1684,7 @@ async def process(request: Request):
 async def generate_bulk_file(request: Request):
     """Module 1 Step 2 · Batch Data Formatting.
 
-    V23.0: Step 1 Output is resolved automatically from Module 1 latest output.
+    V23.1: Step 1 Output is resolved automatically from Module 1 latest output.
     A manually uploaded step1_file is still accepted for backward compatibility,
     but the current index.html no longer requires it.
     """
@@ -1741,7 +1751,7 @@ async def generate_bulk_file(request: Request):
         )
         summary["module1_step1_source_filename"] = step1_path.name
         summary["module1_step1_source_mode"] = step1_source_mode
-        summary["app_version"] = CMP_MAIN_VERSION
+        summary["module1_step1_source_modified_at"] = format_file_mtime_taipei(step1_path)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -1838,7 +1848,7 @@ def module2_step1_output_source():
         "ok": True,
         "filename": step1_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": format_file_mtime_taipei(step1_path),
         "download_url": f"/download/{step1_path.name}",
     }
 
@@ -1874,75 +1884,8 @@ def module3_raw_material_bulk_source():
         "ok": True,
         "filename": raw_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": format_file_mtime_taipei(raw_path),
         "download_url": f"/download/{raw_path.name}",
-    }
-
-
-
-@app.post("/process-supplier-mapping")
-async def process_supplier_mapping(request: Request):
-    """Module 2B Supplier Mapping.
-
-    Accepts an existing Raw Material Bulk xlsx from Module 2A and supplier master files.
-    This keeps supplier one-to-many data out of the BOM expansion memory path.
-    """
-    try:
-        form = await request.form()
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse({"ok": False, "message": f"無法讀取上傳表單：{exc}"}, status_code=400)
-
-    def is_upload_file_like(item) -> bool:
-        return bool(getattr(item, "filename", None)) and hasattr(item, "read")
-
-    raw_file = form.get("raw_material_bulk_file")
-    if not raw_file or not is_upload_file_like(raw_file):
-        return JSONResponse({"ok": False, "message": "請上傳 Module 2A 產出的 Raw Material Bulk xlsx"}, status_code=400)
-    raw_filename = str(getattr(raw_file, "filename", "") or "")
-    if not raw_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse({"ok": False, "message": "Raw Material Bulk 請上傳 Excel xlsx/xlsm/xls 檔案；ZIP 請先解壓後分批上傳。"}, status_code=400)
-
-    supplier_uploads = []
-    for item in form.getlist("supplier_files") + form.getlist("supplier_file"):
-        if is_upload_file_like(item):
-            supplier_uploads.append(item)
-    if not supplier_uploads:
-        return JSONResponse({"ok": False, "message": "請至少上傳一個 Supplier Master Excel 檔案"}, status_code=400)
-
-    token = uuid.uuid4().hex[:10]
-    raw_path = UPLOAD_DIR / f"supplier_mapping_raw_{token}_{Path(raw_filename).name}"
-    raw_path.write_bytes(await raw_file.read())
-
-    supplier_paths: list[Path] = []
-    for idx, supplier_file in enumerate(supplier_uploads, start=1):
-        filename = str(getattr(supplier_file, "filename", "") or f"supplier_{idx}.xlsx")
-        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse({"ok": False, "message": f"{filename} 不是 Supplier Excel 檔案"}, status_code=400)
-        supplier_path = UPLOAD_DIR / f"supplier_mapping_{token}_{idx}_{Path(filename).name}"
-        supplier_path.write_bytes(await supplier_file.read())
-        supplier_paths.append(supplier_path)
-
-    try:
-        supplier_bulk_template_path = BASE_DIR / "templates" / "supplier_bulk_create_template_v1.xlsx"
-        summary = process_supplier_mapping_file(
-            raw_material_bulk_path=raw_path,
-            supplier_paths=supplier_paths,
-            output_dir=OUTPUT_DIR,
-            token=token,
-            supplier_bulk_template_path=supplier_bulk_template_path if supplier_bulk_template_path.exists() else None,
-        )
-        summary["app_version"] = CMP_MAIN_VERSION
-        summary["supplier_upload_files"] = len(supplier_paths)
-    except Exception as exc:
-        traceback.print_exc()
-        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
-
-    return {
-        "ok": True,
-        "message": "Supplier Mapping completed successfully.",
-        "summary": summary,
-        "download_url": summary.get("download_url", ""),
     }
 
 # =========================================================
@@ -2134,7 +2077,7 @@ def module3_search_factor_library(
 # =========================================================
 @app.post("/process-bom-expansion")
 async def process_bom_expansion(request: Request):
-    global MODULE2_RAW_MATERIAL_BULK_PATH, MODULE2_STEP1_OUTPUT_PATH
+    global MODULE2_RAW_MATERIAL_BULK_PATH
     """Module 2 BOM Expansion.
 
     V13 supports multiple Standard BOM Excel files.
@@ -2221,31 +2164,21 @@ async def process_bom_expansion(request: Request):
     working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{token}.xlsx"
     supplier_bulk_template_path = BASE_DIR / "templates" / "supplier_bulk_create_template_v1.xlsx"
     supplier_bulk_output_path = OUTPUT_DIR / f"supplier_bulk_create_{token}.xlsx"
-    supplier_paths: list[Path] = []  # Module 2A does not run supplier mapping in V22.8
+    step1_path = _find_latest_module1_step1_output()
+    supplier_paths: list[Path] = []
 
     template_path.write_bytes(await template_file.read())
-
-    # V22.8: prefer the manually uploaded Step1 Output. If omitted, reuse the latest
-    # uploaded Step1 Output in this process/session, then fall back to Module 1 latest output.
-    if step1_file and getattr(step1_file, "filename", None):
-        filename = str(getattr(step1_file, "filename", "") or "step1_output.xlsx")
-        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse({"ok": False, "message": "Module 1 Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
-        step1_path = UPLOAD_DIR / f"module2_step1_{token}_{Path(filename).name}"
-        step1_path.write_bytes(await step1_file.read())
-        MODULE2_STEP1_OUTPUT_PATH = step1_path
-    elif MODULE2_STEP1_OUTPUT_PATH and MODULE2_STEP1_OUTPUT_PATH.exists():
-        step1_path = MODULE2_STEP1_OUTPUT_PATH
-    else:
-        step1_path = _find_latest_module1_step1_output()
-        if step1_path is not None:
-            MODULE2_STEP1_OUTPUT_PATH = step1_path
-
     if step1_path is None:
         return JSONResponse(
-            {"ok": False, "message": "請上傳 Module 1 Step 1 產出的年度產品產量與分類結果，或先完成 Module 1 → Step 1。"},
+            {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"},
             status_code=400,
         )
+
+    for idx, supplier_file in enumerate(supplier_uploads, start=1):
+        filename = str(getattr(supplier_file, "filename", "") or f"supplier_{idx}.xlsx")
+        supplier_path = UPLOAD_DIR / f"supplier_{token}_{idx}_{Path(filename).name}"
+        supplier_path.write_bytes(await supplier_file.read())
+        supplier_paths.append(supplier_path)
 
     mapping = {
         "parent_col": parent_col,
@@ -2270,9 +2203,9 @@ async def process_bom_expansion(request: Request):
             bom_structure_output_path=LATEST_BOM_STRUCTURE_PATH,
             working_hour_rollup_output_path=working_hour_rollup_output_path,
             mapping=mapping,
-            supplier_paths=None,
-            supplier_bulk_template_path=None,
-            supplier_bulk_output_path=None,
+            supplier_paths=supplier_paths,
+            supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
+            supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
         )
         output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
 
@@ -2282,22 +2215,18 @@ async def process_bom_expansion(request: Request):
         # instead of accidentally falling back to an older run.
         MODULE2_RAW_MATERIAL_BULK_PATH = None
         latest_raw_bulk_path = OUTPUT_DIR / "raw_material_activity_data_bulk_latest.xlsx"
-        module3_source_name = str(summary.get("module3_source_filename") or summary.get("all_sites_output_filename") or "")
-        candidate = OUTPUT_DIR / module3_source_name if module3_source_name else None
-        if candidate and candidate.exists() and candidate.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
-            try:
-                shutil.copy2(candidate, latest_raw_bulk_path)
-                MODULE2_RAW_MATERIAL_BULK_PATH = latest_raw_bulk_path
-                summary["module2_raw_material_bulk_latest"] = latest_raw_bulk_path.name
-                summary["module2_raw_material_bulk_latest_download_url"] = f"/download/{latest_raw_bulk_path.name}"
-                summary["module2_raw_material_bulk_source_filename"] = candidate.name
-            except Exception:
-                traceback.print_exc()
-        else:
-            summary["module2_raw_material_bulk_latest"] = ""
-            summary["module2_raw_material_bulk_latest_download_url"] = ""
-            summary["module2_raw_material_bulk_source_filename"] = ""
-            summary["module2_raw_material_bulk_latest_reason"] = "All-sites output was split into ZIP parts because it exceeded the Excel row limit. Module 3 must be run per part."
+        for item in summary.get("production_site_files", []) or []:
+            candidate = OUTPUT_DIR / str(item.get("filename", ""))
+            if candidate.exists() and candidate.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
+                try:
+                    shutil.copy2(candidate, latest_raw_bulk_path)
+                    MODULE2_RAW_MATERIAL_BULK_PATH = latest_raw_bulk_path
+                    summary["module2_raw_material_bulk_latest"] = latest_raw_bulk_path.name
+                    summary["module2_raw_material_bulk_latest_download_url"] = f"/download/{latest_raw_bulk_path.name}"
+                    summary["module2_raw_material_bulk_source_filename"] = candidate.name
+                except Exception:
+                    traceback.print_exc()
+                break
 
         summary["module1_step1_source_filename"] = step1_path.name
         summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
