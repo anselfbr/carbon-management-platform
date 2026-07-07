@@ -17,7 +17,7 @@ from openpyxl import load_workbook, Workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER"
+BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
 
 
 DEFAULT_MAPPING = {
@@ -2102,7 +2102,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER"
+BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
 
 
 # =========================================================
@@ -2746,13 +2746,13 @@ def _calculate_total_working_hour_by_target(
 
 
 # =========================================================
-# CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER
+# CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT
 # - Module 2 outputs one xlsx per Production Site, no ZIP and no all-site file.
 # - Raw Material Bulk writer uses XlsxWriter constant_memory to avoid openpyxl write/save OOM.
 # - Module 3 can directly select one generated site workbook.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER"
+BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
 
 RAW_MATERIAL_ACTIVITY_HEADERS_V23_4 = [
     "Raw Material Name", "Raw Material Code", "Doc. Start Date", "Doc. End Date",
@@ -3102,25 +3102,110 @@ def generate_module2_outputs_memory_optimized(
 
 
 # =========================================================
-# CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER
+# CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT
 # Fast Mode for Module 2
 # - Generate Raw Material Bulk site xlsx only.
 # - Skip Supplier Mapping, Supplier Bulk, BOM Structure export, and Working Hour Roll-up.
 # - Keep Module 3 site-file selection compatible.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER"
+BOM_FORMATTER_VERSION = "CMP_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
+
+
+def _template_layout_for_fast_raw_only(template_path: str | Path) -> dict[str, Any]:
+    """Read only the lightweight layout needed from the uploaded Raw Material Bulk template.
+
+    The fast writer still uses XlsxWriter constant_memory for speed, but the output
+    row-1/row-2 headers, sheet names, column count, and visible column widths follow
+    the uploaded bulk file instead of a hard-coded layout.
+    """
+    template_path = Path(template_path)
+    fallback_activity_headers = list(RAW_MATERIAL_ACTIVITY_HEADERS_V23_4)
+    fallback_raw_headers = list(RAW_MATERIAL_MASTER_HEADERS_V23_4)
+    layout: dict[str, Any] = {
+        "activity_headers": fallback_activity_headers,
+        "raw_headers": fallback_raw_headers,
+        "activity_row1": [None] * len(fallback_activity_headers),
+        "raw_row1": [None] * len(fallback_raw_headers),
+        "activity_widths": [18] * len(fallback_activity_headers),
+        "raw_widths": [18] * len(fallback_raw_headers),
+        "source": "fallback_fixed_headers",
+    }
+
+    if not template_path.exists():
+        return layout
+
+    try:
+        wb = load_workbook(template_path, read_only=False, data_only=False)
+        try:
+            activity_ws = wb[ACTIVITY_SHEET_NAME] if ACTIVITY_SHEET_NAME in wb.sheetnames else wb[wb.sheetnames[0]]
+            raw_ws = wb[RAW_MATERIAL_SHEET_NAME] if RAW_MATERIAL_SHEET_NAME in wb.sheetnames else (wb[wb.sheetnames[1]] if len(wb.sheetnames) > 1 else wb[wb.sheetnames[0]])
+
+            def read_sheet(ws, fallback_headers: list[str]) -> tuple[list[Any], list[Any], list[float]]:
+                max_col = max(int(ws.max_column or 0), len(fallback_headers))
+                row1 = [ws.cell(1, col).value for col in range(1, max_col + 1)]
+                row2 = [ws.cell(2, col).value for col in range(1, max_col + 1)]
+                if not any(str(x or "").strip() for x in row2):
+                    row2 = fallback_headers + [None] * max(0, max_col - len(fallback_headers))
+                widths: list[float] = []
+                for col in range(1, max_col + 1):
+                    letter = ws.cell(1, col).column_letter
+                    width = ws.column_dimensions[letter].width
+                    try:
+                        widths.append(float(width) if width else 18.0)
+                    except Exception:
+                        widths.append(18.0)
+                return row1, row2, widths
+
+            activity_row1, activity_headers, activity_widths = read_sheet(activity_ws, fallback_activity_headers)
+            raw_row1, raw_headers, raw_widths = read_sheet(raw_ws, fallback_raw_headers)
+            layout.update({
+                "activity_headers": activity_headers,
+                "raw_headers": raw_headers,
+                "activity_row1": activity_row1,
+                "raw_row1": raw_row1,
+                "activity_widths": activity_widths,
+                "raw_widths": raw_widths,
+                "source": f"uploaded_template:{template_path.name}",
+            })
+        finally:
+            wb.close()
+    except Exception:
+        # Keep fast mode resilient; if template metadata cannot be read, use the stable fallback.
+        return layout
+    return layout
+
+
+def _header_index_from_aliases(headers: list[Any], aliases: list[str], fallback_zero_based: int | None = None) -> int | None:
+    normalized = {_normalize_template_header(value): idx for idx, value in enumerate(headers) if str(value or "").strip()}
+    for alias in aliases:
+        key = _normalize_template_header(alias)
+        if key in normalized:
+            return int(normalized[key])
+    return fallback_zero_based
+
+
+def _write_row_by_column_map(ws, row_idx: int, values_by_key: dict[str, Any], col_map: dict[str, int | None], date_fmt) -> None:
+    for key, value in values_by_key.items():
+        col_idx = col_map.get(key)
+        if col_idx is None:
+            continue
+        if key in {"start_date", "end_date"} and isinstance(value, date):
+            ws.write_datetime(row_idx, col_idx, datetime(value.year, value.month, value.day), date_fmt)
+        else:
+            ws.write(row_idx, col_idx, value)
 
 
 def _write_raw_material_bulk_from_exploded_fast_raw_only(
     exploded: pd.DataFrame,
+    raw_material_template_path: str | Path,
     output_path: str | Path,
 ) -> Dict[str, Any]:
-    """Fast Raw Material Bulk writer.
+    """Fast Raw Material Bulk writer using uploaded template layout.
 
-    This bypasses supplier one-to-many expansion and does not read/copy the
-    uploaded template workbook. It writes only the two required Module 3 input
-    sheets with template-compatible headers using XlsxWriter constant_memory.
+    It still bypasses slow openpyxl template copying and uses XlsxWriter
+    constant_memory, but it now writes according to the uploaded bulk file:
+    sheet names, blank first row, row-2 headers, column positions, and widths.
     """
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     output_path = Path(output_path)
@@ -3134,25 +3219,69 @@ def _write_raw_material_bulk_from_exploded_fast_raw_only(
             "Please ensure requirements.txt contains XlsxWriter==3.2.0."
         ) from exc
 
+    layout = _template_layout_for_fast_raw_only(raw_material_template_path)
+    activity_headers = list(layout.get("activity_headers") or RAW_MATERIAL_ACTIVITY_HEADERS_V23_4)
+    raw_headers = list(layout.get("raw_headers") or RAW_MATERIAL_MASTER_HEADERS_V23_4)
+
+    activity_col_map = {
+        "raw_name": _header_index_from_aliases(activity_headers, RAW_MATERIAL_NAME_ALIASES, 0),
+        "raw_code": _header_index_from_aliases(activity_headers, RAW_MATERIAL_CODE_ALIASES, 1),
+        "start_date": _header_index_from_aliases(activity_headers, DOC_START_DATE_ALIASES, 2),
+        "end_date": _header_index_from_aliases(activity_headers, DOC_END_DATE_ALIASES, 3),
+        "document_type": _header_index_from_aliases(activity_headers, DOCUMENT_TYPE_ALIASES, 4),
+        "document_number": _header_index_from_aliases(activity_headers, DOCUMENT_NUMBER_ALIASES, 5),
+        "usage": _header_index_from_aliases(activity_headers, USAGE_ALIASES, 6),
+        "unit": _header_index_from_aliases(activity_headers, ACTIVITY_DATA_UNIT_ALIASES, 7),
+        "data_source": _header_index_from_aliases(activity_headers, DATA_SOURCE_ALIASES, 11),
+        "data_source_other": _header_index_from_aliases(activity_headers, DATA_SOURCE_OTHER_ALIASES, 12),
+        "supplier_name": _header_index_from_aliases(activity_headers, SUPPLIER_NAME_ALIASES, 13),
+        "transport_origin": _header_index_from_aliases(activity_headers, TRANSPORT_ORIGIN_ALIASES, 14),
+        "transport_destination": _header_index_from_aliases(activity_headers, TRANSPORT_DESTINATION_ALIASES, 15),
+        "target_product": _header_index_from_aliases(activity_headers, PRODUCT_LINK_ALIASES, 16),
+        "comment": _header_index_from_aliases(activity_headers, COMMENT_ALIASES, 17),
+        "material_group": _header_index_from_aliases(activity_headers, MATERIAL_GROUP_ALIASES, 18),
+        "net_weight": _header_index_from_aliases(activity_headers, NET_WEIGHT_ALIASES, 19),
+        "gross_weight": _header_index_from_aliases(activity_headers, GROSS_WEIGHT_ALIASES, 20),
+        "weight_unit": _header_index_from_aliases(activity_headers, WEIGHT_UNIT_ALIASES, 21),
+    }
+    raw_col_map = {
+        "raw_name": _header_index_from_aliases(raw_headers, RAW_MATERIAL_NAME_ALIASES, 0),
+        "raw_code": _header_index_from_aliases(raw_headers, RAW_MATERIAL_CODE_ALIASES, 1),
+        "description": _header_index_from_aliases(raw_headers, RAW_MATERIAL_DESC_ALIASES, 5),
+    }
+
     workbook = _cmp_xlsxwriter.Workbook(str(output_path), {
         "constant_memory": True,
         "strings_to_urls": False,
         "nan_inf_to_errors": True,
     })
     date_fmt = workbook.add_format({"num_format": "yyyy/mm/dd"})
+    header_fmt = workbook.add_format({"bold": True})
 
     activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
     raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
 
-    for col_idx, header in enumerate(RAW_MATERIAL_ACTIVITY_HEADERS_V23_4):
-        activity_ws.write(1, col_idx, header)
-    for col_idx, header in enumerate(RAW_MATERIAL_MASTER_HEADERS_V23_4):
-        raw_ws.write(1, col_idx, header)
+    # Row 1 follows template, row 2 follows template headers.
+    for col_idx, value in enumerate(layout.get("activity_row1") or [None] * len(activity_headers)):
+        if value not in [None, ""]:
+            activity_ws.write(0, col_idx, value)
+    for col_idx, header in enumerate(activity_headers):
+        if header not in [None, ""]:
+            activity_ws.write(1, col_idx, header, header_fmt)
+
+    for col_idx, value in enumerate(layout.get("raw_row1") or [None] * len(raw_headers)):
+        if value not in [None, ""]:
+            raw_ws.write(0, col_idx, value)
+    for col_idx, header in enumerate(raw_headers):
+        if header not in [None, ""]:
+            raw_ws.write(1, col_idx, header, header_fmt)
 
     activity_ws.freeze_panes(2, 0)
     raw_ws.freeze_panes(2, 0)
-    activity_ws.set_column(0, len(RAW_MATERIAL_ACTIVITY_HEADERS_V23_4) - 1, 18)
-    raw_ws.set_column(0, len(RAW_MATERIAL_MASTER_HEADERS_V23_4) - 1, 18)
+    for col_idx, width in enumerate(layout.get("activity_widths") or [18] * len(activity_headers)):
+        activity_ws.set_column(col_idx, col_idx, width or 18)
+    for col_idx, width in enumerate(layout.get("raw_widths") or [18] * len(raw_headers)):
+        raw_ws.set_column(col_idx, col_idx, width or 18)
 
     raw_seen: set[str] = set()
     raw_master_rows: list[tuple[str, str]] = []
@@ -3172,33 +3301,28 @@ def _write_raw_material_bulk_from_exploded_fast_raw_only(
         start_date = _year_start(valid_from)
         end_date = _year_end(valid_from)
 
-        activity_values = [
-            raw_material,
-            raw_material,
-            start_date,
-            end_date,
-            "BOM",
-            "",
-            usage_value,
-            row.get("unit", ""),
-            "", "", "",
-            "SAP",
-            "",
-            "",  # Supplier Name intentionally blank in Fast Mode.
-            "",  # Transportation Origin intentionally blank in Fast Mode.
-            row.get("transport_destination", ""),
-            row.get("target_product", ""),
-            "",
-            row.get("material_group", ""),
-            row.get("net_weight", ""),
-            row.get("gross_weight", ""),
-            row.get("weight_uom", ""),
-        ]
-        for col_idx, value in enumerate(activity_values):
-            if col_idx in (2, 3) and isinstance(value, date):
-                activity_ws.write_datetime(excel_row_idx, col_idx, datetime(value.year, value.month, value.day), date_fmt)
-            else:
-                activity_ws.write(excel_row_idx, col_idx, value)
+        values_by_key = {
+            "raw_name": raw_material,
+            "raw_code": raw_material,
+            "start_date": start_date,
+            "end_date": end_date,
+            "document_type": "BOM",
+            "document_number": "",
+            "usage": usage_value,
+            "unit": row.get("unit", ""),
+            "data_source": "SAP",
+            "data_source_other": "",
+            "supplier_name": "",
+            "transport_origin": "",
+            "transport_destination": row.get("transport_destination", ""),
+            "target_product": row.get("target_product", ""),
+            "comment": "",
+            "material_group": row.get("material_group", ""),
+            "net_weight": row.get("net_weight", ""),
+            "gross_weight": row.get("gross_weight", ""),
+            "weight_unit": row.get("weight_uom", ""),
+        }
+        _write_row_by_column_map(activity_ws, excel_row_idx, values_by_key, activity_col_map, date_fmt)
         excel_row_idx += 1
 
         raw_key = str(raw_material or "").strip()
@@ -3208,9 +3332,11 @@ def _write_raw_material_bulk_from_exploded_fast_raw_only(
 
     raw_excel_row_idx = 2
     for raw_material, description in sorted(raw_master_rows, key=lambda x: x[0]):
-        raw_values = [raw_material, raw_material, "", "", "", description]
-        for col_idx, value in enumerate(raw_values):
-            raw_ws.write(raw_excel_row_idx, col_idx, value)
+        _write_row_by_column_map(raw_ws, raw_excel_row_idx, {
+            "raw_name": raw_material,
+            "raw_code": raw_material,
+            "description": description,
+        }, raw_col_map, date_fmt)
         raw_excel_row_idx += 1
 
     workbook.close()
@@ -3219,7 +3345,10 @@ def _write_raw_material_bulk_from_exploded_fast_raw_only(
         "activity_rows": int(len(exploded)),
         "raw_materials": int(len(raw_seen)),
         "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
-        "raw_material_writer": "xlsxwriter_constant_memory_fast_raw_only_v23_6",
+        "raw_material_writer": "xlsxwriter_constant_memory_template_layout_v23_7",
+        "template_layout_source": str(layout.get("source", "")),
+        "activity_template_columns": activity_col_map,
+        "raw_material_template_columns": raw_col_map,
     }
 
 
@@ -3277,6 +3406,7 @@ def generate_module2_outputs_memory_optimized(
             file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
             write_summary = _write_raw_material_bulk_from_exploded_fast_raw_only(
                 exploded=site_df,
+                raw_material_template_path=raw_material_template_path,
                 output_path=file_path,
             )
             generated_files.append({
