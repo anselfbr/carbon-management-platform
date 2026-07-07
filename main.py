@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import gc
+import json
 import re
 import traceback
 import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,10 +29,12 @@ RULE_LIBRARY_DIR = BASE_DIR / "rule_library"
 FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
+LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH = OUTPUT_DIR / "module2_raw_material_bulk_latest.json"
+TAIPEI_TZ = ZoneInfo("Asia/Taipei")
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_PATCH_V23_7_FAST_RAW_ONLY_TEMPLATE_LAYOUT"
+CMP_MAIN_VERSION = "CMP_PATCH_V23_8_TAIPEI_MANIFEST_MODULE2_FLOW"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -59,7 +63,7 @@ MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
 def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
     job = MODULE3_CCL_JOBS.setdefault(job_id, {})
     job.update(updates)
-    job["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    job["updated_at"] = _now_taipei().isoformat(timespec="seconds")
 
 def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
     def report(progress: int, step: str, remaining_seconds: int | None = None) -> None:
@@ -292,6 +296,72 @@ def ensure_master_files() -> None:
 
 ensure_master_files()
 
+
+def _now_taipei() -> datetime:
+    return datetime.now(TAIPEI_TZ)
+
+
+def _datetime_from_mtime_taipei(mtime: float) -> datetime:
+    return datetime.fromtimestamp(float(mtime), tz=TAIPEI_TZ)
+
+
+def _iso_from_mtime_taipei(mtime: float) -> str:
+    return _datetime_from_mtime_taipei(mtime).isoformat(timespec="seconds")
+
+
+def _safe_output_path(filename: object) -> Path | None:
+    name = Path(str(filename or "").strip()).name
+    if not name:
+        return None
+    path = OUTPUT_DIR / name
+    try:
+        path.resolve().relative_to(OUTPUT_DIR.resolve())
+    except Exception:
+        return None
+    return path
+
+
+def _read_latest_module2_manifest() -> dict[str, Any]:
+    if not LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.exists():
+        return {}
+    try:
+        data = json.loads(LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_latest_module2_manifest(summary: dict[str, Any], selected_filename: str = "") -> None:
+    files: list[dict[str, Any]] = []
+    for item in summary.get("production_site_files", []) or []:
+        filename = str(item.get("filename") or "").strip()
+        path = _safe_output_path(filename)
+        if not path or not path.exists():
+            continue
+        stat = path.stat()
+        files.append({
+            "filename": path.name,
+            "production_site": str(item.get("production_site") or "Unassigned"),
+            "activity_rows": int(item.get("activity_rows", 0) or 0),
+            "raw_materials": int(item.get("raw_materials", 0) or 0),
+            "size_bytes": int(stat.st_size),
+            "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
+            "mtime": float(stat.st_mtime),
+            "download_url": f"/download/{path.name}",
+        })
+    files.sort(key=lambda r: (float(r.get("mtime", 0) or 0), str(r.get("filename", ""))), reverse=True)
+    if not selected_filename and files:
+        selected_filename = str(files[0].get("filename") or "")
+    manifest = {
+        "ok": True,
+        "timezone": "Asia/Taipei",
+        "updated_at": _now_taipei().isoformat(timespec="seconds"),
+        "selected_filename": Path(str(selected_filename or "")).name,
+        "files": files,
+        "module1_step1_source_filename": summary.get("module1_step1_source_filename", ""),
+        "module1_step1_source_download_url": summary.get("module1_step1_source_download_url", ""),
+    }
+    LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def production_site_from_line(product_line: object) -> str:
@@ -1808,34 +1878,57 @@ def module2_step1_output_source():
         "ok": True,
         "filename": step1_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
         "download_url": f"/download/{step1_path.name}",
     }
 
 
 def _list_module2_site_raw_material_bulk_files() -> list[dict[str, Any]]:
-    """List Module 2 site-specific Raw Material Bulk xlsx files for Module 3 selection."""
+    """List Module 2 site-specific Raw Material Bulk xlsx files for Module 3 selection.
+
+    Priority is the latest Module 2 manifest written after /process-bom-expansion.
+    This prevents Module 3 from accidentally picking an older raw-material file
+    after the server restarts or when outputs/ contains historical files.
+    """
+    manifest = _read_latest_module2_manifest()
+    manifest_rows: list[dict[str, Any]] = []
+    for item in manifest.get("files", []) or []:
+        path = _safe_output_path(item.get("filename"))
+        if not path or not path.exists() or path.suffix.lower() not in [".xlsx", ".xlsm", ".xls"]:
+            continue
+        stat = path.stat()
+        row = dict(item)
+        row.update({
+            "filename": path.name,
+            "size_bytes": int(stat.st_size),
+            "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
+            "mtime": float(stat.st_mtime),
+            "download_url": f"/download/{path.name}",
+        })
+        manifest_rows.append(row)
+    if manifest_rows:
+        manifest_rows.sort(key=lambda r: (float(r.get("mtime", 0) or 0), str(r.get("filename", ""))), reverse=True)
+        return manifest_rows
+
     rows: list[dict[str, Any]] = []
     for path in OUTPUT_DIR.glob("raw_material_activity_data_bulk_*.xlsx"):
         name = path.name
         low = name.lower()
         if low.endswith("_latest.xlsx") or "all_sites" in low or "by_site" in low:
             continue
-        # Exclude legacy single all-site pattern if no site text is present.
-        # Current V23.4 files are raw_material_activity_data_bulk_<site>_<token>.xlsx.
         stat = path.stat()
         site_name = name.replace("raw_material_activity_data_bulk_", "")
         site_name = re.sub(r"_[0-9a-f]{10}\.xlsx$", "", site_name, flags=re.I)
         rows.append({
             "filename": name,
             "production_site": site_name or "Unassigned",
-            "size_bytes": stat.st_size,
-            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            "size_bytes": int(stat.st_size),
+            "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
+            "mtime": float(stat.st_mtime),
             "download_url": f"/download/{name}",
         })
-    rows.sort(key=lambda r: (str(r.get("modified_at", "")), str(r.get("filename", ""))), reverse=True)
+    rows.sort(key=lambda r: (float(r.get("mtime", 0) or 0), str(r.get("filename", ""))), reverse=True)
     return rows
-
 
 def _find_latest_module2_raw_material_bulk() -> Path | None:
     """Return the selected Module 2 site workbook, or the latest site workbook."""
@@ -1861,6 +1954,7 @@ def module3_raw_material_bulk_source():
             "ok": False,
             "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。",
             "options": [],
+            "timezone": "Asia/Taipei",
         }
     stat = raw_path.stat()
     return {
@@ -1868,9 +1962,10 @@ def module3_raw_material_bulk_source():
         "filename": raw_path.name,
         "selected_filename": raw_path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
         "download_url": f"/download/{raw_path.name}",
         "options": options,
+        "timezone": "Asia/Taipei",
     }
 
 
@@ -1882,6 +1977,7 @@ def module3_raw_material_bulk_options():
         "ok": True,
         "options": options,
         "selected_filename": selected.name if selected else "",
+        "timezone": "Asia/Taipei",
     }
 
 
@@ -1909,7 +2005,7 @@ async def module3_select_raw_material_bulk(request: Request):
         "filename": path.name,
         "selected_filename": path.name,
         "size_bytes": stat.st_size,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        "modified_at": _iso_from_mtime_taipei(stat.st_mtime),
         "download_url": f"/download/{path.name}",
     }
 
@@ -1947,7 +2043,7 @@ async def module3_apply_ccl_factors_job(
         message="CCL 係數對應已開始。",
         source_filename=raw_path.name,
         remaining_seconds=30,
-        created_at=datetime.now().isoformat(timespec="seconds"),
+        created_at=_now_taipei().isoformat(timespec="seconds"),
     )
     MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path)
     return {"ok": True, "job_id": job_id, "message": "CCL 係數對應已開始。", "source_filename": raw_path.name}
@@ -2249,6 +2345,7 @@ async def process_bom_expansion(request: Request):
 
         summary["module1_step1_source_filename"] = step1_path.name
         summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
+        _write_latest_module2_manifest(summary, selected_filename=summary.get("module2_raw_material_bulk_selected", ""))
         if summary.get("bom_structure_generated") and LATEST_BOM_STRUCTURE_PATH.exists():
             summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
             summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
@@ -2266,6 +2363,8 @@ async def process_bom_expansion(request: Request):
         summary["supplier_bulk_rows"] = 0
         summary["supplier_bulk_generated"] = False
         summary["supplier_status"] = "Skipped in Fast Mode"
+        summary["timezone"] = "Asia/Taipei"
+        summary["module2_manifest_filename"] = LATEST_MODULE2_RAW_MATERIAL_MANIFEST_PATH.name
         summary["app_version"] = CMP_MAIN_VERSION
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:

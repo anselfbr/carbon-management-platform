@@ -354,7 +354,7 @@
             <form id="bulkForm" class="form-panel">
               <div class="module3-source-card">
                 <b data-i18n="uploadStep1OutputFile">Module 1 Step 1 Output</b>
-                <p>來源：系統將自動使用 Module 1 Step 1 最新產出檔案（UTC+8）。</p>
+                <p>來源：系統將自動使用 Module 1 Step 1 最新產出檔案（Asia/Taipei, UTC+8）。</p>
               </div>
 
               <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
@@ -476,7 +476,7 @@
             <form id="module3CclForm" class="module3-action-panel" enctype="multipart/form-data">
               <div id="module3RawBulkSource" class="module3-source-card">
                 <b>Raw Material Activity Data</b>
-                <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...（UTC+8）</p>
+                <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...（Asia/Taipei, UTC+8）</p>
               </div>
 
               <label for="module3RawBulkSelect">選擇 Module 2 廠區資料</label>
@@ -606,7 +606,7 @@
 
               <div id="bomStep1Source" class="module3-source-card">
                 <b data-i18n="uploadStep1OutputForRollup">Module 1 Step 1 Output（Auto）</b>
-                <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...（UTC+8）</p>
+                <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...（Asia/Taipei, UTC+8）</p>
               </div>
 
               <div class="module3-source-card">
@@ -1221,7 +1221,7 @@ async function refreshBomStep1Source() {
     const mode = data.source_mode || '';
     let sourceLabel = 'Module 1 Step 1 最新產出';
     if (mode === 'session_uploaded' || mode === 'cached_upload') sourceLabel = '已上傳 Step1 Output，可直接沿用';
-    bomStep1SourceText.textContent = `來源：${sourceLabel}｜檔案：${filename}${modified ? `｜建立時間：${modified}（UTC+8）` : ''}`;
+    bomStep1SourceText.textContent = `來源：${sourceLabel}｜檔案：${filename}${modified ? `｜建立時間：${modified}（Asia/Taipei, UTC+8）` : ''}`;
   } catch (err) {
     bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
   }
@@ -1254,7 +1254,7 @@ function startBomEstimatedProgress() {
       'Fast Mode：偵測半成品與展開多階 BOM...',
       'Fast Mode：依 Production Site 分檔...',
       'Fast Mode：使用 XlsxWriter constant_memory 寫入各廠區 Raw Material Bulk...',
-      'Fast Mode：完成後更新 Module 3 廠區選單...'
+      'Fast Mode：完成後更新 Module 1 / Module 3 最新檔案來源...'
     ];
     const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
     bomStatusText.textContent = stages[stageIndex];
@@ -1284,7 +1284,8 @@ Activity Data Rows: ${summary.activity_rows}
 Raw Materials: ${summary.raw_materials}
 Production Site Files: ${siteCount}
 Raw Material Writer: ${summary.raw_material_writer || 'xlsxwriter_constant_memory'}
-Skipped: Supplier Mapping / Supplier Bulk / BOM Structure / Working Hour Roll-up`;
+Skipped: Supplier Mapping / Supplier Bulk / BOM Structure / Working Hour Roll-up
+Timezone: Asia/Taipei (UTC+8)`;
 }
 
 function stopBomProgressError(message) {
@@ -1383,6 +1384,8 @@ bomForm.addEventListener('submit', async (e) => {
     if (workingHourRollupDownload) workingHourRollupDownload.style.display = 'none';
     if (supplierBulkDownload) supplierBulkDownload.style.display = 'none';
     stopBomProgressSuccess(data.summary);
+    await refreshModule3RawBulkSource();
+    await refreshBomStep1Source();
   } catch (err) {
     stopBomProgressError(err.message);
   }
@@ -1420,7 +1423,7 @@ async function refreshModule3RawBulkSource() {
     const data = await readJsonOrThrow(res);
     const filename = data.selected_filename || data.filename || 'raw material bulk';
     const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    module3RawBulkSourceText.textContent = `來源：Module 2 已選擇廠區資料｜檔案：${filename}${modified ? `｜建立時間：${modified}（UTC+8）` : ''}`;
+    module3RawBulkSourceText.textContent = `來源：Module 2 已選擇廠區資料｜檔案：${filename}${modified ? `｜建立時間：${modified}（Asia/Taipei, UTC+8）` : ''}`;
 
     if (module3RawBulkSelect) {
       const options = data.options || [];
@@ -1461,7 +1464,7 @@ if (module3RawBulkSelect) {
       });
       const data = await readJsonOrThrow(res);
       const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-      module3RawBulkSourceText.textContent = `來源：Module 2 已選擇廠區資料｜檔案：${data.filename}${modified ? `｜建立時間：${modified}（UTC+8）` : ''}`;
+      module3RawBulkSourceText.textContent = `來源：Module 2 已選擇廠區資料｜檔案：${data.filename}${modified ? `｜建立時間：${modified}（Asia/Taipei, UTC+8）` : ''}`;
     } catch (err) {
       module3RawBulkSourceText.textContent = err.message || '切換 Module 2 廠區檔案失敗。';
     }
