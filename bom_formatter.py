@@ -16,7 +16,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V17_2_FINAL_USAGE_ANNUAL_QTY"
+BOM_FORMATTER_VERSION = "CMP_V17_3_DEBUG_TRACE_DETAIL"
 
 
 DEFAULT_MAPPING = {
@@ -616,6 +616,10 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
             "parent": r["_parent"],
             "component": r["_component"],
             "qty": r["_qty"],
+            "qty_original": r.get("_qty_original", r["_qty"]),
+            "qty_adjusted_by_altitem": bool(r.get("_qty_adjusted_by_altitem", False)),
+            "altitem_group": r.get("_altitem_group", ""),
+            "usage_probability_ratio": r.get("_usage_probability_ratio", None),
             "uom": r["_uom"],
             "description": r["_description"],
             "material_group": r["_material_group"],
@@ -654,9 +658,26 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
                         "material_group": child["material_group"],
                         "valid_from": child["valid_from"],
                         "level": next_level,
+                        "immediate_parent": current_parent,
+                        "trace_path": " > ".join(path + [component]),
+                        "parent_accumulated_qty": accumulated_qty,
+                        "qty_this_level_effective": qty,
+                        "qty_this_level_original": child.get("qty_original", qty),
+                        "qty_adjusted_by_altitem": child.get("qty_adjusted_by_altitem", False),
+                        "altitem_group": child.get("altitem_group", ""),
+                        "usage_probability_ratio": child.get("usage_probability_ratio", None),
+                        "usage_per_path": next_qty,
                     })
 
-    exploded = pd.DataFrame(output_rows)
+    trace_detail = pd.DataFrame(output_rows)
+    if trace_detail.empty:
+        trace_detail = pd.DataFrame(columns=[
+            "target_product", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level",
+            "immediate_parent", "trace_path", "parent_accumulated_qty", "qty_this_level_effective",
+            "qty_this_level_original", "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio", "usage_per_path"
+        ])
+
+    exploded = trace_detail.copy()
     if exploded.empty:
         exploded = pd.DataFrame(columns=[
             "target_product", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level"
@@ -674,6 +695,8 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
             .sort_values(["target_product", "raw_material"])
             .reset_index(drop=True)
         )
+
+    exploded.attrs["trace_detail"] = trace_detail
 
     summary = {
         "products": len(roots),
@@ -955,6 +978,79 @@ def _apply_annual_quantity_to_exploded_usage(
     }
 
 
+
+
+def _write_bom_trace_detail_file(
+    trace_detail: pd.DataFrame,
+    annual_qty_map: dict[str, float] | None,
+    output_path: str | Path,
+) -> Dict[str, Any]:
+    """Write ungrouped BOM trace rows for debugging unexpected usage totals.
+
+    This file shows every raw-material path before final groupby aggregation,
+    so a value such as 1.3 can be checked as 0.3 + 1.0 from separate paths.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    annual_qty_map = annual_qty_map or {}
+    work = trace_detail.copy() if isinstance(trace_detail, pd.DataFrame) else pd.DataFrame()
+    if work.empty:
+        work = pd.DataFrame(columns=[
+            "target_product", "raw_material", "immediate_parent", "trace_path",
+            "usage_per_path", "annual_finished_product_qty", "final_usage_per_path"
+        ])
+    else:
+        target_keys = work["target_product"].apply(_normalize_material_key)
+        annual_qty = target_keys.map(annual_qty_map)
+        found_mask = annual_qty.notna()
+        work["annual_finished_product_qty"] = annual_qty.where(found_mask, 1.0).astype(float)
+        work["final_usage_per_path"] = pd.to_numeric(work.get("usage_per_path", work.get("usage", 0.0)), errors="coerce").fillna(0.0) * work["annual_finished_product_qty"]
+        work["annual_qty_found"] = found_mask
+
+    preferred_cols = [
+        "target_product", "raw_material", "unit", "immediate_parent", "level", "trace_path",
+        "parent_accumulated_qty", "qty_this_level_original", "qty_this_level_effective",
+        "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio",
+        "usage_per_path", "annual_finished_product_qty", "final_usage_per_path",
+        "description", "material_group", "valid_from", "annual_qty_found",
+    ]
+    ordered_cols = [c for c in preferred_cols if c in work.columns] + [c for c in work.columns if c not in preferred_cols]
+    work = work[ordered_cols]
+
+    summary = pd.DataFrame()
+    if not work.empty and {"target_product", "raw_material", "unit", "final_usage_per_path"}.issubset(work.columns):
+        summary = (
+            work.groupby(["target_product", "raw_material", "unit"], dropna=False, as_index=False)
+            .agg({
+                "final_usage_per_path": "sum",
+                "usage_per_path": "sum" if "usage_per_path" in work.columns else "first",
+                "trace_path": "count" if "trace_path" in work.columns else "first",
+            })
+            .rename(columns={"final_usage_per_path": "final_usage_total", "usage_per_path": "usage_per_pc_total", "trace_path": "path_count"})
+            .sort_values(["target_product", "raw_material"])
+            .reset_index(drop=True)
+        )
+
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        work.to_excel(writer, index=False, sheet_name="Trace Detail")
+        summary.to_excel(writer, index=False, sheet_name="Grouped Summary")
+        for sheet in writer.book.worksheets:
+            sheet.freeze_panes = "A2"
+            for col in sheet.columns:
+                max_len = 12
+                letter = col[0].column_letter
+                for cell in col[:500]:
+                    max_len = max(max_len, len(str(cell.value or "")) + 2)
+                sheet.column_dimensions[letter].width = min(max_len, 60)
+
+    return {
+        "bom_trace_filename": output_path.name,
+        "bom_trace_download_url": f"/download/{output_path.name}",
+        "bom_trace_rows": int(len(work)),
+        "bom_trace_grouped_rows": int(len(summary)),
+    }
+
 def generate_raw_material_bulk_files_by_site_zip(
     bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
     raw_material_template_path: str | Path,
@@ -979,6 +1075,10 @@ def generate_raw_material_bulk_files_by_site_zip(
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
+    trace_detail = exploded.attrs.get("trace_detail", pd.DataFrame())
+    trace_filename = f"bom_trace_detail_{token}.xlsx"
+    trace_path = output_dir / trace_filename
+    trace_summary = _write_bom_trace_detail_file(trace_detail, annual_qty_map, trace_path)
     exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
     exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
@@ -996,6 +1096,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
     base_summary.update(annual_qty_source_summary)
     base_summary.update(annual_usage_summary)
+    base_summary.update(trace_summary)
     base_summary["activity_rows"] = int(len(exploded))
     base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
     base_summary.update(working_hour_summary)
@@ -1025,6 +1126,8 @@ def generate_raw_material_bulk_files_by_site_zip(
     zip_path = output_dir / zip_filename
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        if trace_path.exists():
+            zf.write(trace_path, arcname=trace_path.name)
         for site in site_values:
             site_df = work[work["_production_site"] == site].copy()
             site_df = site_df.drop(columns=["_target_key", "_production_site"], errors="ignore")
@@ -2028,6 +2131,10 @@ def generate_raw_material_bulk_files_by_site_zip(
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
+    trace_detail = exploded.attrs.get("trace_detail", pd.DataFrame())
+    trace_filename = f"bom_trace_detail_{token}.xlsx"
+    trace_path = output_dir / trace_filename
+    trace_summary = _write_bom_trace_detail_file(trace_detail, annual_qty_map, trace_path)
     exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
     exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(step1_output_path=step1_output_path, bom_df=bom_df)
@@ -2037,6 +2144,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
     base_summary.update(annual_qty_source_summary)
     base_summary.update(annual_usage_summary)
+    base_summary.update(trace_summary)
     base_summary["activity_rows"] = int(len(exploded))
     base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
     base_summary.update(working_hour_summary)
@@ -2066,6 +2174,8 @@ def generate_raw_material_bulk_files_by_site_zip(
     zip_path = output_dir / zip_filename
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        if trace_path.exists():
+            zf.write(trace_path, arcname=trace_path.name)
         for site in site_values:
             site_df = work[work["_production_site"] == site].copy().drop(columns=["_target_key", "_production_site"], errors="ignore")
             safe_site = _sanitize_filename_part(site)
@@ -2124,4 +2234,4 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V17_2_FINAL_USAGE_ANNUAL_QTY"
+BOM_FORMATTER_VERSION = "CMP_V17_3_DEBUG_TRACE_DETAIL"
