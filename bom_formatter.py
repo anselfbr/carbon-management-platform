@@ -17,7 +17,7 @@ from openpyxl import load_workbook, Workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V23_4_SITE_XLSX_MODULE3_SELECT"
+BOM_FORMATTER_VERSION = "CMP_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY"
 
 
 DEFAULT_MAPPING = {
@@ -2102,7 +2102,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V23_4_SITE_XLSX_MODULE3_SELECT"
+BOM_FORMATTER_VERSION = "CMP_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY"
 
 
 # =========================================================
@@ -2746,13 +2746,13 @@ def _calculate_total_working_hour_by_target(
 
 
 # =========================================================
-# CMP_V23_4_SITE_XLSX_MODULE3_SELECT
+# CMP_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY
 # - Module 2 outputs one xlsx per Production Site, no ZIP and no all-site file.
-# - Raw Material Bulk writer uses openpyxl write_only to avoid load_workbook/save OOM.
+# - Raw Material Bulk writer uses XlsxWriter constant_memory to avoid openpyxl write/save OOM.
 # - Module 3 can directly select one generated site workbook.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V23_4_SITE_XLSX_MODULE3_SELECT"
+BOM_FORMATTER_VERSION = "CMP_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY"
 
 RAW_MATERIAL_ACTIVITY_HEADERS_V23_4 = [
     "Raw Material Name", "Raw Material Code", "Doc. Start Date", "Doc. End Date",
@@ -2801,15 +2801,25 @@ def _write_raw_material_bulk_from_exploded(
     supplier_map: dict[str, list[dict[str, str]]] | None = None,
     return_expanded: bool = False,
 ) -> Dict[str, Any] | tuple[Dict[str, Any], pd.DataFrame]:
-    """Memory-safe Raw Material Bulk writer.
+    """Memory-safe Raw Material Bulk writer using XlsxWriter constant_memory.
 
-    V23.4 intentionally does not copy the full template workbook. It writes the two required
-    sheets with the same functional headers using openpyxl write_only. This prevents the
-    high memory peak caused by load_workbook(template) + per-cell writes + save().
+    V23.5 intentionally does not copy the full template workbook. It reads only
+    lightweight dropdown metadata from the uploaded template, then writes the two
+    required sheets with functional headers via XlsxWriter constant_memory. This
+    avoids the memory peak caused by openpyxl load_workbook(template) + per-cell
+    writes + save().
     """
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import xlsxwriter as _cmp_xlsxwriter  # noqa: F401
+    except Exception as exc:
+        raise RuntimeError(
+            "XlsxWriter is required for Module 2 V23.5 constant-memory output. "
+            "Please ensure requirements.txt contains XlsxWriter==3.2.0."
+        ) from exc
 
     document_type_value, supplier_options, tbc_supplier_map = _template_dropdown_metadata_light(raw_material_template_path)
     expanded, supplier_write_summary = _apply_supplier_mapping_to_exploded(
@@ -2819,23 +2829,31 @@ def _write_raw_material_bulk_from_exploded(
         tbc_supplier_map=tbc_supplier_map,
     )
 
-    wb = Workbook(write_only=True)
-    # Remove the automatically created default sheet if present.
-    try:
-        default_ws = wb.active
-        if default_ws is not None:
-            wb.remove(default_ws)
-    except Exception:
-        pass
+    workbook = _cmp_xlsxwriter.Workbook(str(output_path), {
+        "constant_memory": True,
+        "strings_to_urls": False,
+        "nan_inf_to_errors": True,
+    })
+    date_fmt = workbook.add_format({"num_format": "yyyy/mm/dd"})
 
-    activity_ws = wb.create_sheet(ACTIVITY_SHEET_NAME)
-    raw_ws = wb.create_sheet(RAW_MATERIAL_SHEET_NAME)
-    _append_blank_and_header(activity_ws, RAW_MATERIAL_ACTIVITY_HEADERS_V23_4)
-    _append_blank_and_header(raw_ws, RAW_MATERIAL_MASTER_HEADERS_V23_4)
+    activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
+    raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
+
+    # Excel row 1 remains blank; row 2 contains template-compatible headers.
+    for col_idx, header in enumerate(RAW_MATERIAL_ACTIVITY_HEADERS_V23_4):
+        activity_ws.write(1, col_idx, header)
+    for col_idx, header in enumerate(RAW_MATERIAL_MASTER_HEADERS_V23_4):
+        raw_ws.write(1, col_idx, header)
+
+    activity_ws.freeze_panes(2, 0)
+    raw_ws.freeze_panes(2, 0)
+    activity_ws.set_column(0, len(RAW_MATERIAL_ACTIVITY_HEADERS_V23_4) - 1, 18)
+    raw_ws.set_column(0, len(RAW_MATERIAL_MASTER_HEADERS_V23_4) - 1, 18)
 
     raw_seen: set[str] = set()
     raw_master_rows: list[tuple[str, str]] = []
 
+    excel_row_idx = 2  # zero-based row index; Excel row 3 is first data row.
     for r in expanded.itertuples(index=False):
         row = r._asdict() if hasattr(r, "_asdict") else {}
         valid_from = row.get("valid_from", "")
@@ -2843,11 +2861,14 @@ def _write_raw_material_bulk_from_exploded(
             valid_from = _date_from_value(valid_from)
         raw_material = row.get("raw_material", "")
         description = row.get("description", "")
-        usage_value = float(row.get("usage", 0) or 0)
+        try:
+            usage_value = float(row.get("usage", 0) or 0)
+        except Exception:
+            usage_value = 0.0
         start_date = _year_start(valid_from)
         end_date = _year_end(valid_from)
 
-        activity_ws.append([
+        activity_values = [
             raw_material,
             raw_material,
             start_date,
@@ -2868,16 +2889,28 @@ def _write_raw_material_bulk_from_exploded(
             row.get("net_weight", ""),
             row.get("gross_weight", ""),
             row.get("weight_uom", ""),
-        ])
+        ]
+        for col_idx, value in enumerate(activity_values):
+            if col_idx in (2, 3) and isinstance(value, date):
+                activity_ws.write_datetime(excel_row_idx, col_idx, datetime(value.year, value.month, value.day), date_fmt)
+            else:
+                activity_ws.write(excel_row_idx, col_idx, value)
+        excel_row_idx += 1
+
         raw_key = str(raw_material or "").strip()
         if raw_key and raw_key not in raw_seen:
             raw_seen.add(raw_key)
             raw_master_rows.append((raw_key, description))
 
+    raw_excel_row_idx = 2
     for raw_material, description in sorted(raw_master_rows, key=lambda x: x[0]):
-        raw_ws.append([raw_material, raw_material, "", "", "", description])
+        raw_values = [raw_material, raw_material, "", "", "", description]
+        for col_idx, value in enumerate(raw_values):
+            raw_ws.write(raw_excel_row_idx, col_idx, value)
+        raw_excel_row_idx += 1
 
-    wb.save(output_path)
+    workbook.close()
+
     result = {
         "output_filename": output_path.name,
         "activity_rows": int(len(expanded)),
@@ -2885,7 +2918,7 @@ def _write_raw_material_bulk_from_exploded(
         "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
         "supplier_name_options": int(len(supplier_options)),
         "site_tbc_supplier_count": int(len(tbc_supplier_map)),
-        "raw_material_writer": "openpyxl_write_only_site_xlsx_v23_4",
+        "raw_material_writer": "xlsxwriter_constant_memory_site_xlsx_v23_5",
     }
     result.update(supplier_write_summary)
     if return_expanded:
