@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import re
 import traceback
+import shutil
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -28,7 +29,7 @@ LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_PATCH_V22_1_STABLE"
+CMP_MAIN_VERSION = "CMP_PATCH_V22_2_STABLE"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -2166,6 +2167,26 @@ async def process_bom_expansion(request: Request):
             supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
         )
         output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
+
+        # CMP V22.2: keep a stable latest Raw Material Bulk workbook for Module 3.
+        # Module 2 exports a ZIP split by Production Site; Module 3 needs an xlsx
+        # source.  Use the first generated site workbook as the latest source
+        # instead of accidentally falling back to an older run.
+        MODULE2_RAW_MATERIAL_BULK_PATH = None
+        latest_raw_bulk_path = OUTPUT_DIR / "raw_material_activity_data_bulk_latest.xlsx"
+        for item in summary.get("production_site_files", []) or []:
+            candidate = OUTPUT_DIR / str(item.get("filename", ""))
+            if candidate.exists() and candidate.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
+                try:
+                    shutil.copy2(candidate, latest_raw_bulk_path)
+                    MODULE2_RAW_MATERIAL_BULK_PATH = latest_raw_bulk_path
+                    summary["module2_raw_material_bulk_latest"] = latest_raw_bulk_path.name
+                    summary["module2_raw_material_bulk_latest_download_url"] = f"/download/{latest_raw_bulk_path.name}"
+                    summary["module2_raw_material_bulk_source_filename"] = candidate.name
+                except Exception:
+                    traceback.print_exc()
+                break
+
         summary["module1_step1_source_filename"] = step1_path.name
         summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
         if LATEST_BOM_STRUCTURE_PATH.exists():
@@ -2189,7 +2210,7 @@ async def process_bom_expansion(request: Request):
         else:
             summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
             summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
-        summary["app_version"] = "CMP_PATCH_V22_1_STABLE"
+        summary["app_version"] = "CMP_PATCH_V22_2_STABLE"
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:
         traceback.print_exc()
@@ -2207,7 +2228,7 @@ async def process_bom_expansion(request: Request):
     return {
         "ok": True,
         "message": "BOM Expansion completed successfully.",
-        "app_version": "CMP_PATCH_V22_1_STABLE",
+        "app_version": "CMP_PATCH_V22_2_STABLE",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),

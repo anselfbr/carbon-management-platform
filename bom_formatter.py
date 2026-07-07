@@ -17,7 +17,7 @@ from openpyxl import load_workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V22_1_BOM_ENGINE_STABLE"
+BOM_FORMATTER_VERSION = "CMP_V22_2_BOM_ENGINE_STABLE_SINGLE_STRUCTURE"
 
 
 DEFAULT_MAPPING = {
@@ -2102,7 +2102,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V22_1_BOM_ENGINE_STABLE"
+BOM_FORMATTER_VERSION = "CMP_V22_2_BOM_ENGINE_STABLE_SINGLE_STRUCTURE"
 
 
 # =========================================================
@@ -2112,6 +2112,36 @@ BOM_FORMATTER_VERSION = "CMP_V22_1_BOM_ENGINE_STABLE"
 # 2) BOM Structure latest file
 # 3) Working Hour Roll-up file
 # =========================================================
+
+def write_bom_structure_dataframe(
+    structure: pd.DataFrame,
+    summary: dict[str, Any],
+    used_columns: dict[str, Any],
+    output_path: str | Path,
+) -> Dict[str, Any]:
+    """Write a precomputed BOM Structure DataFrame without re-expanding BOM."""
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        structure.to_excel(writer, index=False, sheet_name="BOM Structure")
+        ws = writer.book["BOM Structure"]
+        ws.freeze_panes = "A2"
+        for col in ws.columns:
+            max_len = 12
+            letter = col[0].column_letter
+            for cell in col[:1000]:
+                max_len = max(max_len, len(str(cell.value or "")) + 2)
+            ws.column_dimensions[letter].width = min(max_len, 45)
+    out = dict(summary or {})
+    out["output_filename"] = output_path.name
+    out["used_columns"] = used_columns
+    out["bom_files"] = int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1
+    out["bom_rows_before_dedup"] = int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0
+    out["bom_rows_after_dedup"] = int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0
+    out["bom_duplicate_rows_removed"] = int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0
+    out["bom_structure_reused"] = True
+    return out
+
 
 def export_bom_structure_file_from_dataframe(
     bom_df: pd.DataFrame,
@@ -2161,12 +2191,24 @@ def generate_module2_outputs_memory_optimized(
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
     try:
         supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+
+        # CMP V22.2: build and export BOM Structure once, then reuse it for
+        # zero-working-hour filtering and the auditable roll-up file.
+        bom_structure_df, bom_structure_summary = _explode_bom_structure(bom_df)
+        bom_structure_summary = write_bom_structure_dataframe(
+            structure=bom_structure_df,
+            summary=bom_structure_summary,
+            used_columns=used_columns,
+            output_path=bom_structure_output_path,
+        )
+
         exploded, base_summary = _explode_bom(bom_df)
         exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
 
         total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(
             step1_output_path=step1_output_path,
-            bom_df=bom_df,
+            bom_df=None,
+            bom_structure_df=bom_structure_df,
         )
         exploded, zero_total_working_hour_rows_excluded = _exclude_zero_total_working_hour_target_rows(
             exploded=exploded,
@@ -2244,11 +2286,6 @@ def generate_module2_outputs_memory_optimized(
         elif supplier_bulk_template_path and supplier_bulk_output_path:
             supplier_bulk_summary = {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": ""}
 
-        bom_structure_summary = export_bom_structure_file_from_dataframe(
-            bom_df=bom_df,
-            used_columns=used_columns,
-            output_path=bom_structure_output_path,
-        )
         rollup_summary = generate_working_hour_rollup_file(
             step1_output_path=step1_output_path,
             bom_structure_path=bom_structure_output_path,
@@ -2624,9 +2661,14 @@ def _explode_bom_structure(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, An
 
 def _calculate_total_working_hour_by_target(
     step1_output_path: str | Path,
-    bom_df: pd.DataFrame,
+    bom_df: pd.DataFrame | None = None,
+    bom_structure_df: pd.DataFrame | None = None,
 ) -> tuple[dict[str, float], Dict[str, Any]]:
-    """CPU-optimized working-hour map used for zero-hour filtering."""
+    """CPU-optimized working-hour map used for zero-hour filtering.
+
+    CMP V22.2: accepts a precomputed BOM Structure DataFrame so Module 2 can
+    avoid exploding the same BOM structure more than once in a single run.
+    """
     step1_output_path = Path(step1_output_path)
     try:
         step1_df = pd.read_excel(step1_output_path, sheet_name=STEP1_SOURCE_SHEET_NAME, dtype=object)
@@ -2667,7 +2709,12 @@ def _calculate_total_working_hour_by_target(
         direct_by_material[material] = hours
         hour_per_pc_by_material[material] = hours / qty if qty else 0.0
 
-    structure, _structure_summary = _explode_bom_structure(bom_df)
+    if bom_structure_df is not None:
+        structure = bom_structure_df.copy()
+    else:
+        if bom_df is None:
+            bom_df = pd.DataFrame()
+        structure, _structure_summary = _explode_bom_structure(bom_df)
     semi_by_target: dict[str, float] = {}
 
     if not structure.empty:
