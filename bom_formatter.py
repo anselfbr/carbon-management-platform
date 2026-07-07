@@ -35,9 +35,51 @@ DEFAULT_MAPPING = {
     "usage_probability_col": "Usage probability%",
 }
 
+ALTITEM_GROUP_COLUMN_ALIASES = [
+    "Altitem group", "AltItem group", "AltItem Group", "Alt item group",
+    "Alternative item group", "Alternative Item Group", "AltItemGroup",
+]
+USAGE_PROBABILITY_COLUMN_ALIASES = [
+    "Usage probability%", "Usage probability %", "Usage Probability%",
+    "Usage Probability %", "Usage probability", "Usage Probability",
+    "Usage prob.%", "Usage prob %", "Usage Prob.%", "Usage Prob %",
+]
+
 
 def _normalize_col(value: Any) -> str:
     return str(value or "").strip().replace("\n", " ").replace("\r", " ")
+
+
+def _normalize_col_key(value: Any) -> str:
+    """Normalize Excel header text for resilient SAP BOM column matching.
+
+    SAP exports may use small variations such as ``Usage probability%`` vs
+    ``Usage probability %``.  Exact header matching missed those variants and
+    caused AltItem probability logic to be skipped.
+    """
+    text = _normalize_col(value).lower()
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", text)
+
+
+def _find_any_column(df: pd.DataFrame, column_names: list[str]) -> str:
+    exact = {_normalize_col(c).lower(): c for c in df.columns}
+    compact = {_normalize_col_key(c): c for c in df.columns}
+    for column_name in column_names:
+        key = _normalize_col(column_name).lower()
+        if key in exact:
+            return exact[key]
+    for column_name in column_names:
+        key = _normalize_col_key(column_name)
+        if key in compact:
+            return compact[key]
+    raise ValueError(f"找不到 BOM 欄位：{', '.join(column_names)}")
+
+
+def _find_optional_any_column(df: pd.DataFrame, column_names: list[str]) -> str | None:
+    try:
+        return _find_any_column(df, column_names)
+    except ValueError:
+        return None
 
 
 def _resolve_mapping(mapping: dict[str, str | None] | None) -> dict[str, str]:
@@ -50,11 +92,9 @@ def _resolve_mapping(mapping: dict[str, str | None] | None) -> dict[str, str]:
 
 
 def _find_column(df: pd.DataFrame, column_name: str) -> str:
-    target = _normalize_col(column_name).lower()
-    normalized = {_normalize_col(c).lower(): c for c in df.columns}
-    if target in normalized:
-        return normalized[target]
-    raise ValueError(f"找不到 BOM 欄位：{column_name}")
+    # First try exact normalized matching, then compact matching so
+    # ``Usage probability %`` and ``Usage probability%`` are treated the same.
+    return _find_any_column(df, [column_name])
 
 
 def _find_optional_column(df: pd.DataFrame, column_name: str) -> str | None:
@@ -393,8 +433,8 @@ def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None
     net_weight_col = _find_optional_column(df, m["net_weight_col"])
     gross_weight_col = _find_optional_column(df, m["gross_weight_col"])
     weight_uom_col = _find_optional_column(df, m["weight_uom_col"])
-    altitem_group_col = _find_optional_column(df, m["altitem_group_col"])
-    usage_probability_col = _find_optional_column(df, m["usage_probability_col"])
+    altitem_group_col = _find_optional_any_column(df, [m["altitem_group_col"], *ALTITEM_GROUP_COLUMN_ALIASES])
+    usage_probability_col = _find_optional_any_column(df, [m["usage_probability_col"], *USAGE_PROBABILITY_COLUMN_ALIASES])
 
     # Memory V1: keep only the columns required by Module 2 before creating
     # normalized helper columns. This prevents carrying unused SAP columns
@@ -3820,7 +3860,7 @@ def generate_module2_outputs_memory_optimized(
 # C. Raw Material Bulk + Supplier Files -> Supplier-expanded Raw Material Bulk + Supplier Bulk Create
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_1_MODULE2A_MASTER_FIX"
+BOM_FORMATTER_VERSION = "CMP_V25_0_2_ALTITEM_USAGE_COLUMN_FIX"
 EXPANDED_BOM_MASTER_SHEET_NAME = "Expanded BOM Master"
 
 
