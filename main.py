@@ -30,7 +30,7 @@ LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE3_SELECTED_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
-CMP_MAIN_VERSION = "CMP_PATCH_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY"
+CMP_MAIN_VERSION = "CMP_PATCH_V23_6_FAST_RAW_ONLY_XLSXWRITER"
 ENABLE_MODULE3_ECOINVENT_DATABASE = False
 MODULE3_ECOINVENT_DISABLED_MESSAGE = "Module 3 B. ecoinvent emission factor database is temporarily disabled. Set ENABLE_MODULE3_ECOINVENT_DATABASE = True to restore."
 
@@ -2228,9 +2228,9 @@ async def process_bom_expansion(request: Request):
             bom_structure_output_path=LATEST_BOM_STRUCTURE_PATH,
             working_hour_rollup_output_path=working_hour_rollup_output_path,
             mapping=mapping,
-            supplier_paths=supplier_paths,
-            supplier_bulk_template_path=supplier_bulk_template_path if supplier_paths else None,
-            supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
+            supplier_paths=[],  # V23.6 Fast Mode: skip Supplier Mapping for speed.
+            supplier_bulk_template_path=None,
+            supplier_bulk_output_path=None,
         )
         output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_{token}.xlsx"))
 
@@ -2249,10 +2249,10 @@ async def process_bom_expansion(request: Request):
 
         summary["module1_step1_source_filename"] = step1_path.name
         summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
-        if LATEST_BOM_STRUCTURE_PATH.exists():
+        if summary.get("bom_structure_generated") and LATEST_BOM_STRUCTURE_PATH.exists():
             summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
             summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
-        if working_hour_rollup_output_path.exists():
+        if summary.get("working_hour_rollup_generated") and working_hour_rollup_output_path.exists():
             try:
                 LATEST_WORKING_HOUR_ROLLUP_PATH.write_bytes(working_hour_rollup_output_path.read_bytes())
                 summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name
@@ -2261,15 +2261,11 @@ async def process_bom_expansion(request: Request):
                 traceback.print_exc()
 
         summary["supplier_upload_files"] = len(supplier_paths)
-        if not supplier_paths:
-            summary["supplier_bulk_filename"] = ""
-            summary["supplier_bulk_download_url"] = ""
-            summary["supplier_bulk_rows"] = 0
-            summary["supplier_bulk_generated"] = False
-            summary["supplier_status"] = "Not Uploaded"
-        else:
-            summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
-            summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
+        summary["supplier_bulk_filename"] = ""
+        summary["supplier_bulk_download_url"] = ""
+        summary["supplier_bulk_rows"] = 0
+        summary["supplier_bulk_generated"] = False
+        summary["supplier_status"] = "Skipped in Fast Mode"
         summary["app_version"] = CMP_MAIN_VERSION
         summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
     except Exception as exc:

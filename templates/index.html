@@ -609,9 +609,14 @@
                 <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...（UTC+8）</p>
               </div>
 
-              <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
-              <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
-              <p class="form-hint" data-i18n="supplierFilesHint">Optional. Supports multiple Excel files. Supplier mapping is processed in the same Module 2 run. Uses Raw Material Code + Vendor number to write Supplier Name and also exports supplier_bulk_create when supplier files are uploaded.</p>
+              <div class="module3-source-card">
+                <b>Module 2 Fast Mode</b>
+                <p>本版本預設只產出各廠區 Raw Material Bulk .xlsx，供 Module 3 直接選擇引用；Supplier Mapping、Supplier Bulk、BOM Structure 與 Working Hour Roll-up 先跳過以縮短處理時間。</p>
+              </div>
+
+              <label style="display:none;" data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
+              <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple style="display:none;" />
+              <p class="form-hint" style="display:none;">Fast Mode skips Supplier Mapping and Supplier Bulk generation.</p>
 
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⌘</span>
@@ -624,7 +629,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="bomStatusTitle">Ready for BOM Expansion</b>
-                  <p id="bomStatusText">Upload standard BOM and raw material bulk template to start processing.</p>
+                  <p id="bomStatusText">Upload standard BOM and raw material bulk template to generate site-specific Raw Material Bulk files.</p>
                 </div>
                 <span id="bomStatusTime" class="status-time">Idle</span>
               </div>
@@ -633,11 +638,11 @@
               </div>
             </div>
 
-            <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk</span></a>
+            <a id="bomDownload" class="download disabled" href="#" style="display:none;"><span>Download Raw Material Bulk</span></a>
             <div id="module2SiteDownloads" class="download-row"></div>
-            <a id="workingHourRollupDownload" class="download disabled" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
+            <a id="workingHourRollupDownload" class="download disabled" href="#" style="display:none;"><span>Download Working Hour Roll-up</span></a>
 
-            <a id="supplierBulkDownload" class="download disabled" href="#"><span data-i18n="downloadSupplierBulk">Download Supplier Bulk Create</span></a>
+            <a id="supplierBulkDownload" class="download disabled" href="#" style="display:none;"><span>Download Supplier Bulk Create</span></a>
 
 
           </section>
@@ -1245,13 +1250,11 @@ function startBomEstimatedProgress() {
     bomProgressBar.style.width = `${progress}%`;
 
     const stages = [
-      cmpT('stageReadingBomStructure', 'Reading and merging BOM file(s)...'),
-      cmpT('stageDetectingSemiFinished', 'Detecting semi-finished components...'),
-      cmpT('stageExpandingMultiLevelBom', 'Expanding multi-level BOM...'),
-      cmpT('stageCalculatingRollup', 'Calculating material quantity roll-up...'),
-      cmpT('stageCopyingRawMaterialTemplate', 'Copying raw material bulk template...'),
-      cmpT('stageMatchingSupplierData', 'Matching supplier files and dropdown options...'),
-      cmpT('stageWritingActivityRawMaterial', 'Writing Activity Data and Raw Material sheets...')
+      'Fast Mode：讀取 Standard BOM...',
+      'Fast Mode：偵測半成品與展開多階 BOM...',
+      'Fast Mode：依 Production Site 分檔...',
+      'Fast Mode：使用 XlsxWriter constant_memory 寫入各廠區 Raw Material Bulk...',
+      'Fast Mode：完成後更新 Module 3 廠區選單...'
     ];
     const stageIndex = Math.min(stages.length - 1, Math.floor((elapsed / estimatedSeconds) * stages.length));
     bomStatusText.textContent = stages[stageIndex];
@@ -1260,20 +1263,28 @@ function startBomEstimatedProgress() {
 
 function stopBomProgressSuccess(summary) {
   clearInterval(progressTimer);
-  const supplierUploaded = Number(summary.supplier_upload_files || 0) > 0;
-  const supplierStatusText = supplierUploaded
-    ? `Supplier files: ${summary.supplier_upload_files || 0}; Supplier bulk rows: ${summary.supplier_bulk_rows || 0};`
-    : 'Supplier files: Not Uploaded; Supplier bulk: Not Generated;';
+  const siteCount = Number(summary.production_site_count || ((summary.production_site_files || []).length) || 0);
   setBomProcessingState(
     'success',
-    cmpT('bomExpansionCompleted', 'BOM Expansion completed'),
-    `BOM Files: ${summary.bom_files || 1}; Rows: ${summary.bom_rows_after_dedup || 0}; Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}; Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; ${supplierStatusText} Max BOM Level: ${summary.max_level}; Working Hour Roll-up rows: ${summary.working_hour_rollup_rows || 0}.`,
+    'BOM Expansion Fast Mode completed',
+    `BOM Files: ${summary.bom_files || 1}; Rows: ${summary.bom_rows_after_dedup || 0}; Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}; Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; Site files: ${siteCount}; Max BOM Level: ${summary.max_level}.`,
     cmpT('completed', 'Completed'),
     100
   );
 
   bomLog.textContent =
-    `Completed.\nBOM Files: ${summary.bom_files || 1}\nBOM Rows Before Dedup: ${summary.bom_rows_before_dedup || 0}\nBOM Rows After Dedup: ${summary.bom_rows_after_dedup || 0}\nDuplicates Removed: ${summary.bom_duplicate_rows_removed || 0}\nProducts: ${summary.products}\nSemi-finished Components: ${summary.semi_finished}\nActivity Data Rows: ${summary.activity_rows}\nRaw Materials: ${summary.raw_materials}\nSupplier Files: ${supplierUploaded ? (summary.supplier_upload_files || 0) : 'Not Uploaded'}\nSupplier Mapped Materials: ${supplierUploaded ? (summary.supplier_mapped_materials || 0) : 'Not Generated'}\nSupplier Mapped Suppliers: ${supplierUploaded ? (summary.supplier_mapped_suppliers || 0) : 'Not Generated'}\nSupplier Expanded Rows: ${supplierUploaded ? (summary.supplier_expanded_rows || 0) : 'Not Generated'}\nSupplier Dropdown Matched Rows: ${supplierUploaded ? (summary.supplier_dropdown_matched_rows || 0) : 'Not Generated'}\nSupplier Dropdown Missing Rows: ${supplierUploaded ? (summary.supplier_dropdown_missing_rows || 0) : 'Not Generated'}\nSupplier Bulk Rows: ${supplierUploaded ? (summary.supplier_bulk_rows || 0) : 'Not Generated'}\nMax BOM Level: ${summary.max_level}\nWorking Hour Roll-up Rows: ${summary.working_hour_rollup_rows || 0}\nSemi Working Hours: ${summary.working_hour_rollup_total_semi_hours || 0}`;
+    `Completed - Fast Raw Material Bulk Mode.
+BOM Files: ${summary.bom_files || 1}
+BOM Rows Before Dedup: ${summary.bom_rows_before_dedup || 0}
+BOM Rows After Dedup: ${summary.bom_rows_after_dedup || 0}
+Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}
+Products: ${summary.products}
+Semi-finished Components: ${summary.semi_finished}
+Activity Data Rows: ${summary.activity_rows}
+Raw Materials: ${summary.raw_materials}
+Production Site Files: ${siteCount}
+Raw Material Writer: ${summary.raw_material_writer || 'xlsxwriter_constant_memory'}
+Skipped: Supplier Mapping / Supplier Bulk / BOM Structure / Working Hour Roll-up`;
 }
 
 function stopBomProgressError(message) {
@@ -1323,6 +1334,12 @@ bomForm.addEventListener('submit', async (e) => {
   if (workingHourRollupDownload) {
     workingHourRollupDownload.classList.add('disabled');
     workingHourRollupDownload.href = '#';
+    workingHourRollupDownload.style.display = 'none';
+  }
+  if (supplierBulkDownload) {
+    supplierBulkDownload.classList.add('disabled');
+    supplierBulkDownload.href = '#';
+    supplierBulkDownload.style.display = 'none';
   }
   bomLog.textContent = cmpT('processingBomExpansion', 'Processing BOM Expansion...');
 
@@ -1340,8 +1357,11 @@ bomForm.addEventListener('submit', async (e) => {
 
     const siteFiles = (data.summary && data.summary.production_site_files) || [];
     if (siteFiles.length > 0) {
-      bomDownload.href = siteFiles[0].download_url || `/download/${siteFiles[0].filename}`;
-      bomDownload.classList.remove('disabled');
+      if (bomDownload) {
+        bomDownload.href = '#';
+        bomDownload.classList.add('disabled');
+        bomDownload.style.display = 'none';
+      }
       if (module2SiteDownloads) {
         module2SiteDownloads.innerHTML = '';
         siteFiles.forEach((item) => {
@@ -1354,18 +1374,14 @@ bomForm.addEventListener('submit', async (e) => {
           module2SiteDownloads.appendChild(a);
         });
       }
-    } else {
+    } else if (data.download_url && bomDownload) {
       bomDownload.href = data.download_url;
       bomDownload.classList.remove('disabled');
+      bomDownload.style.display = '';
     }
-    if (workingHourRollupDownload && data.summary && data.summary.working_hour_rollup_download_url) {
-      workingHourRollupDownload.href = data.summary.working_hour_rollup_download_url;
-      workingHourRollupDownload.classList.remove('disabled');
-    }
-    if (supplierBulkDownload && data.summary && Number(data.summary.supplier_upload_files || 0) > 0 && data.summary.supplier_bulk_download_url) {
-      supplierBulkDownload.href = data.summary.supplier_bulk_download_url;
-      supplierBulkDownload.classList.remove('disabled');
-    }
+    // V23.6 Fast Mode intentionally skips Working Hour Roll-up and Supplier Bulk.
+    if (workingHourRollupDownload) workingHourRollupDownload.style.display = 'none';
+    if (supplierBulkDownload) supplierBulkDownload.style.display = 'none';
     stopBomProgressSuccess(data.summary);
   } catch (err) {
     stopBomProgressError(err.message);

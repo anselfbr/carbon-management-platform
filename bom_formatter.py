@@ -17,7 +17,7 @@ from openpyxl import load_workbook, Workbook
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY"
+BOM_FORMATTER_VERSION = "CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER"
 
 
 DEFAULT_MAPPING = {
@@ -2102,7 +2102,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY"
+BOM_FORMATTER_VERSION = "CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER"
 
 
 # =========================================================
@@ -2746,13 +2746,13 @@ def _calculate_total_working_hour_by_target(
 
 
 # =========================================================
-# CMP_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY
+# CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER
 # - Module 2 outputs one xlsx per Production Site, no ZIP and no all-site file.
 # - Raw Material Bulk writer uses XlsxWriter constant_memory to avoid openpyxl write/save OOM.
 # - Module 3 can directly select one generated site workbook.
 # =========================================================
 
-BOM_FORMATTER_VERSION = "CMP_V23_5_SITE_XLSX_XLSXWRITER_CONSTANT_MEMORY"
+BOM_FORMATTER_VERSION = "CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER"
 
 RAW_MATERIAL_ACTIVITY_HEADERS_V23_4 = [
     "Raw Material Name", "Raw Material Code", "Doc. Start Date", "Doc. End Date",
@@ -3093,6 +3093,240 @@ def generate_module2_outputs_memory_optimized(
         return summary
     finally:
         for name in ["bom_df", "exploded", "work", "supplier_map"]:
+            if name in locals():
+                try:
+                    del locals()[name]
+                except Exception:
+                    pass
+        gc.collect()
+
+
+# =========================================================
+# CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER
+# Fast Mode for Module 2
+# - Generate Raw Material Bulk site xlsx only.
+# - Skip Supplier Mapping, Supplier Bulk, BOM Structure export, and Working Hour Roll-up.
+# - Keep Module 3 site-file selection compatible.
+# =========================================================
+
+BOM_FORMATTER_VERSION = "CMP_V23_6_FAST_RAW_ONLY_XLSXWRITER"
+
+
+def _write_raw_material_bulk_from_exploded_fast_raw_only(
+    exploded: pd.DataFrame,
+    output_path: str | Path,
+) -> Dict[str, Any]:
+    """Fast Raw Material Bulk writer.
+
+    This bypasses supplier one-to-many expansion and does not read/copy the
+    uploaded template workbook. It writes only the two required Module 3 input
+    sheets with template-compatible headers using XlsxWriter constant_memory.
+    """
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import xlsxwriter as _cmp_xlsxwriter
+    except Exception as exc:
+        raise RuntimeError(
+            "XlsxWriter is required for Module 2 Fast Mode. "
+            "Please ensure requirements.txt contains XlsxWriter==3.2.0."
+        ) from exc
+
+    workbook = _cmp_xlsxwriter.Workbook(str(output_path), {
+        "constant_memory": True,
+        "strings_to_urls": False,
+        "nan_inf_to_errors": True,
+    })
+    date_fmt = workbook.add_format({"num_format": "yyyy/mm/dd"})
+
+    activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
+    raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
+
+    for col_idx, header in enumerate(RAW_MATERIAL_ACTIVITY_HEADERS_V23_4):
+        activity_ws.write(1, col_idx, header)
+    for col_idx, header in enumerate(RAW_MATERIAL_MASTER_HEADERS_V23_4):
+        raw_ws.write(1, col_idx, header)
+
+    activity_ws.freeze_panes(2, 0)
+    raw_ws.freeze_panes(2, 0)
+    activity_ws.set_column(0, len(RAW_MATERIAL_ACTIVITY_HEADERS_V23_4) - 1, 18)
+    raw_ws.set_column(0, len(RAW_MATERIAL_MASTER_HEADERS_V23_4) - 1, 18)
+
+    raw_seen: set[str] = set()
+    raw_master_rows: list[tuple[str, str]] = []
+
+    excel_row_idx = 2
+    for r in exploded.itertuples(index=False):
+        row = r._asdict() if hasattr(r, "_asdict") else {}
+        valid_from = row.get("valid_from", "")
+        if not isinstance(valid_from, date):
+            valid_from = _date_from_value(valid_from)
+        raw_material = row.get("raw_material", "")
+        description = row.get("description", "")
+        try:
+            usage_value = float(row.get("usage", 0) or 0)
+        except Exception:
+            usage_value = 0.0
+        start_date = _year_start(valid_from)
+        end_date = _year_end(valid_from)
+
+        activity_values = [
+            raw_material,
+            raw_material,
+            start_date,
+            end_date,
+            "BOM",
+            "",
+            usage_value,
+            row.get("unit", ""),
+            "", "", "",
+            "SAP",
+            "",
+            "",  # Supplier Name intentionally blank in Fast Mode.
+            "",  # Transportation Origin intentionally blank in Fast Mode.
+            row.get("transport_destination", ""),
+            row.get("target_product", ""),
+            "",
+            row.get("material_group", ""),
+            row.get("net_weight", ""),
+            row.get("gross_weight", ""),
+            row.get("weight_uom", ""),
+        ]
+        for col_idx, value in enumerate(activity_values):
+            if col_idx in (2, 3) and isinstance(value, date):
+                activity_ws.write_datetime(excel_row_idx, col_idx, datetime(value.year, value.month, value.day), date_fmt)
+            else:
+                activity_ws.write(excel_row_idx, col_idx, value)
+        excel_row_idx += 1
+
+        raw_key = str(raw_material or "").strip()
+        if raw_key and raw_key not in raw_seen:
+            raw_seen.add(raw_key)
+            raw_master_rows.append((raw_key, description))
+
+    raw_excel_row_idx = 2
+    for raw_material, description in sorted(raw_master_rows, key=lambda x: x[0]):
+        raw_values = [raw_material, raw_material, "", "", "", description]
+        for col_idx, value in enumerate(raw_values):
+            raw_ws.write(raw_excel_row_idx, col_idx, value)
+        raw_excel_row_idx += 1
+
+    workbook.close()
+    return {
+        "output_filename": output_path.name,
+        "activity_rows": int(len(exploded)),
+        "raw_materials": int(len(raw_seen)),
+        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
+        "raw_material_writer": "xlsxwriter_constant_memory_fast_raw_only_v23_6",
+    }
+
+
+def generate_module2_outputs_memory_optimized(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    raw_material_template_path: str | Path,
+    output_dir: str | Path,
+    token: str,
+    step1_output_path: str | Path,
+    bom_structure_output_path: str | Path,
+    working_hour_rollup_output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None = None,
+    supplier_bulk_template_path: str | Path | None = None,
+    supplier_bulk_output_path: str | Path | None = None,
+) -> Dict[str, Any]:
+    """Module 2 Fast Mode: generate site Raw Material Bulk xlsx files only.
+
+    Designed for Render 2 GB / short-run usage. It keeps the output needed by
+    Module 3, while skipping the slow optional outputs that can be regenerated
+    separately if needed.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    try:
+        exploded, base_summary = _explode_bom(bom_df)
+        exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+        base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+        base_summary["activity_rows"] = int(len(exploded))
+        base_summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+
+        site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
+        if exploded.empty:
+            work = exploded.assign(_production_site="Unassigned")
+        else:
+            work = exploded
+            work["_target_key"] = work["target_product"].apply(_normalize_material_key)
+            work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
+            work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+            work["transport_destination"] = work["_production_site"]
+            if "material_group" not in work.columns:
+                work["material_group"] = ""
+
+        site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
+        generated_files: list[dict[str, Any]] = []
+        total_written_rows = 0
+        total_raw_materials = 0
+
+        for site in site_values:
+            site_mask = work["_production_site"].eq(site)
+            site_df = work.loc[site_mask].drop(columns=["_target_key", "_production_site"], errors="ignore")
+            safe_site = _sanitize_filename_part(site)
+            file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
+            write_summary = _write_raw_material_bulk_from_exploded_fast_raw_only(
+                exploded=site_df,
+                output_path=file_path,
+            )
+            generated_files.append({
+                "production_site": site,
+                "filename": file_path.name,
+                "download_url": f"/download/{file_path.name}",
+                "activity_rows": int(write_summary.get("activity_rows", 0)),
+                "raw_materials": int(write_summary.get("raw_materials", 0)),
+                "raw_material_writer": write_summary.get("raw_material_writer", ""),
+            })
+            total_written_rows += int(write_summary.get("activity_rows", 0))
+            total_raw_materials += int(write_summary.get("raw_materials", 0))
+            del site_df
+            gc.collect()
+
+        first_file = generated_files[0]["filename"] if generated_files else ""
+        unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
+        summary = dict(base_summary)
+        summary.update({
+            "output_filename": first_file,
+            "download_url": f"/download/{first_file}" if first_file else "",
+            "split_by_production_site": True,
+            "production_site_files": generated_files,
+            "production_site_count": int(len(site_values)),
+            "unassigned_rows": unassigned_rows,
+            "used_columns": used_columns,
+            "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
+            "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
+            "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
+            "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
+            "module2_fast_mode": True,
+            "fast_mode_version": BOM_FORMATTER_VERSION,
+            "raw_material_writer": "xlsxwriter_constant_memory_fast_raw_only_v23_6",
+            "raw_material_bulk_rows_written": int(total_written_rows),
+            "raw_material_bulk_raw_materials_written": int(total_raw_materials),
+            "supplier_mapping_skipped": True,
+            "supplier_bulk_generated": False,
+            "supplier_bulk_rows": 0,
+            "supplier_bulk_filename": "",
+            "supplier_bulk_download_url": "",
+            "supplier_status": "Skipped in Fast Mode",
+            "bom_structure_generated": False,
+            "working_hour_rollup_generated": False,
+            "module2_skipped_outputs": ["supplier_mapping", "supplier_bulk", "bom_structure", "working_hour_rollup", "zero_working_hour_filter"],
+            "memory_optimization_version": BOM_FORMATTER_VERSION,
+        })
+        summary.update(step1_summary)
+        return summary
+    finally:
+        for name in ["bom_df", "exploded", "work"]:
             if name in locals():
                 try:
                     del locals()[name]
