@@ -479,6 +479,11 @@
                 <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...（UTC+8）</p>
               </div>
 
+              <label for="module3RawBulkSelect">選擇 Module 2 廠區資料</label>
+              <select id="module3RawBulkSelect">
+                <option value="">尚未載入 Module 2 廠區檔案</option>
+              </select>
+
               <label data-i18n="module3UploadCclMapping">上傳光寶 CCL 係數組配表</label>
               <input id="module3CclMappingFile" name="ccl_mapping_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
@@ -628,8 +633,8 @@
               </div>
             </div>
 
-            <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk ZIP</span></a>
-            <a id="allSitesRawBulkDownload" class="download disabled" href="#"><span data-i18n="downloadAllSitesRawMaterialBulk">Download All-sites Raw Material Bulk / Parts</span></a>
+            <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk</span></a>
+            <div id="module2SiteDownloads" class="download-row"></div>
             <a id="workingHourRollupDownload" class="download disabled" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
 
             <a id="supplierBulkDownload" class="download disabled" href="#"><span data-i18n="downloadSupplierBulk">Download Supplier Bulk Create</span></a>
@@ -893,7 +898,7 @@ const homeButton = document.getElementById('homeButton');
 
 const bomForm = document.getElementById('bomForm');
 const bomDownload = document.getElementById('bomDownload');
-const allSitesRawBulkDownload = document.getElementById('allSitesRawBulkDownload');
+const module2SiteDownloads = document.getElementById('module2SiteDownloads');
 const workingHourRollupDownload = document.getElementById('workingHourRollupDownload');
 const supplierBulkDownload = document.getElementById('supplierBulkDownload');
 const bomProcessingStatus = document.getElementById('bomProcessingStatus');
@@ -912,6 +917,7 @@ const module3CclStatusTime = document.getElementById('module3CclStatusTime');
 const module3CclProgressBar = document.getElementById('module3CclProgressBar');
 const module3CclDownload = document.getElementById('module3CclDownload');
 const module3RawBulkSourceText = document.getElementById('module3RawBulkSourceText');
+const module3RawBulkSelect = document.getElementById('module3RawBulkSelect');
 const module3FactorActivityKeyword = document.getElementById('module3FactorActivityKeyword');
 const module3FactorReferenceKeyword = document.getElementById('module3FactorReferenceKeyword');
 const module3FactorSource = document.getElementById('module3FactorSource');
@@ -1311,9 +1317,8 @@ bomForm.addEventListener('submit', async (e) => {
 
   bomDownload.classList.add('disabled');
   bomDownload.href = '#';
-  if (allSitesRawBulkDownload) {
-    allSitesRawBulkDownload.classList.add('disabled');
-    allSitesRawBulkDownload.href = '#';
+  if (module2SiteDownloads) {
+    module2SiteDownloads.innerHTML = '';
   }
   if (workingHourRollupDownload) {
     workingHourRollupDownload.classList.add('disabled');
@@ -1333,11 +1338,25 @@ bomForm.addEventListener('submit', async (e) => {
 
     if (!data.ok) throw new Error(data.message || cmpT('bomExpansionFailed', 'BOM Expansion failed'));
 
-    bomDownload.href = data.download_url;
-    bomDownload.classList.remove('disabled');
-    if (allSitesRawBulkDownload && data.summary && (data.summary.all_sites_download_url || data.summary.all_sites_zip_download_url)) {
-      allSitesRawBulkDownload.href = data.summary.all_sites_download_url || data.summary.all_sites_zip_download_url;
-      allSitesRawBulkDownload.classList.remove('disabled');
+    const siteFiles = (data.summary && data.summary.production_site_files) || [];
+    if (siteFiles.length > 0) {
+      bomDownload.href = siteFiles[0].download_url || `/download/${siteFiles[0].filename}`;
+      bomDownload.classList.remove('disabled');
+      if (module2SiteDownloads) {
+        module2SiteDownloads.innerHTML = '';
+        siteFiles.forEach((item) => {
+          const a = document.createElement('a');
+          a.className = 'link-button';
+          a.href = item.download_url || `/download/${item.filename}`;
+          const site = item.production_site || item.filename;
+          const rows = item.activity_rows ? ` (${Number(item.activity_rows).toLocaleString()} rows)` : '';
+          a.textContent = `下載 ${site} Raw Material Bulk${rows}`;
+          module2SiteDownloads.appendChild(a);
+        });
+      }
+    } else {
+      bomDownload.href = data.download_url;
+      bomDownload.classList.remove('disabled');
     }
     if (workingHourRollupDownload && data.summary && data.summary.working_hour_rollup_download_url) {
       workingHourRollupDownload.href = data.summary.working_hour_rollup_download_url;
@@ -1383,12 +1402,54 @@ async function refreshModule3RawBulkSource() {
   try {
     const res = await fetch('/module3/raw-material-bulk-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
-    const filename = data.filename || 'raw material bulk';
+    const filename = data.selected_filename || data.filename || 'raw material bulk';
     const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
-    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜檔案：${filename}${modified ? `｜建立時間：${modified}（UTC+8）` : ''}`;
+    module3RawBulkSourceText.textContent = `來源：Module 2 已選擇廠區資料｜檔案：${filename}${modified ? `｜建立時間：${modified}（UTC+8）` : ''}`;
+
+    if (module3RawBulkSelect) {
+      const options = data.options || [];
+      module3RawBulkSelect.innerHTML = '';
+      if (!options.length) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = '尚未找到 Module 2 廠區檔案';
+        module3RawBulkSelect.appendChild(opt);
+      } else {
+        options.forEach((item) => {
+          const opt = document.createElement('option');
+          opt.value = item.filename;
+          const site = item.production_site || item.filename;
+          opt.textContent = `${site}｜${item.filename}`;
+          if (item.filename === filename) opt.selected = true;
+          module3RawBulkSelect.appendChild(opt);
+        });
+      }
+    }
   } catch (err) {
     module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
+    if (module3RawBulkSelect) {
+      module3RawBulkSelect.innerHTML = '<option value="">尚未找到 Module 2 廠區檔案</option>';
+    }
   }
+}
+
+if (module3RawBulkSelect) {
+  module3RawBulkSelect.addEventListener('change', async () => {
+    const filename = module3RawBulkSelect.value;
+    if (!filename) return;
+    try {
+      const res = await fetch('/module3/select-raw-material-bulk', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({filename})
+      });
+      const data = await readJsonOrThrow(res);
+      const modified = data.modified_at ? data.modified_at.replace('T', ' ') : '';
+      module3RawBulkSourceText.textContent = `來源：Module 2 已選擇廠區資料｜檔案：${data.filename}${modified ? `｜建立時間：${modified}（UTC+8）` : ''}`;
+    } catch (err) {
+      module3RawBulkSourceText.textContent = err.message || '切換 Module 2 廠區檔案失敗。';
+    }
+  });
 }
 
 function startModule3CclPolling(jobId, startTime) {
