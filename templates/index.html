@@ -497,6 +497,7 @@
               </div>
 
               <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載已填入係數的 Bulk 檔</span></a>
+              <pre id="module3CclLog" class="rule-log">MODULE 3 is ready.</pre>
             </form>
           </section>
         </section>
@@ -1057,6 +1058,7 @@ const module3CclStatusText = document.getElementById('module3CclStatusText');
 const module3CclStatusTime = document.getElementById('module3CclStatusTime');
 const module3CclProgressBar = document.getElementById('module3CclProgressBar');
 const module3CclDownload = document.getElementById('module3CclDownload');
+const module3CclLog = document.getElementById('module3CclLog');
 const module3RawBulkSourceText = document.getElementById('module3RawBulkSourceText');
 const module3FactorActivityKeyword = document.getElementById('module3FactorActivityKeyword');
 const module3FactorReferenceKeyword = document.getElementById('module3FactorReferenceKeyword');
@@ -1689,6 +1691,9 @@ function startModule3CclPolling(jobId, startTime) {
       const data = await readJsonOrThrow(res);
       const job = data.job || {};
       const progress = Number(job.progress || 0);
+      const processed = Number(job.processed_rows || 0);
+      const total = Number(job.total_rows || 0);
+      const rowText = total ? `Rows: ${processed.toLocaleString()} / ${total.toLocaleString()}` : `Rows: ${processed.toLocaleString()}`;
       const sourceText = job.source_filename ? `來源檔：${job.source_filename}${job.source_meta ? cmpSourceMetaText(job.source_meta) : ''}` : '';
       const remaining = cmpUpdateEtaTracker(module3CclEtaTracker, job, 60);
       if (job.status === 'success') {
@@ -1700,6 +1705,7 @@ function startModule3CclPolling(jobId, startTime) {
           unmatched: summary.unmatched_rows ?? 0
         }) + fileCount + (sourceText ? `｜${sourceText}` : '');
         setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), text, cmpT('completed', 'Completed'), 100);
+        if (module3CclLog) module3CclLog.textContent = `Completed.\nJob: ${jobId}\nRows: ${(summary.activity_rows || summary.total_rows || 0).toLocaleString()}\nWritten: ${(summary.written_rows || 0).toLocaleString()}\nUnmatched: ${(summary.unmatched_rows || 0).toLocaleString()}\nDownload: ${summary.output_filename || ''}`;
         if (module3CclDownload && job.download_url) {
           module3CclDownload.href = job.download_url;
           module3CclDownload.classList.remove('disabled');
@@ -1709,12 +1715,15 @@ function startModule3CclPolling(jobId, startTime) {
       if (job.status === 'error') {
         clearInterval(module3CclPollTimer);
         setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), job.message || cmpT('module3CclFailed', 'CCL 係數對應失敗'), cmpT('error', 'Error'), 100);
+        if (module3CclLog) module3CclLog.textContent = `Error: ${job.message || 'Unknown error'}\nStep: ${job.step || ''}`;
         return;
       }
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), `${job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。')}${sourceText ? `｜${sourceText}` : ''}`, cmpRemainingText(remaining), progress);
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 processing'), `${job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。')} · ${rowText}${sourceText ? `｜${sourceText}` : ''}`, cmpRemainingText(remaining), progress);
+      if (module3CclLog) module3CclLog.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nEstimated remaining: ${cmpFormatDuration(remaining)}\nLast heartbeat: ${job.updated_at || ''}`;
     } catch (err) {
       clearInterval(module3CclPollTimer);
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
+      if (module3CclLog) module3CclLog.textContent = `Polling error: ${err.message || err}`;
     }
   }, 1500);
 }
@@ -1728,7 +1737,8 @@ if (module3CclForm) {
       module3CclDownload.classList.add('disabled');
       module3CclDownload.href = '#';
     }
-    setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(60), 3);
+    setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 queued'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(60), 3);
+    if (module3CclLog) module3CclLog.textContent = 'Uploading and creating MODULE 3 job...';
     await refreshModule3RawBulkSource();
     refreshBomStep1Source();
     const fd = new FormData(module3CclForm);
@@ -1736,10 +1746,12 @@ if (module3CclForm) {
       const res = await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: fd });
       const data = await readJsonOrThrow(res);
       if (!data.job_id) throw new Error('後端未回傳 job_id。');
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(60), 5);
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 processing'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(60), 5);
+      if (module3CclLog) module3CclLog.textContent = `Job: ${data.job_id}\nStatus: queued\nStep: 背景工作已開始，正在讀取檔案。\nRows: 0\nEstimated remaining: ${cmpFormatDuration(60)}`;
       startModule3CclPolling(data.job_id, Date.now());
     } catch (err) {
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
+      if (module3CclLog) module3CclLog.textContent = `Error: ${err.message || err}`;
     }
   });
 }

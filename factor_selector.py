@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import load_workbook, Workbook
 
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_CCL_FACTORNAME_V1_20260706"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V1_20260708"
 
 
 def _norm(value: Any) -> str:
@@ -76,13 +76,23 @@ def _normalize_material_key(value: Any) -> str:
     return text.strip()
 
 
-def _emit_progress(callback: Callable[..., None] | None, progress: int, step: str, remaining_seconds: int | None = None) -> None:
+def _emit_progress(
+    callback: Callable[..., None] | None,
+    progress: int,
+    step: str,
+    remaining_seconds: int | None = None,
+    processed_rows: int | None = None,
+    total_rows: int | None = None,
+) -> None:
     if not callback:
         return
     try:
-        callback(progress, step, remaining_seconds)
+        callback(progress, step, remaining_seconds, processed_rows=processed_rows, total_rows=total_rows)
     except TypeError:
-        callback(progress, step)
+        try:
+            callback(progress, step, remaining_seconds)
+        except TypeError:
+            callback(progress, step)
 
 
 def _safe_number(value: Any) -> float | None:
@@ -149,6 +159,62 @@ def _read_ccl_mapping(ccl_path: str | Path, progress_callback: Callable[..., Non
     finally:
         wb.close()
 
+def _first_header_rows(ws, header_row_count: int = DATA_START_ROW - 1) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    max_col = max(1, int(getattr(ws, "max_column", 1) or 1))
+    for values in ws.iter_rows(min_row=1, max_row=header_row_count, values_only=True):
+        row = list(values or [])
+        if len(row) < max_col:
+            row.extend([None] * (max_col - len(row)))
+        rows.append(row)
+    while len(rows) < header_row_count:
+        rows.append([None] * max_col)
+    return rows
+
+
+def _find_col_from_header_rows(header_rows: list[list[Any]], aliases: list[str], required: bool = True) -> int | None:
+    alias_keys = {_norm(a) for a in aliases if str(a or "").strip()}
+    for row_idx in list(range(min(len(header_rows), DATA_START_ROW - 1))):
+        for col_idx, value in enumerate(header_rows[row_idx], start=1):
+            if _norm(value) in alias_keys:
+                return col_idx
+    if required:
+        raise ValueError(f"找不到欄位：{', '.join(aliases)}")
+    return None
+
+
+def _ensure_output_col(header_rows: list[list[Any]], aliases: list[str], preferred_header: str) -> int:
+    col = _find_col_from_header_rows(header_rows, aliases, required=False)
+    if col:
+        return col
+    max_len = max((len(r) for r in header_rows), default=0)
+    new_col = max_len + 1
+    for row in header_rows:
+        if len(row) < new_col:
+            row.extend([None] * (new_col - len(row)))
+    if not header_rows:
+        header_rows.append([None] * new_col)
+    header_rows[0][new_col - 1] = preferred_header
+    return new_col
+
+
+def _pad_row(row: list[Any], width: int) -> list[Any]:
+    if len(row) < width:
+        row.extend([None] * (width - len(row)))
+    elif len(row) > width:
+        row = row[:width]
+    return row
+
+
+def _copy_non_activity_sheet_streaming(src_ws, dst_wb: Workbook) -> int:
+    dst_ws = dst_wb.create_sheet(title=src_ws.title)
+    rows = 0
+    for values in src_ws.iter_rows(values_only=True):
+        dst_ws.append(list(values or []))
+        rows += 1
+    return rows
+
+
 def apply_ccl_factors_to_raw_material_bulk(
     raw_material_bulk_path: str | Path,
     ccl_mapping_path: str | Path,
@@ -158,9 +224,11 @@ def apply_ccl_factors_to_raw_material_bulk(
 ) -> Dict[str, Any]:
     """Fill Module 3 CCL factor fields into a Module 2 raw-material bulk workbook.
 
-    Performance V2 keeps the original workbook/template structure, but reduces
-    unnecessary work: CCL is read in streaming mode, Material lookup uses a
-    dictionary, progress updates are throttled, and the workbook is saved only once.
+    Large Dataset Mode avoids copying/loading the full workbook template in normal
+    openpyxl mode. It reads the input workbook in read-only mode and writes a new
+    workbook in write-only mode, preserving the formal sheet names and required
+    raw-material bulk columns while appending missing factor columns when M2B/M2C
+    produced a lightweight bulk file.
     """
     perf_start = time.perf_counter()
     perf: dict[str, float] = {}
@@ -169,89 +237,103 @@ def apply_ccl_factors_to_raw_material_bulk(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     t0 = time.perf_counter()
-    _emit_progress(progress_callback, 3, "複製 raw material bulk 模板", 45)
-    shutil.copy2(raw_material_bulk_path, output_path)
-    perf["copy_template"] = time.perf_counter() - t0
-
-    t0 = time.perf_counter()
     if ccl_map is None:
         ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
     perf["read_ccl_and_build_dict"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    _emit_progress(progress_callback, 36, "開啟 raw material bulk 檔案", 30)
-    wb = load_workbook(output_path)
-    perf["open_workbook"] = time.perf_counter() - t0
-    if ACTIVITY_SHEET_NAME not in wb.sheetnames:
+    _emit_progress(progress_callback, 34, "以低記憶體模式開啟 raw material bulk", 60, 0, None)
+    src_wb = load_workbook(raw_material_bulk_path, read_only=True, data_only=False)
+    perf["open_readonly_workbook"] = time.perf_counter() - t0
+    if ACTIVITY_SHEET_NAME not in src_wb.sheetnames:
+        src_wb.close()
         raise ValueError(f"找不到分頁：{ACTIVITY_SHEET_NAME}")
-    ws = wb[ACTIVITY_SHEET_NAME]
 
-    t0 = time.perf_counter()
-    cols = {
-        "material": _find_col(ws, ["Raw Material Code", "Raw Material Number", "Material", "Material Number", "原物料代碼", "料號"]),
-        "doc_start": _find_col(ws, ["Doc. Start Date", "Document Start Date", "開始日期"], required=False),
-        "factor_name": _find_col(ws, ["Factor Name", "Emission Factor Name", "係數名稱"]),
-        "emission_factor": _find_col(ws, ["Emission Factor", "Carbon Factor", "碳係數"]),
-        "factor_source": _find_col(ws, ["Factor Source", "Emission Factor Source", "係數來源"], required=False),
-        "factor_comment": _find_col(ws, ["Factor Comment", "Emission Factor Comment", "係數備註"], required=False),
-        "country": _find_col(ws, ["Country/Area", "Country Area", "Country", "Area", "國家地區"], required=False),
-        "enabled_date": _find_col(ws, ["Enabled Date", "Effective Date", "啟用日期"], required=False),
-        "data_quality": _find_col(ws, ["Data Quality", "資料品質"], required=False),
-    }
-    perf["resolve_columns"] = time.perf_counter() - t0
+    out_wb = Workbook(write_only=True)
 
     matched = 0
     unmatched = 0
     written_rows = 0
     non_empty_material_rows = 0
-    total_activity_rows = max(1, ws.max_row - DATA_START_ROW + 1)
+    copied_other_rows = 0
+    total_activity_rows = 0
 
-    t0 = time.perf_counter()
-    for idx, row in enumerate(range(DATA_START_ROW, ws.max_row + 1), start=1):
-        material = _text(ws.cell(row, cols["material"]).value)
-        if not material:
-            continue
-        non_empty_material_rows += 1
-        item = ccl_map.get(_normalize_material_key(material))
-        if not item:
-            unmatched += 1
-            continue
+    try:
+        src_ws = src_wb[ACTIVITY_SHEET_NAME]
+        total_activity_rows = max(0, int(src_ws.max_row or 0) - DATA_START_ROW + 1)
+        header_rows = _first_header_rows(src_ws, DATA_START_ROW - 1)
 
-        ws.cell(row, cols["factor_name"]).value = item.get("factor_name") or item["ccl_item"]
-        ws.cell(row, cols["emission_factor"]).value = item["emission_factor"]
-        if cols["factor_source"]:
-            ws.cell(row, cols["factor_source"]).value = "Ecoinvent"
-        if cols["factor_comment"]:
-            ws.cell(row, cols["factor_comment"]).value = "CCLibrary"
-        if cols["country"]:
-            ws.cell(row, cols["country"]).value = "GLO"
-        if cols["enabled_date"]:
-            ws.cell(row, cols["enabled_date"]).value = ws.cell(row, cols["doc_start"]).value if cols["doc_start"] else None
-            ws.cell(row, cols["enabled_date"]).number_format = "yyyy/mm/dd"
-        if cols["data_quality"]:
-            ws.cell(row, cols["data_quality"]).value = "SECONDARY"
-        matched += 1
-        written_rows += 1
-        if idx == 1 or idx % 1000 == 0:
-            elapsed = max(0.001, time.perf_counter() - t0)
-            rate = idx / elapsed
-            remaining = int(max(1, (total_activity_rows - idx) / rate + 12)) if rate > 0 else 30
-            _emit_progress(progress_callback, 40 + int(min(45, idx / total_activity_rows * 45)), "比對原物料並寫入 CCL 係數欄位", remaining)
-    perf["map_and_write_cells"] = time.perf_counter() - t0
+        cols = {
+            "material": _find_col_from_header_rows(header_rows, ["Raw Material Code", "Raw Material Number", "Material", "Material Number", "原物料代碼", "料號"]),
+            "doc_start": _find_col_from_header_rows(header_rows, ["Doc. Start Date", "Document Start Date", "開始日期"], required=False),
+            "factor_name": _ensure_output_col(header_rows, ["Factor Name", "Emission Factor Name", "係數名稱"], "Factor Name"),
+            "emission_factor": _ensure_output_col(header_rows, ["Emission Factor", "Carbon Factor", "碳係數"], "Emission Factor"),
+            "factor_source": _ensure_output_col(header_rows, ["Factor Source", "Emission Factor Source", "係數來源"], "Factor Source"),
+            "factor_comment": _ensure_output_col(header_rows, ["Factor Comment", "Emission Factor Comment", "係數備註"], "Factor Comment"),
+            "country": _ensure_output_col(header_rows, ["Country/Area", "Country Area", "Country", "Area", "國家地區"], "Country/Area"),
+            "enabled_date": _ensure_output_col(header_rows, ["Enabled Date", "Effective Date", "啟用日期"], "Enabled Date"),
+            "data_quality": _ensure_output_col(header_rows, ["Data Quality", "資料品質"], "Data Quality"),
+        }
+        output_width = max(max(len(r) for r in header_rows), max(c for c in cols.values() if c))
 
-    t0 = time.perf_counter()
-    _emit_progress(progress_callback, 90, "儲存已填入係數的 Bulk 檔", 10)
-    wb.save(output_path)
-    wb.close()
-    perf["save_workbook"] = time.perf_counter() - t0
+        _emit_progress(progress_callback, 38, "建立正式 Raw Material Bulk 欄位結構", 45, 0, total_activity_rows)
+        out_ws = out_wb.create_sheet(title=ACTIVITY_SHEET_NAME)
+        for hrow in header_rows:
+            out_ws.append(_pad_row(list(hrow), output_width))
+
+        t0 = time.perf_counter()
+        for idx, values in enumerate(src_ws.iter_rows(min_row=DATA_START_ROW, max_row=src_ws.max_row, values_only=True), start=1):
+            row_values = _pad_row(list(values or []), output_width)
+            material = _text(row_values[cols["material"] - 1] if len(row_values) >= cols["material"] else None)
+            if material:
+                non_empty_material_rows += 1
+                item = ccl_map.get(_normalize_material_key(material))
+                if item:
+                    row_values[cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
+                    row_values[cols["emission_factor"] - 1] = item.get("emission_factor")
+                    row_values[cols["factor_source"] - 1] = "Ecoinvent"
+                    row_values[cols["factor_comment"] - 1] = "CCLibrary"
+                    row_values[cols["country"] - 1] = "GLO"
+                    row_values[cols["enabled_date"] - 1] = row_values[cols["doc_start"] - 1] if cols.get("doc_start") else None
+                    row_values[cols["data_quality"] - 1] = "SECONDARY"
+                    matched += 1
+                    written_rows += 1
+                else:
+                    unmatched += 1
+            out_ws.append(row_values)
+            if idx == 1 or idx % 1000 == 0:
+                elapsed = max(0.001, time.perf_counter() - t0)
+                rate = idx / elapsed
+                remaining = int(max(1, (total_activity_rows - idx) / rate + 15)) if rate > 0 and total_activity_rows else 60
+                progress = 40 + int(min(48, idx / max(1, total_activity_rows) * 48))
+                _emit_progress(
+                    progress_callback,
+                    progress,
+                    "比對原物料並串流寫入 CCL 係數欄位",
+                    remaining,
+                    idx,
+                    total_activity_rows,
+                )
+        perf["stream_map_and_write_activity"] = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        _emit_progress(progress_callback, 89, "複製 Raw Material Bulk 其他分頁", 20, total_activity_rows, total_activity_rows)
+        for sheet_name in src_wb.sheetnames:
+            if sheet_name == ACTIVITY_SHEET_NAME:
+                continue
+            copied_other_rows += _copy_non_activity_sheet_streaming(src_wb[sheet_name], out_wb)
+        perf["copy_other_sheets"] = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        _emit_progress(progress_callback, 94, "儲存已填入係數的正式 Bulk 檔", 15, total_activity_rows, total_activity_rows)
+        out_wb.save(output_path)
+        perf["save_writeonly_workbook"] = time.perf_counter() - t0
+    finally:
+        src_wb.close()
+
     total_time = time.perf_counter() - perf_start
     perf["total"] = total_time
-    _emit_progress(progress_callback, 100, "CCL 係數對應完成", 0)
-
-    print("========== Module3 CCL Performance ==========")
-    for key in ["copy_template", "read_ccl_and_build_dict", "open_workbook", "resolve_columns", "map_and_write_cells", "save_workbook", "total"]:
-        print(f"{key:28s}: {perf.get(key, 0):.2f} s")
-    print("=============================================")
+    _emit_progress(progress_callback, 100, "CCL 係數對應完成", 0, total_activity_rows, total_activity_rows)
 
     return {
         "output_filename": output_path.name,
@@ -261,8 +343,12 @@ def apply_ccl_factors_to_raw_material_bulk(
         "unmatched_rows": unmatched,
         "written_rows": written_rows,
         "total_rows": non_empty_material_rows,
+        "activity_rows": total_activity_rows,
+        "copied_other_sheet_rows": copied_other_rows,
         "performance_seconds": {k: round(v, 3) for k, v in perf.items()},
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
+        "large_dataset_mode": True,
+        "template_strategy": "write_only workbook; preserve formal sheet names/headers; append missing factor columns; no full-template load",
     }
 
 
@@ -296,9 +382,9 @@ def apply_ccl_factors_to_raw_material_bulk_package(
 ) -> Dict[str, Any]:
     """Apply CCL factors to a Module 2 raw-material bulk Excel or ZIP package.
 
-    ZIP input is treated as a Module 2 by-site package: every Excel workbook inside
-    the ZIP is processed and the filled workbooks are returned in one output ZIP.
-    The CCL mapping is loaded only once to keep CPU and memory usage low.
+    ZIP input is processed one workbook at a time. Each workbook is streamed from
+    the extracted file to a write-only XLSX, then immediately added to the output
+    ZIP. Output files are not accumulated in memory.
     """
     raw_material_bulk_path = Path(raw_material_bulk_path)
     output_path = Path(output_path)
@@ -312,7 +398,7 @@ def apply_ccl_factors_to_raw_material_bulk_package(
             progress_callback=progress_callback,
         )
 
-    _emit_progress(progress_callback, 2, "讀取 Module 2 ZIP 內原物料 Bulk 檔案", 60)
+    _emit_progress(progress_callback, 2, "讀取 Module 2 ZIP 內原物料 Bulk 檔案", 60, 0, None)
     with zipfile.ZipFile(raw_material_bulk_path, "r") as zin:
         all_excel_members = [
             info for info in zin.infolist()
@@ -332,47 +418,54 @@ def apply_ccl_factors_to_raw_material_bulk_package(
             "unmatched_rows": 0,
             "written_rows": 0,
             "total_rows": 0,
+            "activity_rows": 0,
         }
         processed_files: list[dict[str, Any]] = []
 
         with tempfile.TemporaryDirectory(prefix="cmp_module3_zip_") as tmpdir:
             tmpdir_path = Path(tmpdir)
-            output_files: list[Path] = []
             total_files = len(excel_members)
-            for idx, info in enumerate(excel_members, start=1):
-                original_name = Path(info.filename).name
-                input_file = tmpdir_path / f"input_{idx}_{original_name}"
-                filled_name = f"factor_filled_{original_name}"
-                filled_file = tmpdir_path / filled_name
-                with zin.open(info, "r") as src, input_file.open("wb") as dst:
-                    shutil.copyfileobj(src, dst, length=1024 * 1024)
-                pct = 10 + int((idx - 1) / max(1, total_files) * 75)
-                _emit_progress(progress_callback, pct, f"處理 ZIP 內第 {idx}/{total_files} 個 Bulk：{original_name}", 60)
-                summary = apply_ccl_factors_to_raw_material_bulk(
-                    input_file,
-                    ccl_mapping_path,
-                    filled_file,
-                    progress_callback=None,
-                    ccl_map=ccl_map,
-                )
-                output_files.append(filled_file)
-                processed_files.append({
-                    "filename": original_name,
-                    "output_filename": filled_name,
-                    "matched_rows": summary.get("matched_rows", 0),
-                    "unmatched_rows": summary.get("unmatched_rows", 0),
-                    "written_rows": summary.get("written_rows", 0),
-                    "total_rows": summary.get("total_rows", 0),
-                })
-                for key in ["matched_rows", "unmatched_rows", "written_rows", "total_rows"]:
-                    totals[key] += int(summary.get(key, 0) or 0)
-
-            _emit_progress(progress_callback, 92, "壓縮已填入係數的 Bulk 檔案", 10)
             with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
-                for file_path in output_files:
-                    zout.write(file_path, arcname=file_path.name)
+                for file_idx, info in enumerate(excel_members, start=1):
+                    original_name = Path(info.filename).name
+                    input_file = tmpdir_path / f"input_{file_idx}_{original_name}"
+                    filled_name = f"factor_filled_{original_name}"
+                    filled_file = tmpdir_path / filled_name
+                    with zin.open(info, "r") as src, input_file.open("wb") as dst:
+                        shutil.copyfileobj(src, dst, length=1024 * 1024)
 
-    _emit_progress(progress_callback, 100, "ZIP 內全部 Bulk 係數對應完成", 0)
+                    base_pct = 10 + int((file_idx - 1) / max(1, total_files) * 80)
+                    _emit_progress(progress_callback, base_pct, f"處理 ZIP 內第 {file_idx}/{total_files} 個 Bulk：{original_name}", 60, 0, None)
+
+                    def nested_progress(p: int, step: str, remaining_seconds: int | None = None, *, processed_rows: int | None = None, total_rows: int | None = None) -> None:
+                        # Map each file's internal 34-100% progress into its share of 10-90% total progress.
+                        file_span = 80 / max(1, total_files)
+                        normalized = max(0, min(1, (int(p) - 34) / 66)) if p >= 34 else 0
+                        package_progress = int(10 + ((file_idx - 1) + normalized) * file_span)
+                        display_step = f"{step}: {original_name}"
+                        _emit_progress(progress_callback, package_progress, display_step, remaining_seconds, processed_rows, total_rows)
+
+                    summary = apply_ccl_factors_to_raw_material_bulk(
+                        input_file,
+                        ccl_mapping_path,
+                        filled_file,
+                        progress_callback=nested_progress,
+                        ccl_map=ccl_map,
+                    )
+                    zout.write(filled_file, arcname=filled_name)
+                    processed_files.append({
+                        "filename": original_name,
+                        "output_filename": filled_name,
+                        "matched_rows": summary.get("matched_rows", 0),
+                        "unmatched_rows": summary.get("unmatched_rows", 0),
+                        "written_rows": summary.get("written_rows", 0),
+                        "total_rows": summary.get("total_rows", 0),
+                        "activity_rows": summary.get("activity_rows", 0),
+                    })
+                    for key in ["matched_rows", "unmatched_rows", "written_rows", "total_rows", "activity_rows"]:
+                        totals[key] += int(summary.get(key, 0) or 0)
+
+    _emit_progress(progress_callback, 100, "ZIP 內全部 Bulk 係數對應完成", 0, totals.get("activity_rows", 0), totals.get("activity_rows", 0))
     return {
         "output_filename": output_path.name,
         "download_url": f"/download/{output_path.name}",
@@ -382,6 +475,8 @@ def apply_ccl_factors_to_raw_material_bulk_package(
         "skipped_non_raw_material_bulk_files": skipped_excel_members,
         "raw_material_bulk_file_filter": "include raw_material/activity_data_bulk workbooks; exclude supplier_bulk_create workbooks",
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
+        "large_dataset_mode": True,
+        "template_strategy": "write_only workbook; formal bulk columns; no full-template load",
         **totals,
     }
 
@@ -707,7 +802,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_PERFORMANCE_V2_MODULE2C_RAW_BULK_FILTER_20260708"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V1_20260708"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 

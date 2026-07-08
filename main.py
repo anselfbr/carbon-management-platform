@@ -370,7 +370,14 @@ def _run_module2c_supplier_mapping_job(
         )
 
 def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
-    def report(progress: int, step: str, remaining_seconds: int | None = None) -> None:
+    def report(
+        progress: int,
+        step: str,
+        remaining_seconds: int | None = None,
+        *,
+        processed_rows: int | None = None,
+        total_rows: int | None = None,
+    ) -> None:
         payload = {
             "status": "running",
             "progress": max(0, min(100, int(progress))),
@@ -378,12 +385,16 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
         }
         if remaining_seconds is not None:
             payload["remaining_seconds"] = max(0, int(remaining_seconds))
+        if processed_rows is not None:
+            payload["processed_rows"] = max(0, int(processed_rows))
+        if total_rows is not None:
+            payload["total_rows"] = max(0, int(total_rows))
         _set_module3_ccl_job(job_id, **payload)
 
     try:
         report(1, "建立 CCL 係數對應工作", 45)
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, progress_callback=report)
-        summary["app_version"] = "CMP_MODULE3_CCL_PERFORMANCE_V2"
+        summary["app_version"] = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V1"
         _set_module3_ccl_job(
             job_id,
             status="success",
