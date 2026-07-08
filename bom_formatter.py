@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
+BOM_FORMATTER_VERSION = "CMP_V24_1_M2B_TEMPLATE_PRESERVE_V2"
 
 
 DEFAULT_MAPPING = {
@@ -3138,74 +3138,117 @@ def _write_raw_material_bulk_from_site_csv_streaming(
     current_site: str = "",
     current_site_rows: int = 0,
 ) -> Dict[str, Any]:
-    """Write a lightweight Raw Material Bulk workbook from a per-site CSV spool.
+    """Write Raw Material Bulk by copying the user's original template first.
 
-    Uses xlsxwriter constant_memory when available because it is much faster for
-    200k+ flat rows than openpyxl write_only. Falls back to openpyxl if the
-    package is not installed.
+    Template Preserve V2 rule:
+    - copy the uploaded Raw Material Bulk Template as the output workbook;
+    - open the copied workbook and write only row >= 3 in Sheet 1 and Sheet 2;
+    - do not rebuild workbook.xml / relationships / styles.xml / sheet XML;
+    - keep Sheet 3/4, sheet order, hidden state, row 1/2 headers, merges,
+      colors, column widths, freeze panes, validations and formulas from the
+      original template.
+
+    This replaces the previous lightweight header-only writer that produced
+    two-sheet workbooks and could trigger Excel repair prompts.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    activity_headers, raw_headers, activity_cols, raw_cols, document_type_value = _template_headers_for_lightweight_bulk(raw_material_template_path)
+    raw_material_template_path = Path(raw_material_template_path)
+    if not raw_material_template_path.exists():
+        raise FileNotFoundError(f"找不到 Raw Material Bulk Template：{raw_material_template_path}")
 
+    # Copy the template byte-for-byte first so all non-data workbook structure is retained.
+    shutil.copy2(raw_material_template_path, output_path)
+
+    wb = load_workbook(output_path, read_only=False, data_only=False, keep_vba=False)
     raw_seen: set[str] = set()
     raw_descriptions: dict[str, str] = {}
     written = 0
     total_rows = int(total_rows or current_site_rows or 0)
     progress_every = max(1000, min(10000, max(int(current_site_rows or 0) // 20, 1)))
 
-    def build_activity_row(row_data: dict[str, Any]) -> tuple[list[Any], str]:
-        start_date_value, end_date_value = _fast_year_bounds(row_data.get("valid_from"))
-        usage_value = _fast_number(row_data.get("usage"))
-        raw_material = _fast_text(row_data.get("raw_material"))
-        activity_row = ["" for _ in activity_headers]
-        _set_row_value(activity_row, activity_cols["raw_name"], raw_material)
-        _set_row_value(activity_row, activity_cols["raw_code"], raw_material)
-        _set_row_value(activity_row, activity_cols["start_date"], start_date_value)
-        _set_row_value(activity_row, activity_cols["end_date"], end_date_value)
-        _set_row_value(activity_row, activity_cols["document_type"], document_type_value)
-        _set_row_value(activity_row, activity_cols["document_number"], "")
-        _set_row_value(activity_row, activity_cols["usage"], usage_value)
-        _set_row_value(activity_row, activity_cols["unit"], row_data.get("unit", ""))
-        _set_row_value(activity_row, activity_cols["data_source"], "SAP")
-        _set_row_value(activity_row, activity_cols["data_source_other"], "")
-        _set_row_value(activity_row, activity_cols["supplier_name"], "")
-        _set_row_value(activity_row, activity_cols["transport_origin"], "")
-        _set_row_value(activity_row, activity_cols["transport_destination"], row_data.get("transport_destination", current_site))
-        _set_row_value(activity_row, activity_cols["target_product"], row_data.get("target_product", ""))
-        _set_row_value(activity_row, activity_cols["comment"], "")
-        _set_row_value(activity_row, activity_cols["material_group"], row_data.get("material_group", ""))
-        _set_row_value(activity_row, activity_cols.get("net_weight"), row_data.get("net_weight", ""))
-        _set_row_value(activity_row, activity_cols.get("gross_weight"), row_data.get("gross_weight", ""))
-        _set_row_value(activity_row, activity_cols.get("weight_unit"), row_data.get("weight_uom", ""))
-        return activity_row, raw_material
+    try:
+        if ACTIVITY_SHEET_NAME not in wb.sheetnames:
+            raise ValueError(f"找不到 raw material bulk 分頁：{ACTIVITY_SHEET_NAME}")
+        if RAW_MATERIAL_SHEET_NAME not in wb.sheetnames:
+            raise ValueError(f"找不到 raw material bulk 分頁：{RAW_MATERIAL_SHEET_NAME}")
+        activity_ws = wb[ACTIVITY_SHEET_NAME]
+        raw_ws = wb[RAW_MATERIAL_SHEET_NAME]
 
-    if xlsxwriter is not None:
-        workbook = xlsxwriter.Workbook(str(output_path), {"constant_memory": True})
-        activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
-        raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
-        date_format = workbook.add_format({"num_format": "yyyy/mm/dd"})
-        for col, value in enumerate(activity_headers):
-            activity_ws.write(0, col, value)
-        for col, value in enumerate(raw_headers):
-            raw_ws.write(0, col, value)
-        excel_row_idx = DATA_START_ROW - 1  # zero-based row 2
+        activity_cols = {
+            "raw_name": _find_template_column(activity_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+            "raw_code": _find_template_column(activity_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+            "start_date": _find_template_column(activity_ws, DOC_START_DATE_ALIASES, 3),
+            "end_date": _find_template_column(activity_ws, DOC_END_DATE_ALIASES, 4),
+            "document_type": _find_template_column(activity_ws, DOCUMENT_TYPE_ALIASES, 5),
+            "document_number": _find_template_column(activity_ws, DOCUMENT_NUMBER_ALIASES, 6),
+            "usage": _find_template_column(activity_ws, USAGE_ALIASES, 7),
+            "unit": _find_template_column(activity_ws, ACTIVITY_DATA_UNIT_ALIASES, 8),
+            "data_source": _find_template_column(activity_ws, DATA_SOURCE_ALIASES, 12),
+            "data_source_other": _find_template_column(activity_ws, DATA_SOURCE_OTHER_ALIASES, 13),
+            "supplier_name": _find_template_column(activity_ws, SUPPLIER_NAME_ALIASES, 14),
+            "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 15),
+            "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 16),
+            "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
+            "comment": _find_template_column(activity_ws, COMMENT_ALIASES, 18),
+            "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
+            "net_weight": _find_template_optional_column(activity_ws, NET_WEIGHT_ALIASES),
+            "gross_weight": _find_template_optional_column(activity_ws, GROSS_WEIGHT_ALIASES),
+            "weight_unit": _find_template_optional_column(activity_ws, WEIGHT_UNIT_ALIASES),
+        }
+        raw_cols = {
+            "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+            "raw_code": _find_template_column(raw_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+            "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
+        }
+        document_type_value = _document_type_for_template(wb)
+
+        # Remove any sample rows in the template without touching row 1/2 or other sheets.
+        if int(activity_ws.max_row or 0) >= DATA_START_ROW:
+            activity_ws.delete_rows(DATA_START_ROW, int(activity_ws.max_row or 0) - DATA_START_ROW + 1)
+        if int(raw_ws.max_row or 0) >= DATA_START_ROW:
+            raw_ws.delete_rows(DATA_START_ROW, int(raw_ws.max_row or 0) - DATA_START_ROW + 1)
+
+        def set_cell(ws, row_idx: int, col_idx: int | None, value: Any) -> None:
+            if not col_idx:
+                return
+            cell = ws.cell(row_idx, int(col_idx))
+            cell.value = value
+            if isinstance(value, date):
+                cell.number_format = "yyyy/mm/dd"
+
         with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
             reader = csv.DictReader(fh)
             for row_data in reader:
-                activity_row, raw_material = build_activity_row(row_data)
-                for col, value in enumerate(activity_row):
-                    if value in (None, ""):
-                        continue
-                    if isinstance(value, date):
-                        activity_ws.write_datetime(excel_row_idx, col, datetime(value.year, value.month, value.day), date_format)
-                    else:
-                        activity_ws.write(excel_row_idx, col, value)
+                start_date_value, end_date_value = _fast_year_bounds(row_data.get("valid_from"))
+                usage_value = _fast_number(row_data.get("usage"))
+                raw_material = _fast_text(row_data.get("raw_material"))
+                excel_row = DATA_START_ROW + written
+
+                set_cell(activity_ws, excel_row, activity_cols["raw_name"], raw_material)
+                set_cell(activity_ws, excel_row, activity_cols["raw_code"], raw_material)
+                set_cell(activity_ws, excel_row, activity_cols["start_date"], start_date_value)
+                set_cell(activity_ws, excel_row, activity_cols["end_date"], end_date_value)
+                set_cell(activity_ws, excel_row, activity_cols["document_type"], document_type_value)
+                set_cell(activity_ws, excel_row, activity_cols["document_number"], "")
+                set_cell(activity_ws, excel_row, activity_cols["usage"], usage_value)
+                set_cell(activity_ws, excel_row, activity_cols["unit"], row_data.get("unit", ""))
+                set_cell(activity_ws, excel_row, activity_cols["data_source"], "SAP")
+                set_cell(activity_ws, excel_row, activity_cols["data_source_other"], "")
+                set_cell(activity_ws, excel_row, activity_cols["supplier_name"], "")
+                set_cell(activity_ws, excel_row, activity_cols["transport_origin"], "")
+                set_cell(activity_ws, excel_row, activity_cols["transport_destination"], row_data.get("transport_destination", current_site))
+                set_cell(activity_ws, excel_row, activity_cols["target_product"], row_data.get("target_product", ""))
+                set_cell(activity_ws, excel_row, activity_cols["comment"], "")
+                set_cell(activity_ws, excel_row, activity_cols["material_group"], row_data.get("material_group", ""))
+                set_cell(activity_ws, excel_row, activity_cols.get("net_weight"), row_data.get("net_weight", ""))
+                set_cell(activity_ws, excel_row, activity_cols.get("gross_weight"), row_data.get("gross_weight", ""))
+                set_cell(activity_ws, excel_row, activity_cols.get("weight_unit"), row_data.get("weight_uom", ""))
+
                 if raw_material and raw_material not in raw_seen:
                     raw_seen.add(raw_material)
                     raw_descriptions[raw_material] = row_data.get("description", "") or ""
                 written += 1
-                excel_row_idx += 1
                 if progress_callback and (written == 1 or written % progress_every == 0 or written == current_site_rows):
                     progress_callback(
                         step=f"Writing Raw Material Bulk: {current_site}",
@@ -3216,54 +3259,15 @@ def _write_raw_material_bulk_from_site_csv_streaming(
                         current_site_rows=current_site_rows,
                         current_site_written=written,
                     )
-        raw_excel_row_idx = DATA_START_ROW - 1
-        for raw_material in sorted(raw_seen):
-            raw_row = ["" for _ in raw_headers]
-            _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
-            _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
-            _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
-            for col, value in enumerate(raw_row):
-                if value in (None, ""):
-                    continue
-                raw_ws.write(raw_excel_row_idx, col, value)
-            raw_excel_row_idx += 1
-        workbook.close()
-        writer_name = "xlsxwriter_constant_memory"
-    else:
-        wb = Workbook(write_only=True)
-        activity_ws = wb.create_sheet(ACTIVITY_SHEET_NAME)
-        raw_ws = wb.create_sheet(RAW_MATERIAL_SHEET_NAME)
-        activity_ws.append(activity_headers)
-        activity_ws.append(["" for _ in activity_headers])
-        raw_ws.append(raw_headers)
-        raw_ws.append(["" for _ in raw_headers])
-        with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
-            reader = csv.DictReader(fh)
-            for row_data in reader:
-                activity_row, raw_material = build_activity_row(row_data)
-                activity_ws.append(activity_row)
-                if raw_material and raw_material not in raw_seen:
-                    raw_seen.add(raw_material)
-                    raw_descriptions[raw_material] = row_data.get("description", "") or ""
-                written += 1
-                if progress_callback and (written == 1 or written % progress_every == 0 or written == current_site_rows):
-                    progress_callback(
-                        step=f"Writing Raw Material Bulk: {current_site}",
-                        processed=processed_offset + written,
-                        total=total_rows,
-                        progress=min(95, 45 + int((processed_offset + written) / max(total_rows, 1) * 45)),
-                        current_site=current_site,
-                        current_site_rows=current_site_rows,
-                        current_site_written=written,
-                    )
-        for raw_material in sorted(raw_seen):
-            raw_row = ["" for _ in raw_headers]
-            _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
-            _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
-            _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
-            raw_ws.append(raw_row)
+
+        for raw_index, raw_material in enumerate(sorted(raw_seen), start=DATA_START_ROW):
+            set_cell(raw_ws, raw_index, raw_cols["raw_name"], raw_material)
+            set_cell(raw_ws, raw_index, raw_cols["raw_code"], raw_material)
+            set_cell(raw_ws, raw_index, raw_cols["description"], raw_descriptions.get(raw_material, ""))
+
         wb.save(output_path)
-        writer_name = "openpyxl_write_only"
+    finally:
+        wb.close()
 
     return {
         "output_filename": output_path.name,
@@ -3275,9 +3279,8 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         "supplier_name_options": 0,
         "site_tbc_supplier_count": 0,
         "supplier_status": "Deferred to Module 2C",
-        "m2b_writer": f"large_dataset_{writer_name}_lightweight_template_headers_only",
+        "m2b_writer": "template_preserve_v2_copy_template_edit_rows_3_plus",
     }
-
 
 def generate_raw_material_bulk_from_standard_total_usage_zip(
     standard_total_usage_path: str | Path,
@@ -3389,8 +3392,8 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
         "supplier_status": "Deferred to Module 2C",
         "supplier_upload_files": 0,
         "supplier_bulk_generated": False,
-        "module2b_rule": "2A total usage -> Module 1 annual quantity/site mapping -> lightweight Raw Material Bulk ZIP by site; supplier mapping is not applied in Module 2B.",
-        "module2b_template_policy": "Headers and sheet names are preserved from Raw Material Bulk template; formatting/dropdowns/validations/formulas are intentionally not copied in M2B Large Dataset Mode.",
+        "module2b_rule": "2A total usage -> Module 1 annual quantity/site mapping -> Raw Material Bulk ZIP by site; supplier mapping is not applied in Module 2B.",
+        "module2b_template_policy": "Template Preserve V2: copy original Raw Material Bulk Template and write only Sheet1/Sheet2 row>=3; preserve Sheet3/Sheet4, row1/2, formatting, formulas, dropdowns, hidden states and workbook relationships.",
     })
     if progress_callback:
         progress_callback(step="Completed", processed=total_rows, total=total_rows, progress=100)
