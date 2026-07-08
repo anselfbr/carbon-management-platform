@@ -2806,187 +2806,6 @@ def _set_row_value(row: list[Any], col_idx: int | None, value: Any) -> None:
         row[int(col_idx) - 1] = value
 
 
-
-
-# ---------------------------------------------------------------------------
-# Smart Template Engine for large Raw Material Bulk workbooks
-# ---------------------------------------------------------------------------
-# This engine keeps the original XLSX package intact and rewrites only the
-# <sheetData> XML of Sheet 1 and Sheet 2.  It therefore preserves workbook-level
-# metadata, sheet order, hidden/helper sheets, formulas, styles, merged cells,
-# column widths, freeze panes, autofilter and validations from the original
-# Raw Material Bulk Template, while still avoiding openpyxl full workbook writes.
-
-_XML_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
-_XML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-_XML_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
-
-
-def _xml_escape(value: Any) -> str:
-    text = "" if value is None else str(value)
-    # XLSX worksheet XML cannot contain most ASCII control characters.
-    # SAP/exported Excel source files may carry hidden control chars in
-    # descriptions or supplier names; leaving them in sheet XML causes Excel
-    # to show a repair/corruption prompt. Keep TAB/LF/CR only.
-    cleaned = []
-    for ch in text:
-        code = ord(ch)
-        if code in (9, 10, 13) or code >= 32:
-            cleaned.append(ch)
-    text = "".join(cleaned)
-    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            .replace('"', "&quot;").replace("'", "&apos;"))
-
-
-def _excel_col_letter(idx: int) -> str:
-    letters = ""
-    while idx:
-        idx, rem = divmod(idx - 1, 26)
-        letters = chr(65 + rem) + letters
-    return letters
-
-
-def _xlsx_cell_xml(row_idx: int, col_idx: int, value: Any) -> str:
-    if value is None or value == "":
-        return ""
-    ref = f"{_excel_col_letter(col_idx)}{row_idx}"
-    if isinstance(value, datetime):
-        value = value.strftime("%Y/%m/%d")
-    elif isinstance(value, date):
-        value = value.strftime("%Y/%m/%d")
-    if isinstance(value, bool):
-        return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'
-    if isinstance(value, (int, float)):
-        return f'<c r="{ref}"><v>{value}</v></c>'
-    text = _xml_escape(value)
-    return f'<c r="{ref}" t="inlineStr"><is><t>{text}</t></is></c>'
-
-
-def _xlsx_row_xml(row_idx: int, values: list[Any]) -> str:
-    cells = []
-    for col_idx, value in enumerate(values, start=1):
-        cell = _xlsx_cell_xml(row_idx, col_idx, value)
-        if cell:
-            cells.append(cell)
-    return f'<row r="{row_idx}">' + "".join(cells) + '</row>'
-
-
-def _workbook_sheet_parts(xlsx_path: str | Path) -> dict[str, str]:
-    """Return visible sheet name -> xl/.../sheetN.xml part mapping without loading cells."""
-    with zipfile.ZipFile(xlsx_path, "r") as zf:
-        wb_xml = zf.read("xl/workbook.xml")
-        rel_xml = zf.read("xl/_rels/workbook.xml.rels")
-    wb_root = ET.fromstring(wb_xml)
-    rel_root = ET.fromstring(rel_xml)
-    rels = {}
-    for rel in rel_root:
-        rid = rel.attrib.get("Id")
-        target = rel.attrib.get("Target", "")
-        if not rid or not target:
-            continue
-        target = target.lstrip("/")
-        if not target.startswith("xl/"):
-            target = "xl/" + target
-        rels[rid] = target
-    parts = {}
-    for sheet in wb_root.findall(f".//{{{_XML_MAIN_NS}}}sheet"):
-        name = sheet.attrib.get("name", "")
-        rid = sheet.attrib.get(f"{{{_XML_REL_NS}}}id")
-        if name and rid in rels:
-            parts[name] = rels[rid]
-    return parts
-
-
-def _update_dimension_ref(sheet_xml: str, max_row: int, max_col: int) -> str:
-    if max_row < 1 or max_col < 1:
-        return sheet_xml
-    ref = f"A1:{_excel_col_letter(max_col)}{max_row}"
-    if re.search(r"<dimension\b[^>]*/>", sheet_xml):
-        return re.sub(r"<dimension\b[^>]*/>", f'<dimension ref="{ref}"/>', sheet_xml, count=1)
-    # Some generated sheets omit dimension. Insert it right after <worksheet ...>.
-    return re.sub(r"(<worksheet\b[^>]*>)", r"\1" + f'<dimension ref="{ref}"/>', sheet_xml, count=1)
-
-
-def _replace_sheetdata_xml(original_xml: bytes, rows_iter) -> bytes:
-    text = original_xml.decode("utf-8")
-    start = text.find("<sheetData")
-    if start < 0:
-        return original_xml
-    open_end = text.find(">", start)
-    close = text.find("</sheetData>", open_end)
-    if open_end < 0 or close < 0:
-        return original_xml
-    sheetdata_open = text[start:open_end + 1]
-    old_sheetdata = text[open_end + 1:close]
-    # Preserve template header rows exactly. This keeps row 1/2 values, styles,
-    # merged header references, comments and any formula cells in the headers.
-    header_rows = []
-    for match in re.finditer(r"<row\b[^>]*\br=\"(\d+)\"[^>]*>.*?</row>", old_sheetdata, flags=re.S):
-        try:
-            row_no = int(match.group(1))
-        except Exception:
-            continue
-        if row_no < DATA_START_ROW:
-            header_rows.append(match.group(0))
-    new_rows = list(header_rows)
-    row_idx = DATA_START_ROW
-    for row_values in rows_iter:
-        new_rows.append(_xlsx_row_xml(row_idx, list(row_values)))
-        row_idx += 1
-    max_col = 1
-    for vals in new_rows:
-        # Fast estimate from generated cell references and preserved header rows.
-        refs = re.findall(r'<c\b[^>]*\br="([A-Z]+)\d+"', vals)
-        for col_letters in refs:
-            col_no = 0
-            for ch in col_letters:
-                col_no = col_no * 26 + (ord(ch) - 64)
-            max_col = max(max_col, col_no)
-    max_row = max(DATA_START_ROW - 1, row_idx - 1)
-    new_xml = text[:start] + sheetdata_open + "".join(new_rows) + "</sheetData>" + text[close + len("</sheetData>"):]
-    new_xml = _update_dimension_ref(new_xml, max_row=max_row, max_col=max_col)
-    return new_xml.encode("utf-8")
-
-
-def _write_template_preserving_raw_material_bulk_xlsx(
-    raw_material_template_path: str | Path,
-    output_path: str | Path,
-    activity_rows_iter,
-    raw_rows_iter,
-) -> str:
-    """Create a Raw Material Bulk workbook by preserving template package parts.
-
-    Only the data rows of Input Sheet Activity Data and Input Sheet Raw Material
-    are replaced. All other worksheets and workbook settings remain as-is.
-    """
-    template_path = Path(raw_material_template_path)
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    parts = _workbook_sheet_parts(template_path)
-    activity_part = parts.get(ACTIVITY_SHEET_NAME)
-    raw_part = parts.get(RAW_MATERIAL_SHEET_NAME)
-    if not activity_part or not raw_part:
-        raise ValueError("Raw Material Bulk Template 缺少必要分頁：Input Sheet Activity Data / Input Sheet Raw Material")
-    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
-    with zipfile.ZipFile(template_path, "r") as zin, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
-        for info in zin.infolist():
-            data = zin.read(info.filename)
-            if info.filename == activity_part:
-                data = _replace_sheetdata_xml(data, activity_rows_iter())
-            elif info.filename == raw_part:
-                data = _replace_sheetdata_xml(data, raw_rows_iter())
-            zout.writestr(info, data)
-    tmp_path.replace(output_path)
-    return "xlsx_zip_template_preserving_stream"
-
-
-def _rows_from_csv_spool(csv_path: str | Path):
-    with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
-        reader = csv.reader(fh)
-        for row in reader:
-            yield row
-
-
 def _find_header_index(headers: list[Any], wanted: str | None, aliases: list[str] | None = None) -> int | None:
     candidates = []
     if wanted:
@@ -3361,14 +3180,68 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         _set_row_value(activity_row, activity_cols.get("weight_unit"), row_data.get("weight_uom", ""))
         return activity_row, raw_material
 
-    with tempfile.NamedTemporaryFile("w", newline="", encoding="utf-8-sig", suffix=".csv", delete=False) as activity_tmp:
-        activity_spool_path = Path(activity_tmp.name)
-        activity_writer = csv.writer(activity_tmp)
+    if xlsxwriter is not None:
+        workbook = xlsxwriter.Workbook(str(output_path), {"constant_memory": True})
+        activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
+        raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
+        date_format = workbook.add_format({"num_format": "yyyy/mm/dd"})
+        for col, value in enumerate(activity_headers):
+            activity_ws.write(0, col, value)
+        for col, value in enumerate(raw_headers):
+            raw_ws.write(0, col, value)
+        excel_row_idx = DATA_START_ROW - 1  # zero-based row 2
         with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
             reader = csv.DictReader(fh)
             for row_data in reader:
                 activity_row, raw_material = build_activity_row(row_data)
-                activity_writer.writerow(activity_row)
+                for col, value in enumerate(activity_row):
+                    if value in (None, ""):
+                        continue
+                    if isinstance(value, date):
+                        activity_ws.write_datetime(excel_row_idx, col, datetime(value.year, value.month, value.day), date_format)
+                    else:
+                        activity_ws.write(excel_row_idx, col, value)
+                if raw_material and raw_material not in raw_seen:
+                    raw_seen.add(raw_material)
+                    raw_descriptions[raw_material] = row_data.get("description", "") or ""
+                written += 1
+                excel_row_idx += 1
+                if progress_callback and (written == 1 or written % progress_every == 0 or written == current_site_rows):
+                    progress_callback(
+                        step=f"Writing Raw Material Bulk: {current_site}",
+                        processed=processed_offset + written,
+                        total=total_rows,
+                        progress=min(95, 45 + int((processed_offset + written) / max(total_rows, 1) * 45)),
+                        current_site=current_site,
+                        current_site_rows=current_site_rows,
+                        current_site_written=written,
+                    )
+        raw_excel_row_idx = DATA_START_ROW - 1
+        for raw_material in sorted(raw_seen):
+            raw_row = ["" for _ in raw_headers]
+            _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
+            _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
+            _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
+            for col, value in enumerate(raw_row):
+                if value in (None, ""):
+                    continue
+                raw_ws.write(raw_excel_row_idx, col, value)
+            raw_excel_row_idx += 1
+        workbook.close()
+        writer_name = "xlsxwriter_constant_memory"
+    else:
+        wb = Workbook(write_only=True)
+        activity_ws = wb.create_sheet(ACTIVITY_SHEET_NAME)
+        raw_ws = wb.create_sheet(RAW_MATERIAL_SHEET_NAME)
+        activity_ws.append(activity_headers)
+        activity_ws.append(["" for _ in activity_headers])
+        raw_ws.append(raw_headers)
+        raw_ws.append(["" for _ in raw_headers])
+        with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            for row_data in reader:
+                activity_row, raw_material = build_activity_row(row_data)
+                activity_ws.append(activity_row)
                 if raw_material and raw_material not in raw_seen:
                     raw_seen.add(raw_material)
                     raw_descriptions[raw_material] = row_data.get("description", "") or ""
@@ -3383,33 +3256,14 @@ def _write_raw_material_bulk_from_site_csv_streaming(
                         current_site_rows=current_site_rows,
                         current_site_written=written,
                     )
-
-    with tempfile.NamedTemporaryFile("w", newline="", encoding="utf-8-sig", suffix=".csv", delete=False) as raw_tmp:
-        raw_spool_path = Path(raw_tmp.name)
-        raw_writer = csv.writer(raw_tmp)
         for raw_material in sorted(raw_seen):
             raw_row = ["" for _ in raw_headers]
             _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
             _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
             _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
-            raw_writer.writerow(raw_row)
-
-    try:
-        writer_name = _write_template_preserving_raw_material_bulk_xlsx(
-            raw_material_template_path,
-            output_path,
-            activity_rows_iter=lambda: _rows_from_csv_spool(activity_spool_path),
-            raw_rows_iter=lambda: _rows_from_csv_spool(raw_spool_path),
-        )
-    finally:
-        try:
-            activity_spool_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        try:
-            raw_spool_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+            raw_ws.append(raw_row)
+        wb.save(output_path)
+        writer_name = "openpyxl_write_only"
 
     return {
         "output_filename": output_path.name,
@@ -3421,8 +3275,7 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         "supplier_name_options": 0,
         "site_tbc_supplier_count": 0,
         "supplier_status": "Deferred to Module 2C",
-        "m2b_writer": f"large_dataset_{writer_name}",
-        "m2b_template_policy": "Smart Template Engine: preserve original Raw Material Bulk XLSX package, all worksheets, row 1/2 headers, styles, formulas, validations, hidden sheets, freeze panes and autofilter; stream-replace only Sheet1/Sheet2 data rows.",
+        "m2b_writer": f"large_dataset_{writer_name}_lightweight_template_headers_only",
     }
 
 
@@ -3888,9 +3741,16 @@ def _write_supplier_mapped_bulk_streaming(
     supplier_unique: set[tuple[str, str, str, str, str]] = set()
     progress_every = 5000
 
-    with tempfile.NamedTemporaryFile("w", newline="", encoding="utf-8-sig", suffix=".csv", delete=False) as activity_tmp:
-        activity_spool_path = Path(activity_tmp.name)
-        activity_writer = csv.writer(activity_tmp)
+    if xlsxwriter is not None:
+        workbook = xlsxwriter.Workbook(str(output_path), {"constant_memory": True})
+        activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
+        raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
+        date_format = workbook.add_format({"num_format": "yyyy/mm/dd"})
+        for col, value in enumerate(activity_headers):
+            activity_ws.write(0, col, value)
+        for col, value in enumerate(raw_headers):
+            raw_ws.write(0, col, value)
+        excel_row_idx = DATA_START_ROW - 1
         for base_row in _iter_activity_rows_streaming(source_file, activity_cols, description_map):
             input_rows += 1
             for mapped_row, matched, name_ok, used_tbc in _supplier_rows_for_activity_row(base_row, supplier_map, supplier_options, tbc_supplier_map):
@@ -3904,7 +3764,13 @@ def _write_supplier_mapped_bulk_streaming(
                 if used_tbc:
                     tbc_fallback_rows += 1
                 activity_row, raw_material = _build_supplier_activity_row(mapped_row, activity_headers, activity_cols, document_type_value)
-                activity_writer.writerow(activity_row)
+                for col, value in enumerate(activity_row):
+                    if value in (None, ""):
+                        continue
+                    if isinstance(value, date):
+                        activity_ws.write_datetime(excel_row_idx, col, datetime(value.year, value.month, value.day), date_format)
+                    else:
+                        activity_ws.write(excel_row_idx, col, value)
                 if raw_material and raw_material not in raw_seen:
                     raw_seen.add(raw_material)
                     raw_descriptions[raw_material] = mapped_row.get("description", "") or description_map.get(raw_material, "") or ""
@@ -3918,35 +3784,61 @@ def _write_supplier_mapped_bulk_streaming(
                         _safe_text(mapped_row.get("transport_destination", "")),
                     ))
                 output_rows += 1
+                excel_row_idx += 1
             if progress_callback and (input_rows == 1 or input_rows % progress_every == 0):
                 progress_callback(step=f"Applying Supplier mapping: {current_file or source_file.name}", processed=input_rows, total=0, progress=30, current_file=current_file or source_file.name)
-
-    with tempfile.NamedTemporaryFile("w", newline="", encoding="utf-8-sig", suffix=".csv", delete=False) as raw_tmp:
-        raw_spool_path = Path(raw_tmp.name)
-        raw_writer = csv.writer(raw_tmp)
+        raw_excel_row = DATA_START_ROW - 1
         for raw_material in sorted(raw_seen):
             raw_row = ["" for _ in raw_headers]
             _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
             _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
             _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
-            raw_writer.writerow(raw_row)
-
-    try:
-        _write_template_preserving_raw_material_bulk_xlsx(
-            source_file,
-            output_path,
-            activity_rows_iter=lambda: _rows_from_csv_spool(activity_spool_path),
-            raw_rows_iter=lambda: _rows_from_csv_spool(raw_spool_path),
-        )
-    finally:
-        try:
-            activity_spool_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        try:
-            raw_spool_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+            for col, value in enumerate(raw_row):
+                if value not in (None, ""):
+                    raw_ws.write(raw_excel_row, col, value)
+            raw_excel_row += 1
+        workbook.close()
+    else:
+        wb_out = Workbook(write_only=True)
+        activity_ws = wb_out.create_sheet(ACTIVITY_SHEET_NAME)
+        raw_ws = wb_out.create_sheet(RAW_MATERIAL_SHEET_NAME)
+        if "Sheet" in wb_out.sheetnames:
+            try:
+                del wb_out["Sheet"]
+            except Exception:
+                pass
+        activity_ws.append(activity_headers)
+        raw_ws.append(raw_headers)
+        for base_row in _iter_activity_rows_streaming(source_file, activity_cols, description_map):
+            input_rows += 1
+            for mapped_row, matched, name_ok, used_tbc in _supplier_rows_for_activity_row(base_row, supplier_map, supplier_options, tbc_supplier_map):
+                if matched:
+                    matched_source_rows += 1
+                    supplier_expanded_rows += 1
+                if name_ok:
+                    supplier_name_matched += 1
+                else:
+                    supplier_name_missing += 1
+                if used_tbc:
+                    tbc_fallback_rows += 1
+                activity_row, raw_material = _build_supplier_activity_row(mapped_row, activity_headers, activity_cols, document_type_value)
+                activity_ws.append(activity_row)
+                if raw_material and raw_material not in raw_seen:
+                    raw_seen.add(raw_material)
+                    raw_descriptions[raw_material] = mapped_row.get("description", "") or description_map.get(raw_material, "") or ""
+                supplier_code = _normalize_vendor_code(mapped_row.get("supplier_code", ""))
+                if supplier_code:
+                    supplier_unique.add((_safe_text(mapped_row.get("supplier_name", "")) or _safe_text(mapped_row.get("supplier_master_name", "")), supplier_code, _safe_text(mapped_row.get("supplier_country_area", "")), _safe_text(mapped_row.get("supplier_address", "")) or _safe_text(mapped_row.get("transport_origin", "")), _safe_text(mapped_row.get("transport_destination", ""))))
+                output_rows += 1
+            if progress_callback and (input_rows == 1 or input_rows % progress_every == 0):
+                progress_callback(step=f"Applying Supplier mapping: {current_file or source_file.name}", processed=input_rows, total=0, progress=30, current_file=current_file or source_file.name)
+        for raw_material in sorted(raw_seen):
+            raw_row = ["" for _ in raw_headers]
+            _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
+            _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
+            _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
+            raw_ws.append(raw_row)
+        wb_out.save(output_path)
 
     return {
         "input_filename": source_file.name,
@@ -3962,7 +3854,7 @@ def _write_supplier_mapped_bulk_streaming(
         "tbc_fallback_rows": int(tbc_fallback_rows),
         "supplier_name_options": int(len(supplier_options)),
         "m2c_large_dataset_mode": True,
-        "m2c_template_policy": "Smart Template Engine: preserve source Raw Material Bulk workbook package, all worksheets, row 1/2 headers, styles, formulas, validations, hidden sheets, freeze panes and autofilter; stream-replace only Sheet1/Sheet2 data rows.",
+        "m2c_template_policy": "Headers and sheet names are preserved; styles/dropdowns/validations/formulas are not copied in M2C Large Dataset Mode.",
     }, supplier_unique
 
 
