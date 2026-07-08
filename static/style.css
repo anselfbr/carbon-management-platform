@@ -2708,3 +2708,8 @@ select:focus {
 .module2-live-grid div:first-child {
   grid-column: 1 / -1;
 }
+
+/* MODULE 2A staged workflow helpers */
+.hidden {
+  display: none !important;
+}

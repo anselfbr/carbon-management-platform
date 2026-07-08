@@ -591,24 +591,20 @@
         <section class="workspace">
           <section class="card primary-card">
             <form id="bomForm" class="form-panel">
-              <label data-i18n="uploadStandardBomFiles">Upload Standard BOM Files</label>
+              <label>上傳標準 BOM 檔案</label>
               <input id="bomFile" name="bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
 
-              <label data-i18n="uploadRawMaterialBulkTemplate">Upload Raw Material Bulk Template</label>
+              <label>上傳原物料 Bulk 範本</label>
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <div id="bomStep1Source" class="module3-source-card">
-                <b data-i18n="uploadStep1OutputForRollup">Upload Annual Product Output & Classification Result</b>
+                <b>上傳年度產品產量與分類結果</b>
                 <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
               </div>
 
-              <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
-              <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
-              <p class="form-hint" data-i18n="supplierFilesHint">Optional. Supports multiple Excel files. Uses Raw Material Code + Vendor number to write Supplier Name. Transportation Origin uses Supplier Address or Country + City + Street. Also exports supplier_bulk_create from the built-in template.</p>
-
               <button type="submit" class="btn-secondary">
                 <span class="btn-icon">⌘</span>
-                <span data-i18n="processBomExpansion">Process BOM Expansion</span>
+                <span>產出標準BOM表總用量</span>
               </button>
             </form>
 
@@ -616,8 +612,8 @@
               <div class="status-header">
                 <div class="spinner"></div>
                 <div>
-                  <b id="bomStatusTitle">Ready for BOM Expansion</b>
-                  <p id="bomStatusText">Upload standard BOM and raw material bulk template to start processing.</p>
+                  <b id="bomStatusTitle">Ready for Module 2A</b>
+                  <p id="bomStatusText">上傳標準 BOM 與原物料 Bulk 範本後，產出標準BOM表總用量。</p>
                 </div>
                 <span id="bomStatusTime" class="status-time">Idle</span>
               </div>
@@ -626,112 +622,18 @@
               </div>
             </div>
 
-            <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk</span></a>
-            <a id="workingHourRollupDownload" class="download disabled" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
-            <a id="supplierBulkDownload" class="download disabled" href="#"><span data-i18n="downloadSupplierBulk">Download Supplier Bulk Create</span></a>
-
-
+            <a id="bomDownload" class="download disabled" href="#"><span>下載標準BOM表總用量</span></a>
+            <a id="workingHourRollupDownload" class="download disabled hidden" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
+            <a id="supplierBulkDownload" class="download disabled hidden" href="#"><span data-i18n="downloadSupplierBulk">Download Supplier Bulk Create</span></a>
           </section>
 
           <section class="card insight-card">
-            <details id="bomLogicDetails" class="module2-logic-details" open>
-              <summary class="module2-logic-summary">
-                <span>
-                  <b data-i18n="bomExpansionLogic">BOM Expansion Logic</b>
-                  <small data-i18n="bomColumnMappingHint">Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.</small>
-                </span>
-                <span class="module2-logic-toggle" aria-hidden="true">⌄</span>
-              </summary>
-
-            <div class="logic-mapping-table">
-              <div class="logic-mapping-row" data-default="Parent Node">
-                <span class="logic-mapping-label" data-i18n="parentMaterial">Parent Material</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="parent_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>Parent Node</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="Component">
-                <span class="logic-mapping-label" data-i18n="component">Component</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="component_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>Component</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="CS03 Qty">
-                <span class="logic-mapping-label" data-i18n="quantity">Quantity</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="qty_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>CS03 Qty</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="CS03 UoM">
-                <span class="logic-mapping-label" data-i18n="unit">Unit</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="unit_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>CS03 UoM</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="Component Description">
-                <span class="logic-mapping-label" data-i18n="componentDescription">Component Description</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="description_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>Component Description</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="Material group">
-                <span class="logic-mapping-label" data-i18n="materialGroup">Material Group</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="material_group_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>Material group</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="BOM Valid From">
-                <span class="logic-mapping-label" data-i18n="validFrom">Valid From</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="valid_from_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>BOM Valid From</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row read-only">
-                <span class="logic-mapping-label" data-i18n="semiFinishedRule">Semi-finished Rule</span>
-                <div class="logic-readonly-value" data-i18n="semiFinishedRuleDesc">Component also exists as Parent Node</div>
-              </div>
-
-              <div class="logic-mapping-row read-only">
-                <span class="logic-mapping-label" data-i18n="quantityRollUp">Quantity Roll-up</span>
-                <div class="logic-readonly-value" data-i18n="quantityRollUpDesc">Multiply quantities across all BOM levels</div>
-              </div>
-            </div>
-            </details>
-
-            <h2 data-i18n="rawMaterialBulkOutput">Raw Material Bulk Output</h2>
-            <p data-i18n="rawMaterialBulkOutputHint">Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.</p>
+            <h2>MODULE 2A｜BOM 展開與總用量表</h2>
+            <p>本段只根據標準 BOM 展開所有成品的最終原物料用量；半品內含原物料會按目前 BOM 邏輯乘回成品並加總，不寫入 Raw Material Bulk，也不套供應商。</p>
 
             <div id="bomLiveStatus" class="module2-live-status idle">
               <div class="module2-live-header">
-                <b id="bomLiveTitle">MODULE 2 Processing</b>
+                <b id="bomLiveTitle">MODULE 2A Processing</b>
                 <span id="bomLiveBadge">Idle</span>
               </div>
               <div class="module2-live-grid">
@@ -743,11 +645,10 @@
               </div>
             </div>
 
-            <pre id="bomLog" class="rule-log">BOM Expansion is ready.</pre>
+            <pre id="bomLog" class="rule-log">MODULE 2A is ready.</pre>
           </section>
         </section>
       </section>
-
 
       <section id="rule-management" class="page-section">
         <section class="workspace">
@@ -1092,10 +993,10 @@ const moduleMessages = {
     text: 'Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.'
   },
   bom: {
-    titleKey: 'bomExpansion',
-    title: '2. BOM Expansion',
-    textKey: 'bomExpansionPageLead',
-    text: 'Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.'
+    titleKey: 'module2AStandardBomTotalUsage',
+    title: '2A. BOM 展開與總用量表',
+    textKey: 'module2AStandardBomTotalUsageLead',
+    text: '根據標準 BOM 展開所有成品的最終原物料用量，產出標準BOM表總用量。'
   },
   factor: {
     titleKey: 'carbonEmissionFactorSelection',
@@ -1230,8 +1131,8 @@ function activateBomPage() {
   document.querySelector('[data-main="bom"]').classList.add('active');
 
   moduleNotice.classList.add('hidden');
-  setDynamicI18n(pageTitle, 'bomExpansion', 'BOM Expansion');
-  setDynamicI18n(pageLead, 'bomExpansionPageLead', 'Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.');
+  setDynamicI18n(pageTitle, 'module2AStandardBomTotalUsage', 'MODULE 2A｜BOM 展開與總用量表');
+  setDynamicI18n(pageLead, 'module2AStandardBomTotalUsageLead', '根據標準 BOM 展開所有成品的最終原物料用量，產出標準BOM表總用量，供下一段 Raw Material Bulk 寫入使用。');
   pageLead.style.display = 'block';
   cmpApplyI18n();
   refreshBomStep1Source();
@@ -1291,7 +1192,7 @@ function setBomLiveStatusFromJob(job) {
   const mode = status === 'success' ? 'success' : (status === 'error' || status === 'failed' ? 'error' : (status === 'idle' ? 'idle' : 'running'));
   bomLiveStatus.classList.remove('idle', 'running', 'success', 'error');
   bomLiveStatus.classList.add(mode);
-  if (bomLiveTitle) bomLiveTitle.textContent = 'MODULE 2 Processing';
+  if (bomLiveTitle) bomLiveTitle.textContent = 'MODULE 2A Processing';
   if (bomLiveBadge) bomLiveBadge.textContent = status ? status.charAt(0).toUpperCase() + status.slice(1) : 'Idle';
   if (bomLiveStep) bomLiveStep.textContent = data.step || 'Ready';
   if (bomLiveRows) bomLiveRows.textContent = `${cmpFormatInteger(data.processed_rows)} / ${cmpFormatInteger(data.total_rows)}`;
@@ -1306,15 +1207,15 @@ function startBomEstimatedProgress() {
 
   setBomProcessingState(
     'running',
-    cmpT('bomExpansionInProgress', 'BOM Expansion in progress'),
-    cmpT('readingBomValidatingTemplate', 'Creating background job and validating uploaded files.'),
+    cmpT('module2ATotalUsageInProgress', '標準BOM表總用量產出中'),
+    cmpT('module2AReadingBom', 'Creating Module 2A background job and validating uploaded files.'),
     cmpT('running', 'Running'),
     3
   );
 
   setBomLiveStatusFromJob({
     status: 'queued',
-    step: 'Creating Module 2 background job',
+    step: 'Creating Module 2A background job',
     processed_rows: 0,
     total_rows: 0,
     created_at: new Date().toISOString(),
@@ -1349,7 +1250,7 @@ function startBomJobPolling(jobId) {
       const job = data.job || {};
       const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
       const rowsText = `${cmpFormatInteger(job.processed_rows)} / ${cmpFormatInteger(job.total_rows)}`;
-      const stepText = job.step || cmpT('processingBomExpansion', 'Processing BOM Expansion...');
+      const stepText = job.step || cmpT('module2AProcessing', 'Processing Module 2A...');
       setBomLiveStatusFromJob(job);
 
       if (job.status === 'success') {
@@ -1362,15 +1263,15 @@ function startBomJobPolling(jobId) {
 
       if (job.status === 'error' || job.status === 'failed') {
         clearInterval(bomJobPollTimer);
-        stopBomProgressError(job.message || cmpT('bomExpansionFailed', 'BOM Expansion failed'));
+        stopBomProgressError(job.message || cmpT('module2AFailed', 'MODULE 2A failed'));
         setBomLiveStatusFromJob(job);
         return;
       }
 
       setBomProcessingState(
         'running',
-        cmpT('bomExpansionInProgress', 'BOM Expansion in progress'),
-        `${stepText} | Rows: ${rowsText}`,
+        cmpT('module2ATotalUsageInProgress', '標準BOM表總用量產出中'),
+        `${stepText} | Rows: ${rowsText}`, 
         cmpJobElapsedText(job),
         progress
       );
@@ -1386,33 +1287,31 @@ function startBomJobPolling(jobId) {
 function stopBomProgressSuccess(summary) {
   clearInterval(progressTimer);
   clearInterval(bomJobPollTimer);
-  const supplierUploaded = Number(summary.supplier_upload_files || 0) > 0;
-  const supplierStatusText = supplierUploaded
-    ? `Supplier files: ${summary.supplier_upload_files || 0}; Supplier bulk rows: ${summary.supplier_bulk_rows || 0};`
-    : 'Supplier files: Not Uploaded; Supplier bulk: Not Generated;';
+  const totalUsageRows = Number(summary.standard_bom_total_usage_rows || summary.activity_rows || 0);
   setBomProcessingState(
     'success',
-    cmpT('bomExpansionCompleted', 'BOM Expansion completed'),
-    `BOM Files: ${summary.bom_files || 1}; Rows: ${summary.bom_rows_after_dedup || 0}; Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}; Products: ${summary.products}; Semi-finished: ${summary.semi_finished}; Raw material rows: ${summary.activity_rows}; ${supplierStatusText} Max BOM Level: ${summary.max_level}; Working Hour Roll-up rows: ${summary.working_hour_rollup_rows || 0}.`,
+    cmpT('module2ACompleted', '標準BOM表總用量完成'),
+    `BOM Files: ${summary.bom_files || 1}; BOM Rows: ${summary.bom_rows_after_dedup || 0}; Duplicates Removed: ${summary.bom_duplicate_rows_removed || 0}; Products: ${summary.products || 0}; Semi-finished: ${summary.semi_finished || 0}; Total Usage Rows: ${totalUsageRows}; Raw Materials: ${summary.raw_materials || 0}; Max BOM Level: ${summary.max_level || 0}.`,
     cmpT('completed', 'Completed'),
     100
   );
 
   bomLog.textContent =
-    `Completed.\nBOM Files: ${summary.bom_files || 1}\nBOM Rows Before Dedup: ${summary.bom_rows_before_dedup || 0}\nBOM Rows After Dedup: ${summary.bom_rows_after_dedup || 0}\nDuplicates Removed: ${summary.bom_duplicate_rows_removed || 0}\nProducts: ${summary.products}\nSemi-finished Components: ${summary.semi_finished}\nActivity Data Rows: ${summary.activity_rows}\nRaw Materials: ${summary.raw_materials}\nSupplier Files: ${supplierUploaded ? (summary.supplier_upload_files || 0) : 'Not Uploaded'}\nSupplier Mapped Materials: ${supplierUploaded ? (summary.supplier_mapped_materials || 0) : 'Not Generated'}\nSupplier Mapped Suppliers: ${supplierUploaded ? (summary.supplier_mapped_suppliers || 0) : 'Not Generated'}\nSupplier Expanded Rows: ${supplierUploaded ? (summary.supplier_expanded_rows || 0) : 'Not Generated'}\nSupplier Dropdown Matched Rows: ${supplierUploaded ? (summary.supplier_dropdown_matched_rows || 0) : 'Not Generated'}\nSupplier Dropdown Missing Rows: ${supplierUploaded ? (summary.supplier_dropdown_missing_rows || 0) : 'Not Generated'}\nSupplier Bulk Rows: ${supplierUploaded ? (summary.supplier_bulk_rows || 0) : 'Not Generated'}\nMax BOM Level: ${summary.max_level}\nWorking Hour Roll-up Rows: ${summary.working_hour_rollup_rows || 0}\nSemi Working Hours: ${summary.working_hour_rollup_total_semi_hours || 0}`;
+    `Completed.\nOutput: ${summary.standard_bom_total_usage_filename || summary.output_filename || '標準BOM表總用量'}\nSheet: ${summary.stage_output_sheet || '標準BOM表總用量'}\nBOM Files: ${summary.bom_files || 1}\nBOM Rows Before Dedup: ${summary.bom_rows_before_dedup || 0}\nBOM Rows After Dedup: ${summary.bom_rows_after_dedup || 0}\nDuplicates Removed: ${summary.bom_duplicate_rows_removed || 0}\nProducts: ${summary.products || 0}\nSemi-finished Components: ${summary.semi_finished || 0}\nTotal Usage Rows: ${totalUsageRows}\nRaw Materials: ${summary.raw_materials || 0}\nMax BOM Level: ${summary.max_level || 0}\nRule: ${summary.usage_rule || 'Per-PC final raw material usage; semi-finished quantities are summed back to finished products.'}\nStep1 Annual Quantity Applied: ${summary.step1_annual_quantity_applied ? 'Yes' : 'No'}\nSupplier Mapping Applied: ${summary.supplier_mapping_applied ? 'Yes' : 'No'}`;
 }
+
 
 function stopBomProgressError(message) {
   clearInterval(progressTimer);
   clearInterval(bomJobPollTimer);
   setBomProcessingState(
     'error',
-    cmpT('bomExpansionFailed', 'BOM Expansion failed'),
-    message || cmpT('reviewBomTemplate', 'Please review the BOM and raw material bulk template.'),
+    cmpT('module2AFailed', 'MODULE 2A failed'),
+    message || cmpT('reviewModule2ATemplate', 'Please review the Standard BOM and Raw Material Bulk template.'),
     cmpT('error', 'Error'),
     100
   );
-  bomLog.textContent = 'Error: ' + (message || cmpT('bomExpansionFailed', 'BOM Expansion failed'));
+  bomLog.textContent = 'Error: ' + (message || cmpT('module2AFailed', 'MODULE 2A failed'));
 }
 
 
@@ -1452,7 +1351,7 @@ bomForm.addEventListener('submit', async (e) => {
     supplierBulkDownload.classList.add('disabled');
     supplierBulkDownload.href = '#';
   }
-  bomLog.textContent = cmpT('processingBomExpansion', 'Processing BOM Expansion...');
+  bomLog.textContent = cmpT('module2AProcessing', 'Processing Module 2A 標準BOM表總用量...');
 
   startBomEstimatedProgress();
   await refreshBomStep1Source();
@@ -1466,8 +1365,8 @@ bomForm.addEventListener('submit', async (e) => {
     if (data.job_id) {
       setBomProcessingState(
         'running',
-        cmpT('bomExpansionInProgress', 'BOM Expansion in progress'),
-        cmpT('processingBomExpansion', 'Background job started. Waiting for live progress...'),
+        cmpT('module2ATotalUsageInProgress', '標準BOM表總用量產出中'),
+        cmpT('module2AProcessingStarted', 'Module 2A background job started. Waiting for live progress...'),
         cmpT('running', 'Running'),
         5
       );
@@ -1481,7 +1380,7 @@ bomForm.addEventListener('submit', async (e) => {
       stopBomProgressSuccess(data.summary);
       setBomLiveStatusFromJob({
         status: 'success',
-        step: 'MODULE 2 Completed',
+        step: 'MODULE 2A Completed',
         processed_rows: data.summary.activity_rows || 0,
         total_rows: data.summary.activity_rows || 0,
         created_at: new Date().toISOString(),
