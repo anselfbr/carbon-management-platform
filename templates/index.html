@@ -847,6 +847,35 @@ const module3FactorPrevPage = document.getElementById('module3FactorPrevPage');
 const module3FactorNextPage = document.getElementById('module3FactorNextPage');
 const module3FactorPageInfo = document.getElementById('module3FactorPageInfo');
 
+function bindCoreNavigationFallback() {
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.main;
+      if (key === 'prep') {
+        activatePrepPage('product-data');
+      } else if (key === 'bom') {
+        activateBomPage();
+      } else if (key === 'factor') {
+        activateFactorPage();
+      }
+    });
+  });
+
+  document.querySelectorAll('[data-dashboard-target]').forEach(card => {
+    card.addEventListener('click', () => {
+      const target = card.dataset.dashboardTarget;
+      if (target === 'prep') {
+        activatePrepPage('product-data');
+      } else if (target === 'bom') {
+        activateBomPage();
+      } else if (target === 'factor') {
+        activateFactorPage();
+      }
+    });
+  });
+}
+bindCoreNavigationFallback();
+
 function formatRuleSetLabel(value) {
   if (value === 'PC_CE') return 'PC&CE';
   return value || 'IPS';
