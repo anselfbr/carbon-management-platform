@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import csv
 import re
 import shutil
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+try:
+    import xlsxwriter
+except Exception:  # pragma: no cover
+    xlsxwriter = None
 
 
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
@@ -2740,6 +2746,539 @@ def _read_standard_bom_total_usage_workbook(
     }
 
 
+
+def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Path) -> tuple[list[str], list[str], dict[str, int], dict[str, int], str]:
+    """Read only Raw Material Bulk template headers for Module 2B Large Dataset Mode.
+
+    Module 2B intentionally keeps the template sheet names, column headers and
+    column mapping, but does not copy workbook styles, dropdowns, validations,
+    formulas or hidden helper sheets. This avoids the memory spike caused by
+    load_workbook(template) + hundreds of thousands of written cell objects.
+    """
+    wb = load_workbook(raw_material_template_path, read_only=True, data_only=True)
+    try:
+        if ACTIVITY_SHEET_NAME not in wb.sheetnames:
+            raise ValueError(f"找不到 raw material bulk 分頁：{ACTIVITY_SHEET_NAME}")
+        if RAW_MATERIAL_SHEET_NAME not in wb.sheetnames:
+            raise ValueError(f"找不到 raw material bulk 分頁：{RAW_MATERIAL_SHEET_NAME}")
+        activity_ws = wb[ACTIVITY_SHEET_NAME]
+        raw_ws = wb[RAW_MATERIAL_SHEET_NAME]
+        activity_cols = {
+            "raw_name": _find_template_column(activity_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+            "raw_code": _find_template_column(activity_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+            "start_date": _find_template_column(activity_ws, DOC_START_DATE_ALIASES, 3),
+            "end_date": _find_template_column(activity_ws, DOC_END_DATE_ALIASES, 4),
+            "document_type": _find_template_column(activity_ws, DOCUMENT_TYPE_ALIASES, 5),
+            "document_number": _find_template_column(activity_ws, DOCUMENT_NUMBER_ALIASES, 6),
+            "usage": _find_template_column(activity_ws, USAGE_ALIASES, 7),
+            "unit": _find_template_column(activity_ws, ACTIVITY_DATA_UNIT_ALIASES, 8),
+            "data_source": _find_template_column(activity_ws, DATA_SOURCE_ALIASES, 12),
+            "data_source_other": _find_template_column(activity_ws, DATA_SOURCE_OTHER_ALIASES, 13),
+            "supplier_name": _find_template_column(activity_ws, SUPPLIER_NAME_ALIASES, 14),
+            "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 15),
+            "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 16),
+            "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
+            "comment": _find_template_column(activity_ws, COMMENT_ALIASES, 18),
+            "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
+            "net_weight": _find_template_optional_column(activity_ws, NET_WEIGHT_ALIASES),
+            "gross_weight": _find_template_optional_column(activity_ws, GROSS_WEIGHT_ALIASES),
+            "weight_unit": _find_template_optional_column(activity_ws, WEIGHT_UNIT_ALIASES),
+        }
+        raw_cols = {
+            "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+            "raw_code": _find_template_column(raw_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+            "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
+        }
+        activity_max_col = max([c for c in activity_cols.values() if c] + [activity_ws.max_column or 1])
+        raw_max_col = max([c for c in raw_cols.values() if c] + [raw_ws.max_column or 1])
+        activity_headers = [activity_ws.cell(1, c).value or "" for c in range(1, activity_max_col + 1)]
+        raw_headers = [raw_ws.cell(1, c).value or "" for c in range(1, raw_max_col + 1)]
+        document_type_value = _document_type_for_template(wb)
+        return activity_headers, raw_headers, activity_cols, raw_cols, document_type_value
+    finally:
+        wb.close()
+
+
+def _set_row_value(row: list[Any], col_idx: int | None, value: Any) -> None:
+    if col_idx:
+        while len(row) < int(col_idx):
+            row.append("")
+        row[int(col_idx) - 1] = value
+
+
+def _find_header_index(headers: list[Any], wanted: str | None, aliases: list[str] | None = None) -> int | None:
+    candidates = []
+    if wanted:
+        candidates.append(wanted)
+    if aliases:
+        candidates.extend(aliases)
+    keys = {_normalize_template_header(x) for x in candidates if str(x or "").strip()}
+    for idx, header in enumerate(headers):
+        if _normalize_template_header(header) in keys:
+            return idx
+    return None
+
+
+def _read_module2a_header_indices(headers: list[Any], mapping: dict[str, str | None]) -> dict[str, int | None]:
+    material_idx = _find_header_index(headers, mapping.get("material_col", "Material"), ["Material"])
+    parent_idx = _find_header_index(headers, mapping.get("parent_col", "Parent Node"), ["Parent Node"])
+    component_idx = _find_header_index(headers, mapping.get("component_col", "Component"), ["Component"])
+    qty_idx = _find_header_index(headers, mapping.get("qty_col", "CS03 Qty"), ["CS03 Qty", "Qty", "Usage"])
+    unit_idx = _find_header_index(headers, mapping.get("unit_col", "CS03 UoM"), ["CS03 UoM", "UoM", "Unit"])
+    if material_idx is None and parent_idx is None:
+        raise ValueError("標準BOM表總用量缺少成品料號欄位：Material 或 Parent Node")
+    missing = []
+    if component_idx is None:
+        missing.append(str(mapping.get("component_col") or "Component"))
+    if qty_idx is None:
+        missing.append(str(mapping.get("qty_col") or "CS03 Qty"))
+    if unit_idx is None:
+        missing.append(str(mapping.get("unit_col") or "CS03 UoM"))
+    if missing:
+        raise ValueError("標準BOM表總用量缺少必要欄位：" + ", ".join(missing))
+    return {
+        "target": material_idx if material_idx is not None else parent_idx,
+        "component": component_idx,
+        "qty": qty_idx,
+        "unit": unit_idx,
+        "description": _find_header_index(headers, mapping.get("description_col", "Component Description"), ["Component Description", "Description"]),
+        "material_group": _find_header_index(headers, mapping.get("material_group_col", "Material group"), ["Material group", "Material Group"]),
+        "valid_from": _find_header_index(headers, mapping.get("valid_from_col", "BOM Valid From"), ["BOM Valid From", "Valid From"]),
+        "net_weight": _find_header_index(headers, mapping.get("net_weight_col", "Net weight"), ["Net weight", "Net Weight"]),
+        "gross_weight": _find_header_index(headers, mapping.get("gross_weight_col", "Gross weight"), ["Gross weight", "Gross Weight"]),
+        "weight_uom": _find_header_index(headers, mapping.get("weight_uom_col", "Weight UoM"), ["Weight UoM", "Weight UOM"]),
+    }
+
+
+def _row_get(row: tuple[Any, ...], idx: int | None) -> Any:
+    if idx is None or idx < 0 or idx >= len(row):
+        return ""
+    return row[idx]
+
+
+
+def _fast_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.upper() in {"", "NAN", "NONE"} else text
+
+
+def _fast_number(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        text = str(value).strip().replace(",", "")
+        if not text or text.upper() in {"NAN", "NONE"}:
+            return 0.0
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def _fast_date_iso(value: Any) -> str:
+    if isinstance(value, date):
+        return value.isoformat()
+    text = _fast_text(value)
+    if len(text) >= 4 and text[:4].isdigit():
+        return f"{int(text[:4]):04d}-01-01" if len(text) == 4 else text[:10]
+    return date(datetime.now().year, 1, 1).isoformat()
+
+
+def _fast_year_bounds(value: Any) -> tuple[date, date]:
+    if isinstance(value, date):
+        year = value.year
+    else:
+        text = _fast_text(value)
+        year = int(text[:4]) if len(text) >= 4 and text[:4].isdigit() else datetime.now().year
+    return date(year, 1, 1), date(year, 12, 31)
+
+
+
+def _xlsx_col_to_index(cell_ref: str) -> int:
+    letters = re.sub(r"[^A-Z]", "", str(cell_ref or "").upper())
+    value = 0
+    for ch in letters:
+        value = value * 26 + (ord(ch) - ord("A") + 1)
+    return max(value - 1, 0)
+
+
+def _xlsx_sheet_paths_by_name(path: str | Path) -> dict[str, str]:
+    ns_main = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    ns_rel = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    ns_pkg_rel = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    with zipfile.ZipFile(path) as zf:
+        workbook_root = ET.fromstring(zf.read("xl/workbook.xml"))
+        rel_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+        rels = {}
+        for rel in rel_root.findall(f"{ns_pkg_rel}Relationship"):
+            rid = rel.attrib.get("Id")
+            target = rel.attrib.get("Target", "")
+            if rid:
+                rels[rid] = target.lstrip("/") if target.startswith("/xl/") else ("xl/" + target.lstrip("/") if not target.startswith("xl/") else target)
+        sheet_paths = {}
+        sheets_el = workbook_root.find(f"{ns_main}sheets")
+        if sheets_el is not None:
+            for sheet in sheets_el.findall(f"{ns_main}sheet"):
+                name = sheet.attrib.get("name", "")
+                rid = sheet.attrib.get(f"{ns_rel}id")
+                if name and rid in rels:
+                    sheet_paths[name] = rels[rid]
+        return sheet_paths
+
+
+def _iter_xlsx_sheet_rows_fast(path: str | Path, sheet_xml_path: str):
+    """Yield worksheet rows from XLSX XML without openpyxl cell objects.
+
+    Supports inline strings, shared-string indices and numeric values. This is
+    substantially faster and lower-memory for Module 2A's large flat output.
+    """
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    shared: list[str] = []
+    with zipfile.ZipFile(path) as zf:
+        if "xl/sharedStrings.xml" in zf.namelist():
+            for _event, si in ET.iterparse(zf.open("xl/sharedStrings.xml"), events=("end",)):
+                if si.tag == f"{ns}si":
+                    texts = [t.text or "" for t in si.iter(f"{ns}t")]
+                    shared.append("".join(texts))
+                    si.clear()
+        context = ET.iterparse(zf.open(sheet_xml_path), events=("end",))
+        for _event, row_el in context:
+            if row_el.tag != f"{ns}row":
+                continue
+            values: dict[int, Any] = {}
+            max_idx = -1
+            for c in row_el.findall(f"{ns}c"):
+                idx = _xlsx_col_to_index(c.attrib.get("r", ""))
+                max_idx = max(max_idx, idx)
+                cell_type = c.attrib.get("t", "")
+                value: Any = ""
+                if cell_type == "inlineStr":
+                    texts = [t.text or "" for t in c.iter(f"{ns}t")]
+                    value = "".join(texts)
+                else:
+                    v = c.find(f"{ns}v")
+                    if v is not None and v.text is not None:
+                        raw = v.text
+                        if cell_type == "s":
+                            try:
+                                value = shared[int(raw)]
+                            except Exception:
+                                value = raw
+                        else:
+                            value = raw
+                values[idx] = value
+            row = [values.get(i, "") for i in range(max_idx + 1)] if max_idx >= 0 else []
+            row_el.clear()
+            yield tuple(row)
+
+
+def _stream_module2b_rows_to_site_csv(
+    standard_total_usage_path: str | Path,
+    step1_output_path: str | Path,
+    output_dir: Path,
+    mapping: dict[str, str | None] | None = None,
+    progress_callback=None,
+) -> tuple[dict[str, Path], dict[str, int], dict[str, Any]]:
+    """Stream Module 2A total-usage workbook into per-site CSV spool files.
+
+    This is the memory-safe core of Module 2B. It does not create a pandas
+    DataFrame for the 2A workbook, does not call pd.concat(), and never creates
+    site_df copies. Rows are transformed and immediately written to small disk
+    spools grouped by Production Site.
+    """
+    path = Path(standard_total_usage_path)
+    if not path.exists():
+        raise FileNotFoundError(f"找不到 Module 2A 標準BOM表總用量檔案：{path}")
+    m = _resolve_mapping(mapping)
+    annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
+    site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
+
+    spool_dir = output_dir / f"m2b_spool_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    csv_paths: dict[str, Path] = {}
+    csv_files: dict[str, Any] = {}
+    csv_writers: dict[str, Any] = {}
+    site_counts: dict[str, int] = defaultdict(int)
+    missing_annual_targets: set[str] = set()
+    matched_annual_rows = 0
+    missing_annual_rows = 0
+    zero_usage_rows_excluded = 0
+    zero_annual_usage_rows_excluded = 0
+    rows_read = 0
+    valid_rows = 0
+    source_sheets: list[str] = []
+    used_columns: dict[str, str] = {}
+    csv_headers = [
+        "target_product", "raw_material", "usage", "unit", "description", "material_group",
+        "valid_from", "net_weight", "gross_weight", "weight_uom", "transport_destination",
+    ]
+
+    def writer_for(site: str):
+        safe_site = _sanitize_filename_part(site)
+        if site not in csv_writers:
+            csv_path = spool_dir / f"{safe_site}.csv"
+            fh = open(csv_path, "w", newline="", encoding="utf-8-sig")
+            writer = csv.DictWriter(fh, fieldnames=csv_headers)
+            writer.writeheader()
+            csv_paths[site] = csv_path
+            csv_files[site] = fh
+            csv_writers[site] = writer
+        return csv_writers[site]
+
+    try:
+        sheet_paths = _xlsx_sheet_paths_by_name(path)
+        candidate_sheets = [name for name in sheet_paths if str(name or "").strip().startswith(STANDARD_BOM_TOTAL_USAGE_BASE_SHEET_NAME)]
+        if not candidate_sheets:
+            raise ValueError("標準BOM表總用量檔案中找不到可讀取的『標準BOM表總用量』分頁，請先完成 Module 2A。")
+        for sheet_name in candidate_sheets:
+            source_sheets.append(sheet_name)
+            row_iter = _iter_xlsx_sheet_rows_fast(path, sheet_paths[sheet_name])
+            try:
+                headers = list(next(row_iter))
+            except StopIteration:
+                continue
+            idx = _read_module2a_header_indices(headers, m)
+            if not used_columns:
+                def header_name(i):
+                    return str(headers[i] or "") if i is not None and i < len(headers) else ""
+                used_columns = {
+                    "target_product_col": header_name(idx["target"]),
+                    "component_col": header_name(idx["component"]),
+                    "qty_col": header_name(idx["qty"]),
+                    "unit_col": header_name(idx["unit"]),
+                    "description_col": header_name(idx["description"]),
+                    "material_group_col": header_name(idx["material_group"]),
+                    "valid_from_col": header_name(idx["valid_from"]),
+                    "net_weight_col": header_name(idx["net_weight"]),
+                    "gross_weight_col": header_name(idx["gross_weight"]),
+                    "weight_uom_col": header_name(idx["weight_uom"]),
+                }
+            for row in row_iter:
+                rows_read += 1
+                target_product = _fast_text(_row_get(row, idx["target"]))
+                raw_material = _fast_text(_row_get(row, idx["component"]))
+                if not target_product or not raw_material:
+                    continue
+                usage_per_pc = _fast_number(_row_get(row, idx["qty"]))
+                if usage_per_pc == 0:
+                    zero_usage_rows_excluded += 1
+                    continue
+                target_key = _normalize_material_key(target_product)
+                annual_qty = annual_qty_map.get(target_key)
+                if annual_qty is None:
+                    annual_qty = 1.0
+                    missing_annual_rows += 1
+                    missing_annual_targets.add(target_key)
+                else:
+                    matched_annual_rows += 1
+                annual_usage = float(usage_per_pc) * float(annual_qty)
+                if annual_usage == 0:
+                    zero_annual_usage_rows_excluded += 1
+                    continue
+                site = str(site_map.get(target_key, "Unassigned") or "Unassigned").strip() or "Unassigned"
+                writer_for(site).writerow({
+                    "target_product": target_product,
+                    "raw_material": raw_material,
+                    "usage": annual_usage,
+                    "unit": _fast_text(_row_get(row, idx["unit"])),
+                    "description": _fast_text(_row_get(row, idx["description"])),
+                    "material_group": _fast_text(_row_get(row, idx["material_group"])),
+                    "valid_from": _fast_date_iso(_row_get(row, idx["valid_from"])),
+                    "net_weight": _fast_number(_row_get(row, idx["net_weight"])) if idx.get("net_weight") is not None else "",
+                    "gross_weight": _fast_number(_row_get(row, idx["gross_weight"])) if idx.get("gross_weight") is not None else "",
+                    "weight_uom": _fast_text(_row_get(row, idx["weight_uom"])),
+                    "transport_destination": site,
+                })
+                site_counts[site] += 1
+                valid_rows += 1
+                if progress_callback and rows_read % 20000 == 0:
+                    progress_callback(
+                        step="Streaming Module 2A total usage",
+                        processed=rows_read,
+                        total=0,
+                        progress=10,
+                    )
+    finally:
+        for fh in csv_files.values():
+            fh.close()
+
+    summary: dict[str, Any] = {
+        "module2a_total_usage_source_filename": path.name,
+        "module2a_total_usage_source_sheets": source_sheets,
+        "module2a_total_usage_rows_read": int(rows_read),
+        "module2a_total_usage_valid_rows": int(valid_rows),
+        "module2a_total_usage_rule": "Read Module 2A total usage in streaming mode as per-PC final raw-material usage; BOM is not re-expanded and Altitem probability is not re-applied.",
+        "used_columns": used_columns,
+        "annual_quantity_applied": True,
+        "annual_quantity_matched_rows": int(matched_annual_rows),
+        "annual_quantity_missing_rows": int(missing_annual_rows),
+        "annual_quantity_missing_targets": sorted(missing_annual_targets)[:50],
+        "usage_per_pc_column_added": False,
+        "annual_finished_product_qty_column_added": False,
+        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
+        "zero_annual_usage_rows_excluded": int(zero_annual_usage_rows_excluded),
+        "m2b_large_dataset_mode": True,
+        "m2b_spool_dir": str(spool_dir),
+    }
+    summary.update(annual_qty_source_summary)
+    summary.update(step1_summary)
+    return csv_paths, dict(site_counts), summary
+
+
+def _write_raw_material_bulk_from_site_csv_streaming(
+    csv_path: str | Path,
+    raw_material_template_path: str | Path,
+    output_path: str | Path,
+    progress_callback=None,
+    processed_offset: int = 0,
+    total_rows: int | None = None,
+    current_site: str = "",
+    current_site_rows: int = 0,
+) -> Dict[str, Any]:
+    """Write a lightweight Raw Material Bulk workbook from a per-site CSV spool.
+
+    Uses xlsxwriter constant_memory when available because it is much faster for
+    200k+ flat rows than openpyxl write_only. Falls back to openpyxl if the
+    package is not installed.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    activity_headers, raw_headers, activity_cols, raw_cols, document_type_value = _template_headers_for_lightweight_bulk(raw_material_template_path)
+
+    raw_seen: set[str] = set()
+    raw_descriptions: dict[str, str] = {}
+    written = 0
+    total_rows = int(total_rows or current_site_rows or 0)
+    progress_every = max(1000, min(10000, max(int(current_site_rows or 0) // 20, 1)))
+
+    def build_activity_row(row_data: dict[str, Any]) -> tuple[list[Any], str]:
+        start_date_value, end_date_value = _fast_year_bounds(row_data.get("valid_from"))
+        usage_value = _fast_number(row_data.get("usage"))
+        raw_material = _fast_text(row_data.get("raw_material"))
+        activity_row = ["" for _ in activity_headers]
+        _set_row_value(activity_row, activity_cols["raw_name"], raw_material)
+        _set_row_value(activity_row, activity_cols["raw_code"], raw_material)
+        _set_row_value(activity_row, activity_cols["start_date"], start_date_value)
+        _set_row_value(activity_row, activity_cols["end_date"], end_date_value)
+        _set_row_value(activity_row, activity_cols["document_type"], document_type_value)
+        _set_row_value(activity_row, activity_cols["document_number"], "")
+        _set_row_value(activity_row, activity_cols["usage"], usage_value)
+        _set_row_value(activity_row, activity_cols["unit"], row_data.get("unit", ""))
+        _set_row_value(activity_row, activity_cols["data_source"], "SAP")
+        _set_row_value(activity_row, activity_cols["data_source_other"], "")
+        _set_row_value(activity_row, activity_cols["supplier_name"], "")
+        _set_row_value(activity_row, activity_cols["transport_origin"], "")
+        _set_row_value(activity_row, activity_cols["transport_destination"], row_data.get("transport_destination", current_site))
+        _set_row_value(activity_row, activity_cols["target_product"], row_data.get("target_product", ""))
+        _set_row_value(activity_row, activity_cols["comment"], "")
+        _set_row_value(activity_row, activity_cols["material_group"], row_data.get("material_group", ""))
+        _set_row_value(activity_row, activity_cols.get("net_weight"), row_data.get("net_weight", ""))
+        _set_row_value(activity_row, activity_cols.get("gross_weight"), row_data.get("gross_weight", ""))
+        _set_row_value(activity_row, activity_cols.get("weight_unit"), row_data.get("weight_uom", ""))
+        return activity_row, raw_material
+
+    if xlsxwriter is not None:
+        workbook = xlsxwriter.Workbook(str(output_path), {"constant_memory": True})
+        activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
+        raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
+        date_format = workbook.add_format({"num_format": "yyyy/mm/dd"})
+        for col, value in enumerate(activity_headers):
+            activity_ws.write(0, col, value)
+        for col, value in enumerate(raw_headers):
+            raw_ws.write(0, col, value)
+        excel_row_idx = DATA_START_ROW - 1  # zero-based row 2
+        with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            for row_data in reader:
+                activity_row, raw_material = build_activity_row(row_data)
+                for col, value in enumerate(activity_row):
+                    if value in (None, ""):
+                        continue
+                    if isinstance(value, date):
+                        activity_ws.write_datetime(excel_row_idx, col, datetime(value.year, value.month, value.day), date_format)
+                    else:
+                        activity_ws.write(excel_row_idx, col, value)
+                if raw_material and raw_material not in raw_seen:
+                    raw_seen.add(raw_material)
+                    raw_descriptions[raw_material] = row_data.get("description", "") or ""
+                written += 1
+                excel_row_idx += 1
+                if progress_callback and (written == 1 or written % progress_every == 0 or written == current_site_rows):
+                    progress_callback(
+                        step=f"Writing Raw Material Bulk: {current_site}",
+                        processed=processed_offset + written,
+                        total=total_rows,
+                        progress=min(95, 45 + int((processed_offset + written) / max(total_rows, 1) * 45)),
+                        current_site=current_site,
+                        current_site_rows=current_site_rows,
+                        current_site_written=written,
+                    )
+        raw_excel_row_idx = DATA_START_ROW - 1
+        for raw_material in sorted(raw_seen):
+            raw_row = ["" for _ in raw_headers]
+            _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
+            _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
+            _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
+            for col, value in enumerate(raw_row):
+                if value in (None, ""):
+                    continue
+                raw_ws.write(raw_excel_row_idx, col, value)
+            raw_excel_row_idx += 1
+        workbook.close()
+        writer_name = "xlsxwriter_constant_memory"
+    else:
+        wb = Workbook(write_only=True)
+        activity_ws = wb.create_sheet(ACTIVITY_SHEET_NAME)
+        raw_ws = wb.create_sheet(RAW_MATERIAL_SHEET_NAME)
+        activity_ws.append(activity_headers)
+        activity_ws.append(["" for _ in activity_headers])
+        raw_ws.append(raw_headers)
+        raw_ws.append(["" for _ in raw_headers])
+        with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
+            reader = csv.DictReader(fh)
+            for row_data in reader:
+                activity_row, raw_material = build_activity_row(row_data)
+                activity_ws.append(activity_row)
+                if raw_material and raw_material not in raw_seen:
+                    raw_seen.add(raw_material)
+                    raw_descriptions[raw_material] = row_data.get("description", "") or ""
+                written += 1
+                if progress_callback and (written == 1 or written % progress_every == 0 or written == current_site_rows):
+                    progress_callback(
+                        step=f"Writing Raw Material Bulk: {current_site}",
+                        processed=processed_offset + written,
+                        total=total_rows,
+                        progress=min(95, 45 + int((processed_offset + written) / max(total_rows, 1) * 45)),
+                        current_site=current_site,
+                        current_site_rows=current_site_rows,
+                        current_site_written=written,
+                    )
+        for raw_material in sorted(raw_seen):
+            raw_row = ["" for _ in raw_headers]
+            _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
+            _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
+            _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
+            raw_ws.append(raw_row)
+        wb.save(output_path)
+        writer_name = "openpyxl_write_only"
+
+    return {
+        "output_filename": output_path.name,
+        "activity_template_columns": activity_cols,
+        "raw_material_template_columns": raw_cols,
+        "activity_rows": int(written),
+        "raw_materials": int(len(raw_seen)),
+        "zero_usage_rows_excluded": 0,
+        "supplier_name_options": 0,
+        "site_tbc_supplier_count": 0,
+        "supplier_status": "Deferred to Module 2C",
+        "m2b_writer": f"large_dataset_{writer_name}_lightweight_template_headers_only",
+    }
+
+
 def generate_raw_material_bulk_from_standard_total_usage_zip(
     standard_total_usage_path: str | Path,
     raw_material_template_path: str | Path,
@@ -2751,52 +3290,42 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
 ) -> Dict[str, Any]:
     """Generate Module 2B Raw Material Bulk ZIP by site from Module 2A output.
 
-    Rules preserved from the current Raw Material Bulk writer:
+    Large Dataset Mode rules:
+    - Stream Module 2A rows directly into per-site disk spools; no full DataFrame,
+      no pd.concat(), and no site_df.copy().
     - Usage = 2A per-PC final raw-material usage × Module 1 Step1 annual quantity.
     - Transportation Destination = Module 1 Step1 Production Site.
     - Output is split by Production Site.
-    - Raw Material Bulk Template is preserved and only target cells are written.
+    - M2B keeps template sheet names/header columns only. It intentionally does
+      not load/copy template formatting, formulas, dropdowns, validations or
+      hidden helper sheets. M2C/M3 can apply formal template formatting later.
     - Supplier mapping is not applied in Module 2B; it is reserved for Module 2C.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     if progress_callback:
-        progress_callback(step="Reading Module 2A total usage", processed=0, total=0, progress=8)
-    exploded, summary = _read_standard_bom_total_usage_workbook(standard_total_usage_path, mapping=mapping)
-    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+        progress_callback(step="Preparing Module 2B Large Dataset Mode", processed=0, total=0, progress=6)
 
-    if progress_callback:
-        progress_callback(step="Applying Module 1 annual quantity", processed=int(len(exploded)), total=int(len(exploded)), progress=22)
-    annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
-    exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
-    exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    csv_paths, site_counts, summary = _stream_module2b_rows_to_site_csv(
+        standard_total_usage_path=standard_total_usage_path,
+        step1_output_path=step1_output_path,
+        output_dir=output_dir,
+        mapping=mapping,
+        progress_callback=progress_callback,
+    )
 
-    if progress_callback:
-        progress_callback(step="Mapping Production Site", processed=int(len(exploded)), total=int(len(exploded)), progress=36)
-    site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
-    work = exploded.copy()
-    if work.empty:
-        work["_production_site"] = "Unassigned"
-    else:
-        work["_target_key"] = work["target_product"].apply(_normalize_material_key)
-        work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
-        work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
-        work["transport_destination"] = work["_production_site"]
-        if "material_group" not in work.columns:
-            work["material_group"] = ""
-
-    site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
+    site_values = sorted(site_counts.keys()) if site_counts else ["Unassigned"]
     generated_files: list[dict[str, Any]] = []
     zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
     zip_path = output_dir / zip_filename
     processed_rows = 0
-    total_rows = int(len(work))
+    total_rows = int(sum(site_counts.values()))
 
     if progress_callback:
         progress_callback(step="Writing Raw Material Bulk files", processed=0, total=total_rows, progress=45)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for idx, site in enumerate(site_values, start=1):
-            site_df = work[work["_production_site"] == site].copy().drop(columns=["_target_key", "_production_site"], errors="ignore")
+            site_row_count = int(site_counts.get(site, 0))
             safe_site = _sanitize_filename_part(site)
             file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
             if progress_callback:
@@ -2806,15 +3335,20 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
                     total=total_rows,
                     progress=min(95, 45 + int((idx - 1) / max(len(site_values), 1) * 45)),
                     current_site=str(site),
+                    current_site_rows=site_row_count,
+                    current_site_written=0,
                 )
-            write_summary = _write_raw_material_bulk_from_exploded(
-                exploded=site_df,
+            write_summary = _write_raw_material_bulk_from_site_csv_streaming(
+                csv_path=csv_paths.get(site, ""),
                 raw_material_template_path=raw_material_template_path,
                 output_path=file_path,
-                supplier_map=None,
-                return_expanded=False,
+                progress_callback=progress_callback,
+                processed_offset=processed_rows,
+                total_rows=total_rows,
+                current_site=str(site),
+                current_site_rows=site_row_count,
             )
-            processed_rows += int(len(site_df))
+            processed_rows += site_row_count
             zf.write(file_path, arcname=file_path.name)
             generated_files.append({
                 "production_site": site,
@@ -2822,12 +3356,27 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
                 "activity_rows": int(write_summary.get("activity_rows", 0)),
                 "raw_materials": int(write_summary.get("raw_materials", 0)),
             })
+            try:
+                file_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
-    unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
+    for csv_path in csv_paths.values():
+        try:
+            Path(csv_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+    try:
+        Path(summary.get("m2b_spool_dir", "")).rmdir()
+    except Exception:
+        pass
+
+    unassigned_rows = int(site_counts.get("Unassigned", 0))
+    raw_material_total = 0
+    # raw_materials are counted per generated workbook; keep the previous summary
+    # field conservative because cross-site unique counting would require another
+    # global in-memory set. Per-site counts are available in production_site_files.
     result = dict(summary)
-    result.update(annual_qty_source_summary)
-    result.update(annual_usage_summary)
-    result.update(step1_summary)
     result.update({
         "output_filename": zip_filename,
         "download_url": f"/download/{zip_filename}",
@@ -2835,19 +3384,17 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
         "production_site_files": generated_files,
         "production_site_count": int(len(site_values)),
         "unassigned_rows": int(unassigned_rows),
-        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
-        "zero_annual_usage_rows_excluded": int(zero_annual_usage_rows_excluded),
         "activity_rows": int(total_rows),
-        "raw_materials": int(work["raw_material"].nunique()) if not work.empty else 0,
+        "raw_materials": int(raw_material_total),
         "supplier_status": "Deferred to Module 2C",
         "supplier_upload_files": 0,
         "supplier_bulk_generated": False,
-        "module2b_rule": "2A total usage -> Module 1 annual quantity/site mapping -> Raw Material Bulk ZIP; supplier mapping is not applied in Module 2B.",
+        "module2b_rule": "2A total usage -> Module 1 annual quantity/site mapping -> lightweight Raw Material Bulk ZIP by site; supplier mapping is not applied in Module 2B.",
+        "module2b_template_policy": "Headers and sheet names are preserved from Raw Material Bulk template; formatting/dropdowns/validations/formulas are intentionally not copied in M2B Large Dataset Mode.",
     })
     if progress_callback:
         progress_callback(step="Completed", processed=total_rows, total=total_rows, progress=100)
     return result
-
 
 
 def _read_raw_material_bulk_workbook_as_exploded(raw_bulk_path: str | Path) -> tuple[pd.DataFrame, Dict[str, Any]]:
