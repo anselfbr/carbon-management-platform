@@ -1148,9 +1148,96 @@ function cmpSourceMetaText(data) {
   return parts.length ? `｜${parts.join('｜')}` : '';
 }
 
+function cmpFormatDuration(seconds) {
+  const n = Math.max(0, Math.round(Number(seconds) || 0));
+  const h = Math.floor(n / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = n % 60;
+  const lang = cmpLang();
+  if (lang === 'zh') {
+    if (h > 0) return `${h} 小時 ${m} 分`;
+    if (m > 0) return `${m} 分 ${s} 秒`;
+    return `${s} 秒`;
+  }
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 function cmpRemainingText(seconds) {
   const lang = cmpLang();
-  return lang === 'zh' ? `約 ${seconds} 秒` : `~${seconds}s remaining`;
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) return lang === 'zh' ? '預估剩餘時間計算中' : 'Estimating remaining time';
+  return lang === 'zh' ? `預估剩餘 ${cmpFormatDuration(value)}` : `~${cmpFormatDuration(value)} remaining`;
+}
+
+function cmpParseTimeMs(value) {
+  if (!value) return null;
+  const raw = String(value);
+  const normalized = raw.includes('T') ? raw : raw.replace(' ', 'T');
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function cmpClampEta(seconds, fallbackSeconds = 60) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return Math.max(1, Math.round(Number(fallbackSeconds) || 60));
+  return Math.max(0, Math.min(86400, Math.round(value)));
+}
+
+function cmpCreateEtaTracker(defaultSeconds = 60) {
+  return {
+    startedAtMs: Date.now(),
+    defaultSeconds: Math.max(10, Number(defaultSeconds) || 60),
+    lastEta: null,
+    lastUpdateMs: Date.now()
+  };
+}
+
+function cmpEstimateJobRemainingSeconds(job = {}, tracker = null, defaultSeconds = 60) {
+  const fallback = tracker && tracker.defaultSeconds ? tracker.defaultSeconds : defaultSeconds;
+  const progress = Number(job.progress || 0);
+  const processed = Number(job.processed_rows || job.processed || 0);
+  const total = Number(job.total_rows || job.total || 0);
+  const serverRemaining = Number(job.remaining_seconds);
+  const candidates = [];
+  if (Number.isFinite(serverRemaining) && serverRemaining >= 0) candidates.push(serverRemaining);
+
+  const now = Date.now();
+  const startedAtMs = cmpParseTimeMs(job.started_at || job.created_at) || (tracker ? tracker.startedAtMs : null);
+  const elapsed = startedAtMs ? Math.max(1, (now - startedAtMs) / 1000) : 0;
+
+  if (elapsed > 2 && total > 0 && processed > 0 && processed < total) {
+    candidates.push(elapsed * Math.max(0, total - processed) / processed);
+  }
+  if (elapsed > 2 && progress > 1 && progress < 100) {
+    candidates.push(elapsed * Math.max(0, 100 - progress) / progress);
+  }
+  if (!candidates.length) {
+    const progressFactor = progress > 0 && progress < 100 ? Math.max(0.1, (100 - progress) / 100) : 1;
+    candidates.push(fallback * progressFactor);
+  }
+
+  candidates.sort((a, b) => a - b);
+  const estimate = candidates[Math.floor(candidates.length / 2)];
+  return cmpClampEta(estimate, fallback);
+}
+
+function cmpUpdateEtaTracker(tracker, job = {}, defaultSeconds = 60) {
+  if (!tracker) tracker = cmpCreateEtaTracker(defaultSeconds);
+  const now = Date.now();
+  const estimate = cmpEstimateJobRemainingSeconds(job, tracker, defaultSeconds);
+  if (tracker.lastEta === null) {
+    tracker.lastEta = estimate;
+    tracker.lastUpdateMs = now;
+    return estimate;
+  }
+  const delta = Math.max(0, (now - tracker.lastUpdateMs) / 1000);
+  const projected = Math.max(0, tracker.lastEta - delta);
+  const smoothed = cmpClampEta(projected * 0.55 + estimate * 0.45, tracker.defaultSeconds);
+  tracker.lastEta = smoothed;
+  tracker.lastUpdateMs = now;
+  return smoothed;
 }
 
 
@@ -1526,6 +1613,7 @@ bomForm.addEventListener('submit', async (e) => {
 
 
 let module3CclPollTimer = null;
+let module3CclEtaTracker = cmpCreateEtaTracker(60);
 
 function setModule3CclResult(mode, title, text, timeText = 'Idle', progress = 0) {
   if (!module3CclResult) return;
@@ -1567,6 +1655,8 @@ window.cmpRefreshModule3RawBulkSource = refreshModule3RawBulkSource;
 
 function startModule3CclPolling(jobId, startTime) {
   clearInterval(module3CclPollTimer);
+  module3CclEtaTracker = cmpCreateEtaTracker(60);
+  if (startTime) module3CclEtaTracker.startedAtMs = startTime;
   module3CclPollTimer = setInterval(async () => {
     try {
       const res = await fetch(`/module3/ccl-job/${jobId}`, { cache: 'no-store' });
@@ -1574,7 +1664,7 @@ function startModule3CclPolling(jobId, startTime) {
       const job = data.job || {};
       const progress = Number(job.progress || 0);
       const sourceText = job.source_filename ? `來源檔：${job.source_filename}${job.source_meta ? cmpSourceMetaText(job.source_meta) : ''}` : '';
-      const remaining = Number.isFinite(Number(job.remaining_seconds)) ? Math.max(0, Number(job.remaining_seconds)) : 30;
+      const remaining = cmpUpdateEtaTracker(module3CclEtaTracker, job, 60);
       if (job.status === 'success') {
         clearInterval(module3CclPollTimer);
         const summary = job.summary || {};
@@ -1607,11 +1697,12 @@ if (module3CclForm) {
   module3CclForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     clearInterval(module3CclPollTimer);
+    module3CclEtaTracker = cmpCreateEtaTracker(60);
     if (module3CclDownload) {
       module3CclDownload.classList.add('disabled');
       module3CclDownload.href = '#';
     }
-    setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(30), 3);
+    setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(60), 3);
     await refreshModule3RawBulkSource();
     refreshBomStep1Source();
     const fd = new FormData(module3CclForm);
@@ -1619,7 +1710,7 @@ if (module3CclForm) {
       const res = await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: fd });
       const data = await readJsonOrThrow(res);
       if (!data.job_id) throw new Error('後端未回傳 job_id。');
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(30), 5);
+      setModule3CclResult('running', cmpT('module3ProcessingTitle', '處理中'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(60), 5);
       startModule3CclPolling(data.job_id, Date.now());
     } catch (err) {
       setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
@@ -2313,6 +2404,7 @@ ruleForm.onsubmit = async (e) => {
   const log = document.getElementById('module2aLog');
   const download = document.getElementById('module2aDownload');
   let pollTimer = null;
+  let etaTracker = cmpCreateEtaTracker(120);
 
   function setState(mode, titleText, bodyText, timeText, progress) {
     if (statusBox) {
@@ -2380,8 +2472,9 @@ ruleForm.onsubmit = async (e) => {
         return;
       }
 
-      setState('running', 'MODULE 2A processing', `${job.step || 'Processing'} · ${rowText}`, job.last_heartbeat || 'Running', progress);
-      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nLast heartbeat: ${job.last_heartbeat || ''}`;
+      const remaining = cmpUpdateEtaTracker(etaTracker, job, 120);
+      setState('running', 'MODULE 2A processing', `${job.step || 'Processing'} · ${rowText}`, cmpRemainingText(remaining), progress);
+      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nEstimated remaining: ${cmpFormatDuration(remaining)}\nLast heartbeat: ${job.last_heartbeat || ''}`;
     } catch (err) {
       clearInterval(pollTimer);
       setState('error', 'MODULE 2A failed', err.message || '狀態查詢失敗', 'Error', 100);
@@ -2392,11 +2485,12 @@ ruleForm.onsubmit = async (e) => {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (pollTimer) clearInterval(pollTimer);
+    etaTracker = cmpCreateEtaTracker(120);
     if (download) {
       download.href = '#';
       download.classList.add('disabled');
     }
-    setState('running', 'MODULE 2A queued', 'Uploading Standard BOM files...', 'Queued', 3);
+    setState('running', 'MODULE 2A queued', 'Uploading Standard BOM files...', cmpRemainingText(120), 3);
     if (log) log.textContent = `Uploading and creating MODULE 2A job...\n${module2aStep1SourceText ? module2aStep1SourceText.textContent : ''}`;
 
     try {
@@ -2405,7 +2499,7 @@ ruleForm.onsubmit = async (e) => {
       const data = await readJsonOrText(res);
       const jobId = data.job_id;
       if (!jobId) throw new Error('未取得 job_id');
-      setState('running', 'MODULE 2A processing', `Job created: ${jobId}`, 'Running', 5);
+      setState('running', 'MODULE 2A processing', `Job created: ${jobId}`, cmpRemainingText(120), 5);
       await poll(jobId);
       pollTimer = setInterval(() => poll(jobId), 1500);
     } catch (err) {
@@ -2430,6 +2524,7 @@ ruleForm.onsubmit = async (e) => {
   const log = document.getElementById('module2bLog');
   const download = document.getElementById('module2bDownload');
   let pollTimer = null;
+  let etaTracker = cmpCreateEtaTracker(90);
 
   function setState(mode, titleText, bodyText, timeText, progress) {
     if (statusBox) {
@@ -2524,8 +2619,9 @@ ruleForm.onsubmit = async (e) => {
         return;
       }
 
-      setState('running', 'MODULE 2B processing', `${job.step || 'Processing'} · ${rowText}`, job.last_heartbeat || 'Running', progress);
-      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nLast heartbeat: ${job.last_heartbeat || ''}`;
+      const remaining = cmpUpdateEtaTracker(etaTracker, job, 90);
+      setState('running', 'MODULE 2B processing', `${job.step || 'Processing'} · ${rowText}`, cmpRemainingText(remaining), progress);
+      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nEstimated remaining: ${cmpFormatDuration(remaining)}\nLast heartbeat: ${job.last_heartbeat || ''}`;
     } catch (err) {
       clearInterval(pollTimer);
       setState('error', 'MODULE 2B failed', err.message || '狀態查詢失敗', 'Error', 100);
@@ -2536,11 +2632,12 @@ ruleForm.onsubmit = async (e) => {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (pollTimer) clearInterval(pollTimer);
+    etaTracker = cmpCreateEtaTracker(90);
     if (download) {
       download.href = '#';
       download.classList.add('disabled');
     }
-    setState('running', 'MODULE 2B queued', 'Uploading Raw Material Bulk Template...', 'Queued', 3);
+    setState('running', 'MODULE 2B queued', 'Uploading Raw Material Bulk Template...', cmpRemainingText(90), 3);
     if (log) log.textContent = `Uploading and creating MODULE 2B job...\n${module2bStep1SourceText ? module2bStep1SourceText.textContent : ''}\n${module2bTotalUsageSourceText ? module2bTotalUsageSourceText.textContent : ''}`;
 
     try {
@@ -2549,7 +2646,7 @@ ruleForm.onsubmit = async (e) => {
       const data = await readJsonOrText(res);
       const jobId = data.job_id;
       if (!jobId) throw new Error('未取得 job_id');
-      setState('running', 'MODULE 2B processing', `Job created: ${jobId}`, 'Running', 5);
+      setState('running', 'MODULE 2B processing', `Job created: ${jobId}`, cmpRemainingText(90), 5);
       await poll(jobId);
       pollTimer = setInterval(() => poll(jobId), 1500);
     } catch (err) {
@@ -2575,6 +2672,7 @@ ruleForm.onsubmit = async (e) => {
   const log = document.getElementById('module2cLog');
   const download = document.getElementById('module2cDownload');
   let pollTimer = null;
+  let etaTracker = cmpCreateEtaTracker(90);
 
   function setState(mode, titleText, bodyText, timeText, progress) {
     if (statusBox) {
@@ -2667,8 +2765,9 @@ ruleForm.onsubmit = async (e) => {
         return;
       }
 
-      setState('running', 'MODULE 2C processing', `${job.step || 'Processing'} · ${rowText}`, job.last_heartbeat || 'Running', progress);
-      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nLast heartbeat: ${job.last_heartbeat || ''}`;
+      const remaining = cmpUpdateEtaTracker(etaTracker, job, 90);
+      setState('running', 'MODULE 2C processing', `${job.step || 'Processing'} · ${rowText}`, cmpRemainingText(remaining), progress);
+      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nEstimated remaining: ${cmpFormatDuration(remaining)}\nLast heartbeat: ${job.last_heartbeat || ''}`;
     } catch (err) {
       clearInterval(pollTimer);
       setState('error', 'MODULE 2C failed', err.message || '狀態查詢失敗', 'Error', 100);
@@ -2679,11 +2778,12 @@ ruleForm.onsubmit = async (e) => {
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (pollTimer) clearInterval(pollTimer);
+    etaTracker = cmpCreateEtaTracker(90);
     if (download) {
       download.href = '#';
       download.classList.add('disabled');
     }
-    setState('running', 'MODULE 2C queued', 'Uploading Supplier files...', 'Queued', 3);
+    setState('running', 'MODULE 2C queued', 'Uploading Supplier files...', cmpRemainingText(90), 3);
     if (log) log.textContent = `Uploading and creating MODULE 2C job...\n${module2cStep1SourceText ? module2cStep1SourceText.textContent : ''}\n${module2cRawBulkSourceText ? module2cRawBulkSourceText.textContent : ''}`;
 
     try {
@@ -2692,7 +2792,7 @@ ruleForm.onsubmit = async (e) => {
       const data = await readJsonOrText(res);
       const jobId = data.job_id;
       if (!jobId) throw new Error('未取得 job_id');
-      setState('running', 'MODULE 2C processing', `Job created: ${jobId}`, 'Running', 5);
+      setState('running', 'MODULE 2C processing', `Job created: ${jobId}`, cmpRemainingText(90), 5);
       await poll(jobId);
       pollTimer = setInterval(() => poll(jobId), 1500);
     } catch (err) {
