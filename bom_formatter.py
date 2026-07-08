@@ -3164,6 +3164,76 @@ def _rewrite_autofilter_suffix(suffix: bytes, width: int, last_row: int) -> byte
     ref = f"A2:{_xlsx_col_name(max(1, int(width)))}{max(DATA_START_ROW, int(last_row))}".encode("ascii")
     return re.sub(br'(<[^>]*autoFilter\b[^>]*\bref=")[^"]*(")', br"\1" + ref + br"\2", suffix, count=1)
 
+def _remove_calc_chain_content_type(data: bytes) -> bytes:
+    """Remove stale calcChain override after streaming worksheet XML replacement."""
+    try:
+        root = ET.fromstring(data)
+        ns = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+        changed = False
+        for child in list(root):
+            if child.tag == f"{ns}Override" and child.attrib.get("PartName") == "/xl/calcChain.xml":
+                root.remove(child)
+                changed = True
+        if not changed:
+            return data
+        ET.register_namespace("", "http://schemas.openxmlformats.org/package/2006/content-types")
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    except Exception:
+        # Fallback keeps package valid even if namespace formatting is unexpected.
+        return re.sub(
+            rb'<Override\b[^>]*PartName="/xl/calcChain\.xml"[^>]*/>',
+            b"",
+            data,
+        )
+
+
+def _remove_calc_chain_relationship(data: bytes) -> bytes:
+    """Remove stale workbook relationship to calcChain.xml.
+
+    A streamed sheet replacement changes formula ranges.  Keeping an old
+    calcChain can make Excel reject the workbook even when all worksheet XML is
+    well-formed.  Excel will rebuild the calculation chain on open.
+    """
+    try:
+        root = ET.fromstring(data)
+        ns = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+        changed = False
+        for child in list(root):
+            rel_type = child.attrib.get("Type", "")
+            target = child.attrib.get("Target", "")
+            if child.tag == f"{ns}Relationship" and (rel_type.endswith("/calcChain") or target.endswith("calcChain.xml")):
+                root.remove(child)
+                changed = True
+        if not changed:
+            return data
+        ET.register_namespace("", "http://schemas.openxmlformats.org/package/2006/relationships")
+        return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    except Exception:
+        return re.sub(
+            rb'<Relationship\b(?=[^>]*(?:Type="[^"]*/calcChain"|Target="calcChain\.xml"))[^>]*/>',
+            b"",
+            data,
+        )
+
+
+def _prepare_xlsx_package_part_for_streaming(filename: str, data: bytes) -> bytes | None:
+    """Return replacement package part data, or None when the part must be dropped.
+
+    The lightweight full-template writer replaces worksheet XML directly.  Any
+    existing xl/calcChain.xml is no longer reliable because it points to the old
+    formula cells/ranges.  Removing it is the safe OpenXML pattern; Excel and
+    third-party importers recalculate/recreate it if needed.
+    """
+    normalized = str(filename).replace("\\", "/")
+    if normalized == "xl/calcChain.xml" or normalized.endswith("/calcChain.xml"):
+        return None
+    if normalized == "[Content_Types].xml":
+        return _remove_calc_chain_content_type(data)
+    if normalized == "xl/_rels/workbook.xml.rels":
+        return _remove_calc_chain_relationship(data)
+    return data
+
+
 
 def _stream_write_replaced_sheet_xml(sheet_xml: bytes, dst, row_iter, width: int, expected_rows: int | None = None, header_rows_values: list[list[Any]] | None = None) -> int:
     prefix, sheetdata_open, suffix, header_rows, template_row = _extract_sheet_prefix_suffix_and_rows(sheet_xml)
@@ -3244,8 +3314,11 @@ def _rewrite_xlsx_sheets_preserve_package(template_path: str | Path, output_path
                         repl.get("header_rows_values"),
                     )
             else:
-                with zin.open(info, "r") as src, zout.open(info, "w") as dst:
-                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+                data = zin.read(info.filename)
+                data = _prepare_xlsx_package_part_for_streaming(info.filename, data)
+                if data is None:
+                    continue
+                zout.writestr(info, data)
     return counts
 
 
