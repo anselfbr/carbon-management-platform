@@ -635,9 +635,9 @@
             <div class="module2a-panel module2b-panel">
               <div class="module2a-header">
                 <div>
-                  <span class="module-label">MODULE 2B</span>
-                  <h3>寫入 Raw Material Bulk</h3>
-                  <p>第二段自動引用 MODULE 2A 產出的標準BOM表總用量與 Module 1 Step 1 最新產出，並依既有規則寫入 Raw Material Bulk Template。</p>
+                  <p class="section-eyebrow">MODULE 2B</p>
+                  <h2>寫入 Raw Material Bulk</h2>
+                  <p class="form-hint">第二段自動引用 MODULE 2A 產出的標準BOM表總用量與 Module 1 Step 1 最新產出，並依既有規則寫入 Raw Material Bulk Template。</p>
                 </div>
               </div>
 
@@ -662,7 +662,8 @@
               </form>
 
               <div id="module2bProcessingStatus" class="processing-status idle">
-                <div class="status-row">
+                <div class="status-header">
+                  <div class="spinner"></div>
                   <div>
                     <b id="module2bStatusTitle">MODULE 2B ready</b>
                     <p id="module2bStatusText">請先完成 MODULE 2A，並上傳 Raw Material Bulk Template。</p>
@@ -676,6 +677,54 @@
 
               <a id="module2bDownload" class="download disabled" href="#">下載 Raw Material Bulk ZIP</a>
               <pre id="module2bLog" class="rule-log">MODULE 2B is ready.</pre>
+            </div>
+
+            <div class="module2a-panel module2b-panel module2c-panel">
+              <div class="module2a-header">
+                <div>
+                  <p class="section-eyebrow">MODULE 2C</p>
+                  <h2>套用供應商資料並產出 Bulk</h2>
+                  <p class="form-hint">第三段自動引用 MODULE 2B 產出的 Raw Material Bulk ZIP，上傳供應商資料後依既有規則寫入 Supplier Name、Transportation Origin，並產出供應商對應後的 Bulk ZIP。</p>
+                </div>
+              </div>
+
+              <div class="module3-source-card">
+                <b>引用 Module 1 Step 1 最新產出資訊</b>
+                <p id="module2cStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+              </div>
+
+              <div class="module3-source-card">
+                <b>引用 Module 2B Raw Material Bulk ZIP</b>
+                <p id="module2cRawBulkSourceText">來源：Module 2B Raw Material Bulk ZIP 檢查中...</p>
+              </div>
+
+              <form id="module2cForm" class="form-panel module2c-form">
+                <label for="module2cSupplierFiles">上傳供應商資料</label>
+                <input id="module2cSupplierFiles" name="module2c_supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
+                <p class="form-hint">支援多個供應商 Excel；依目前供應商規則以 Raw Material Code + Vendor/Vendor Name 對應，一料多供應商會展開為多筆。</p>
+
+                <button type="submit" class="btn-primary">
+                  <span class="btn-icon">⌘</span>
+                  <span>套用 Supplier Mapping</span>
+                </button>
+              </form>
+
+              <div id="module2cProcessingStatus" class="processing-status idle">
+                <div class="status-header">
+                  <div class="spinner"></div>
+                  <div>
+                    <b id="module2cStatusTitle">MODULE 2C ready</b>
+                    <p id="module2cStatusText">請先完成 MODULE 2B，並上傳供應商資料。</p>
+                  </div>
+                  <span id="module2cStatusTime" class="status-time">Idle</span>
+                </div>
+                <div class="progress-track">
+                  <div id="module2cProgressBar" class="progress-bar"></div>
+                </div>
+              </div>
+
+              <a id="module2cDownload" class="download disabled" href="#">下載 Supplier-mapped Bulk ZIP</a>
+              <pre id="module2cLog" class="rule-log">MODULE 2C is ready.</pre>
             </div>
 
             <div class="module2-legacy-panel">
@@ -999,6 +1048,8 @@ const bomStep1SourceText = document.getElementById('bomStep1SourceText');
 const module2aStep1SourceText = document.getElementById('module2aStep1SourceText');
 const module2bStep1SourceText = document.getElementById('module2bStep1SourceText');
 const module2bTotalUsageSourceText = document.getElementById('module2bTotalUsageSourceText');
+const module2cStep1SourceText = document.getElementById('module2cStep1SourceText');
+const module2cRawBulkSourceText = document.getElementById('module2cRawBulkSourceText');
 const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
 const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
@@ -1322,7 +1373,7 @@ function setBomProcessingState(mode, title, text, timeText, progress) {
 
 
 async function refreshBomStep1Source() {
-  if (!bomStep1SourceText && !module2aStep1SourceText && !module2bStep1SourceText) return;
+  if (!bomStep1SourceText && !module2aStep1SourceText && !module2bStep1SourceText && !module2cStep1SourceText) return;
   try {
     const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
@@ -1331,11 +1382,13 @@ async function refreshBomStep1Source() {
     if (bomStep1SourceText) bomStep1SourceText.textContent = sourceText;
     if (module2aStep1SourceText) module2aStep1SourceText.textContent = sourceText;
     if (module2bStep1SourceText) module2bStep1SourceText.textContent = sourceText;
+    if (module2cStep1SourceText) module2cStep1SourceText.textContent = sourceText;
   } catch (err) {
     const message = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
     if (bomStep1SourceText) bomStep1SourceText.textContent = message;
     if (module2aStep1SourceText) module2aStep1SourceText.textContent = message;
     if (module2bStep1SourceText) module2bStep1SourceText.textContent = message;
+    if (module2cStep1SourceText) module2cStep1SourceText.textContent = message;
   }
 }
 
@@ -2487,6 +2540,140 @@ ruleForm.onsubmit = async (e) => {
   });
 
   refreshModule2bSources();
+})();
+
+// MODULE 2C isolated Supplier Mapping Bulk output flow.
+// Reads latest Module 2B Raw Material Bulk ZIP on the server; only uploads supplier files.
+(function () {
+  const form = document.getElementById('module2cForm');
+  if (!form) return;
+
+  const statusBox = document.getElementById('module2cProcessingStatus');
+  const title = document.getElementById('module2cStatusTitle');
+  const text = document.getElementById('module2cStatusText');
+  const time = document.getElementById('module2cStatusTime');
+  const bar = document.getElementById('module2cProgressBar');
+  const log = document.getElementById('module2cLog');
+  const download = document.getElementById('module2cDownload');
+  let pollTimer = null;
+
+  function setState(mode, titleText, bodyText, timeText, progress) {
+    if (statusBox) {
+      statusBox.classList.remove('idle', 'running', 'success', 'error');
+      statusBox.classList.add(mode);
+    }
+    if (title) title.textContent = titleText || '';
+    if (text) text.textContent = bodyText || '';
+    if (time) time.textContent = timeText || '';
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
+  }
+
+  async function readJsonOrText(res) {
+    const raw = await res.text();
+    try {
+      const data = raw ? JSON.parse(raw) : {};
+      if (!res.ok || data.ok === false) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      return data;
+    } catch (err) {
+      if (raw && raw.trim().startsWith('<')) throw new Error('伺服器回傳錯誤頁面，請查看 Render log。');
+      if (err instanceof SyntaxError) throw new Error(raw || `HTTP ${res.status}`);
+      throw err;
+    }
+  }
+
+  async function refreshModule2cSources() {
+    try {
+      const res = await fetch('/module2c/source-info', { cache: 'no-store' });
+      const data = await readJsonOrText(res);
+      const step1 = data.module1_step1 || {};
+      const rawBulk = data.module2b_raw_bulk || {};
+      if (module2cStep1SourceText) {
+        module2cStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
+      }
+      if (module2cRawBulkSourceText) {
+        module2cRawBulkSourceText.textContent = `來源：Module 2B Raw Material Bulk ZIP｜檔案：${rawBulk.filename || ''}｜建立時間：${rawBulk.modified_at || ''}`;
+      }
+    } catch (err) {
+      const msg = err.message || '尚未找到 Module 2C 必要來源檔。';
+      if (module2cRawBulkSourceText) module2cRawBulkSourceText.textContent = msg;
+    }
+  }
+
+  function summaryText(job) {
+    const s = job.summary || {};
+    return [
+      `Rows: ${s.activity_rows || job.processed_rows || 0}`,
+      `Input files: ${s.input_files || 0}`,
+      `Supplier files: ${s.supplier_files || 0}`,
+      `Supplier matched rows: ${s.supplier_matched_rows || 0}`,
+      `Supplier expanded rows: ${s.supplier_expanded_rows || 0}`,
+      `Supplier bulk rows: ${s.supplier_bulk_rows || 0}`,
+    ].join('; ');
+  }
+
+  async function poll(jobId) {
+    try {
+      const res = await fetch(`/module2/bom-job/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      const job = await readJsonOrText(res);
+      const progress = Number(job.progress || 0);
+      const processed = Number(job.processed_rows || 0);
+      const total = Number(job.total_rows || 0);
+      const rowText = total ? `Rows: ${processed.toLocaleString()} / ${total.toLocaleString()}` : `Rows: ${processed.toLocaleString()}`;
+
+      if (job.status === 'success') {
+        clearInterval(pollTimer);
+        setState('success', 'MODULE 2C completed', summaryText(job), 'Completed', 100);
+        if (download && job.download_url) {
+          download.href = job.download_url;
+          download.classList.remove('disabled');
+        }
+        if (log) log.textContent = `Completed.\n${summaryText(job)}\nDownload: ${job.output_filename || ''}`;
+        await refreshModule2cSources();
+        return;
+      }
+
+      if (job.status === 'failed') {
+        clearInterval(pollTimer);
+        setState('error', 'MODULE 2C failed', job.error || '處理失敗，請查看 Render log。', 'Error', 100);
+        if (log) log.textContent = `Error: ${job.error || 'Unknown error'}\nStep: ${job.step || ''}`;
+        return;
+      }
+
+      setState('running', 'MODULE 2C processing', `${job.step || 'Processing'} · ${rowText}`, job.last_heartbeat || 'Running', progress);
+      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nLast heartbeat: ${job.last_heartbeat || ''}`;
+    } catch (err) {
+      clearInterval(pollTimer);
+      setState('error', 'MODULE 2C failed', err.message || '狀態查詢失敗', 'Error', 100);
+      if (log) log.textContent = `Polling error: ${err.message || err}`;
+    }
+  }
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (pollTimer) clearInterval(pollTimer);
+    if (download) {
+      download.href = '#';
+      download.classList.add('disabled');
+    }
+    setState('running', 'MODULE 2C queued', 'Uploading Supplier files...', 'Queued', 3);
+    if (log) log.textContent = `Uploading and creating MODULE 2C job...\n${module2cStep1SourceText ? module2cStep1SourceText.textContent : ''}\n${module2cRawBulkSourceText ? module2cRawBulkSourceText.textContent : ''}`;
+
+    try {
+      const fd = new FormData(form);
+      const res = await fetch('/module2c/supplier-mapping-bulk-job', { method: 'POST', body: fd });
+      const data = await readJsonOrText(res);
+      const jobId = data.job_id;
+      if (!jobId) throw new Error('未取得 job_id');
+      setState('running', 'MODULE 2C processing', `Job created: ${jobId}`, 'Running', 5);
+      await poll(jobId);
+      pollTimer = setInterval(() => poll(jobId), 1500);
+    } catch (err) {
+      setState('error', 'MODULE 2C failed', err.message || '建立任務失敗', 'Error', 100);
+      if (log) log.textContent = `Error: ${err.message || err}`;
+    }
+  });
+
+  refreshModule2cSources();
 })();
 
 </script>

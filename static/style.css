@@ -2570,6 +2570,8 @@ select:focus {
 .module2a-header h2 {
   margin: 4px 0 6px;
   color: var(--ink);
+  font-size: clamp(1.55rem, 2vw, 2rem);
+  line-height: 1.2;
 }
 .section-eyebrow {
   margin: 0;
@@ -2644,10 +2646,16 @@ select:focus {
   content: "收合";
 }
 
-/* Module 2B staged Raw Material Bulk output */
-.module2b-panel {
+/* Module 2A/2B/2C staged Module 2 output panels */
+.module2b-panel,
+.module2c-panel {
   margin-top: 24px;
 }
-.module2b-form {
+.module2b-form,
+.module2c-form {
   margin-top: 14px;
+}
+.module2a-panel .form-hint {
+  font-size: 1rem;
+  line-height: 1.65;
 }

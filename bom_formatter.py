@@ -2849,4 +2849,236 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V25_0_MODULE2B_STAGED_RAW_BULK"
+
+def _read_raw_material_bulk_workbook_as_exploded(raw_bulk_path: str | Path) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Read an existing Raw Material Bulk workbook back into the internal exploded schema.
+
+    Module 2C uses this to apply supplier mapping to Module 2B output without
+    re-expanding BOM and without requiring the Raw Material Bulk template again.
+    The workbook itself is reused as the output template so dropdowns/hidden
+    columns/formatting are preserved.
+    """
+    path = Path(raw_bulk_path)
+    if not path.exists():
+        raise FileNotFoundError(f"找不到 Raw Material Bulk 檔案：{path}")
+
+    wb = load_workbook(path, data_only=True)
+    if ACTIVITY_SHEET_NAME not in wb.sheetnames:
+        raise ValueError(f"{path.name} 找不到 raw material bulk 分頁：{ACTIVITY_SHEET_NAME}")
+    if RAW_MATERIAL_SHEET_NAME not in wb.sheetnames:
+        raise ValueError(f"{path.name} 找不到 raw material bulk 分頁：{RAW_MATERIAL_SHEET_NAME}")
+
+    activity_ws = wb[ACTIVITY_SHEET_NAME]
+    raw_ws = wb[RAW_MATERIAL_SHEET_NAME]
+
+    activity_cols = {
+        "raw_name": _find_template_column(activity_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+        "raw_code": _find_template_column(activity_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+        "start_date": _find_template_column(activity_ws, DOC_START_DATE_ALIASES, 3),
+        "usage": _find_template_column(activity_ws, USAGE_ALIASES, 7),
+        "unit": _find_template_column(activity_ws, ACTIVITY_DATA_UNIT_ALIASES, 8),
+        "supplier_name": _find_template_column(activity_ws, SUPPLIER_NAME_ALIASES, 14),
+        "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 15),
+        "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 16),
+        "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
+        "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
+        "net_weight": _find_template_optional_column(activity_ws, NET_WEIGHT_ALIASES),
+        "gross_weight": _find_template_optional_column(activity_ws, GROSS_WEIGHT_ALIASES),
+        "weight_unit": _find_template_optional_column(activity_ws, WEIGHT_UNIT_ALIASES),
+    }
+    raw_cols = {
+        "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
+        "raw_code": _find_template_column(raw_ws, RAW_MATERIAL_CODE_ALIASES, 2),
+        "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
+    }
+
+    description_map: dict[str, str] = {}
+    for row_idx in range(DATA_START_ROW, raw_ws.max_row + 1):
+        code = _safe_text(raw_ws.cell(row_idx, raw_cols["raw_code"]).value) or _safe_text(raw_ws.cell(row_idx, raw_cols["raw_name"]).value)
+        if not code:
+            continue
+        description_map[_normalize_material_key(code)] = _safe_text(raw_ws.cell(row_idx, raw_cols["description"]).value)
+
+    rows: list[dict[str, Any]] = []
+    for row_idx in range(DATA_START_ROW, activity_ws.max_row + 1):
+        raw_material = _safe_text(activity_ws.cell(row_idx, activity_cols["raw_code"]).value) or _safe_text(activity_ws.cell(row_idx, activity_cols["raw_name"]).value)
+        target_product = _safe_text(activity_ws.cell(row_idx, activity_cols["target_product"]).value)
+        unit = _safe_text(activity_ws.cell(row_idx, activity_cols["unit"]).value)
+        usage = _safe_number(activity_ws.cell(row_idx, activity_cols["usage"]).value)
+        if not raw_material and not target_product and not unit and usage == 0:
+            continue
+        if not raw_material or not target_product:
+            continue
+        raw_key = _normalize_material_key(raw_material)
+        rows.append({
+            "target_product": target_product,
+            "source_material": target_product,
+            "raw_material": raw_material,
+            "usage": usage,
+            "unit": unit,
+            "description": description_map.get(raw_key, ""),
+            "material_group": _safe_text(activity_ws.cell(row_idx, activity_cols["material_group"]).value),
+            "valid_from": _date_from_value(activity_ws.cell(row_idx, activity_cols["start_date"]).value),
+            "level": 0,
+            "transport_destination": _safe_text(activity_ws.cell(row_idx, activity_cols["transport_destination"]).value),
+            "transport_origin": _safe_text(activity_ws.cell(row_idx, activity_cols["transport_origin"]).value),
+            "supplier_name": _safe_text(activity_ws.cell(row_idx, activity_cols["supplier_name"]).value),
+            "net_weight": _safe_number(activity_ws.cell(row_idx, activity_cols["net_weight"]).value) if activity_cols.get("net_weight") else "",
+            "gross_weight": _safe_number(activity_ws.cell(row_idx, activity_cols["gross_weight"]).value) if activity_cols.get("gross_weight") else "",
+            "weight_uom": _safe_text(activity_ws.cell(row_idx, activity_cols["weight_unit"]).value) if activity_cols.get("weight_unit") else "",
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        df = pd.DataFrame(columns=[
+            "target_product", "source_material", "raw_material", "usage", "unit", "description",
+            "material_group", "valid_from", "level", "transport_destination", "transport_origin",
+            "supplier_name", "net_weight", "gross_weight", "weight_uom",
+        ])
+    return df, {
+        "input_filename": path.name,
+        "activity_rows_read": int(len(df)),
+        "raw_materials_read": int(df["raw_material"].nunique()) if not df.empty else 0,
+        "template_columns": activity_cols,
+    }
+
+
+def generate_supplier_mapped_raw_material_bulk_from_zip(
+    raw_material_bulk_zip_path: str | Path,
+    supplier_paths: list[str | Path] | tuple[str | Path, ...],
+    output_dir: str | Path,
+    token: str,
+    supplier_bulk_template_path: str | Path | None = None,
+    supplier_bulk_output_path: str | Path | None = None,
+    progress_callback=None,
+) -> Dict[str, Any]:
+    """Apply Module 2C supplier mapping to Module 2B Raw Material Bulk ZIP.
+
+    Rules:
+    - Reads the latest Module 2B ZIP generated from Module 2A total usage.
+    - Does not re-expand BOM and does not recalculate usage.
+    - Uses existing supplier rules: Material + Vendor/Vendor Name mapping, site TBC fallback,
+      supplier dropdown matching, and optional supplier bulk create output.
+    - Reuses each Raw Material Bulk workbook as its own template so dropdowns,
+      hidden columns and formatting are preserved.
+    """
+    source_zip = Path(raw_material_bulk_zip_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if not source_zip.exists():
+        raise FileNotFoundError(f"找不到 Module 2B Raw Material Bulk ZIP：{source_zip}")
+    if source_zip.suffix.lower() != ".zip":
+        raise ValueError("Module 2C 目前需要讀取 Module 2B 產出的 ZIP 檔案。")
+
+    if progress_callback:
+        progress_callback(step="Reading Supplier files", processed=0, total=0, progress=6)
+    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+
+    zip_filename = f"supplier_mapped_raw_material_bulk_by_site_{token}.zip"
+    zip_path = output_dir / zip_filename
+    generated_files: list[dict[str, Any]] = []
+    combined_expanded_parts: list[pd.DataFrame] = []
+    input_files = 0
+    total_input_rows = 0
+    total_output_rows = 0
+    supplier_matched_total = 0
+    supplier_expanded_total = 0
+    supplier_name_matched_total = 0
+    supplier_name_missing_total = 0
+    supplier_options_total = 0
+
+    with tempfile.TemporaryDirectory(prefix="cmp_module2c_") as tmp:
+        tmpdir = Path(tmp)
+        with zipfile.ZipFile(source_zip, "r") as zf:
+            members = [m for m in zf.namelist() if m.lower().endswith((".xlsx", ".xlsm")) and not Path(m).name.startswith("~$")]
+            if not members:
+                raise ValueError("Module 2B ZIP 中找不到 Raw Material Bulk Excel 檔案。")
+            for member in members:
+                zf.extract(member, tmpdir)
+
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as out_zip:
+            for idx, member in enumerate(members, start=1):
+                source_file = tmpdir / member
+                if not source_file.exists():
+                    source_file = tmpdir / Path(member).name
+                if progress_callback:
+                    progress_callback(
+                        step=f"Applying Supplier mapping: {Path(member).name}",
+                        processed=total_input_rows,
+                        total=total_input_rows,
+                        progress=min(90, 12 + int((idx - 1) / max(len(members), 1) * 70)),
+                        current_file=Path(member).name,
+                    )
+                exploded, read_summary = _read_raw_material_bulk_workbook_as_exploded(source_file)
+                total_input_rows += int(read_summary.get("activity_rows_read", 0))
+                safe_name = _sanitize_filename_part(Path(member).stem)
+                output_path = output_dir / f"supplier_mapped_{safe_name}_{token}.xlsx"
+                write_summary, expanded = _write_raw_material_bulk_from_exploded(
+                    exploded=exploded,
+                    raw_material_template_path=source_file,
+                    output_path=output_path,
+                    supplier_map=supplier_map,
+                    return_expanded=True,
+                )
+                input_files += 1
+                total_output_rows += int(write_summary.get("activity_rows", 0))
+                supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
+                supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
+                supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
+                supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
+                supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
+                if expanded is not None and not expanded.empty:
+                    combined_expanded_parts.append(expanded)
+                out_zip.write(output_path, arcname=output_path.name)
+                generated_files.append({
+                    "source_filename": Path(member).name,
+                    "filename": output_path.name,
+                    "input_rows": int(read_summary.get("activity_rows_read", 0)),
+                    "activity_rows": int(write_summary.get("activity_rows", 0)),
+                    "raw_materials": int(write_summary.get("raw_materials", 0)),
+                    "supplier_matched_rows": int(write_summary.get("supplier_matched_rows", 0)),
+                    "supplier_expanded_rows": int(write_summary.get("supplier_expanded_rows", 0)),
+                    "supplier_name_missing_rows": int(write_summary.get("supplier_name_missing_rows", 0)),
+                })
+
+            supplier_bulk_summary: Dict[str, Any] = {}
+            if supplier_bulk_template_path and supplier_bulk_output_path:
+                if progress_callback:
+                    progress_callback(step="Writing Supplier Bulk Create file", processed=total_output_rows, total=total_output_rows, progress=92)
+                combined_expanded = pd.concat(combined_expanded_parts, ignore_index=True) if combined_expanded_parts else pd.DataFrame()
+                supplier_bulk_summary = _write_supplier_bulk_create_file(combined_expanded, supplier_bulk_template_path, supplier_bulk_output_path)
+                supplier_bulk_filename = str(supplier_bulk_summary.get("supplier_bulk_filename") or "")
+                if supplier_bulk_filename:
+                    supplier_bulk_path = Path(supplier_bulk_output_path)
+                    if supplier_bulk_path.exists():
+                        out_zip.write(supplier_bulk_path, arcname=supplier_bulk_path.name)
+
+    result: Dict[str, Any] = {
+        "output_filename": zip_filename,
+        "download_url": f"/download/{zip_filename}",
+        "module2b_raw_bulk_source_filename": source_zip.name,
+        "module2c_rule": "Read Module 2B ZIP -> apply Supplier mapping -> write supplier-mapped Raw Material Bulk ZIP; usage quantities are not recalculated.",
+        "input_files": int(input_files),
+        "input_rows": int(total_input_rows),
+        "activity_rows": int(total_output_rows),
+        "generated_files": generated_files,
+        "supplier_matched_rows": int(supplier_matched_total),
+        "supplier_expanded_rows": int(supplier_expanded_total),
+        "supplier_name_matched_rows": int(supplier_name_matched_total),
+        "supplier_name_missing_rows": int(supplier_name_missing_total),
+        "supplier_dropdown_matched_rows": int(supplier_name_matched_total),
+        "supplier_dropdown_missing_rows": int(supplier_name_missing_total),
+        "supplier_name_options": int(supplier_options_total),
+        "supplier_status": "Generated",
+        "supplier_bulk_generated": False,
+    }
+    result.update(supplier_summary)
+    if 'supplier_bulk_summary' in locals():
+        result.update(supplier_bulk_summary)
+        result["supplier_bulk_generated"] = bool(supplier_bulk_summary.get("supplier_bulk_filename"))
+    if progress_callback:
+        progress_callback(step="Completed", processed=total_output_rows, total=total_output_rows, progress=100)
+    return result
+
+
+BOM_FORMATTER_VERSION = "CMP_V26_0_MODULE2C_SUPPLIER_MAPPING"
