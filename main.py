@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import json
 import re
-import shutil
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -16,14 +16,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import (
-    BOM_FORMATTER_VERSION,
-    generate_raw_material_bulk_file,
-    generate_raw_material_bulk_files_by_site_zip,
-    export_bom_structure_file,
-    generate_working_hour_rollup_file,
-    generate_standard_bom_total_usage_file,
-)
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_standard_bom_total_usage_file
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, apply_ccl_factors_to_raw_material_bulk_package, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -35,9 +28,8 @@ FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 LATEST_STANDARD_BOM_TOTAL_USAGE_PATH = OUTPUT_DIR / "standard_bom_total_usage_latest.xlsx"
-LATEST_RAW_MATERIAL_TEMPLATE_PATH = OUTPUT_DIR / "raw_material_template_latest.xlsx"
+MODULE2_JOB_DIR = OUTPUT_DIR / "module2_jobs"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
-MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH: Optional[Path] = None
 
 
 RULE_SET_MAP = {
@@ -50,6 +42,7 @@ DEFAULT_RULE_SET = "IPS"
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
+MODULE2_JOB_DIR.mkdir(exist_ok=True)
 DATA_DIR.mkdir(exist_ok=True)
 RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
@@ -60,8 +53,6 @@ print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
-
-# Module 2 is CPU / memory intensive, so keep one background job at a time by default.
 MODULE2_BOM_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 MODULE2_BOM_JOBS: Dict[str, Dict[str, Any]] = {}
 
@@ -72,6 +63,109 @@ def _cmp_now_iso() -> str:
 
 def _cmp_mtime_iso(path: Path) -> str:
     return datetime.fromtimestamp(path.stat().st_mtime, CMP_TIMEZONE).isoformat(timespec="seconds")
+
+
+def _module2_job_path(job_id: str) -> Path:
+    safe_job_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(job_id or ""))
+    return MODULE2_JOB_DIR / f"{safe_job_id}.json"
+
+
+def _set_module2_bom_job(job_id: str, **updates: Any) -> None:
+    job = MODULE2_BOM_JOBS.setdefault(job_id, {})
+    job.update(updates)
+    job["updated_at"] = _cmp_now_iso()
+    job.setdefault("job_id", job_id)
+    MODULE2_JOB_DIR.mkdir(exist_ok=True)
+    try:
+        _module2_job_path(job_id).write_text(json.dumps(job, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        traceback.print_exc()
+
+
+def _get_module2_bom_job(job_id: str) -> Dict[str, Any] | None:
+    if job_id in MODULE2_BOM_JOBS:
+        return MODULE2_BOM_JOBS[job_id]
+    path = _module2_job_path(job_id)
+    if path.exists():
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+            MODULE2_BOM_JOBS[job_id] = job
+            return job
+        except Exception:
+            traceback.print_exc()
+    return None
+
+
+def _run_module2a_standard_bom_total_usage_job(
+    job_id: str,
+    bom_paths: list[Path],
+    output_path: Path,
+    mapping: dict[str, str | None],
+    source_version: str,
+    source_date: str,
+) -> None:
+    start_time = datetime.now(CMP_TIMEZONE)
+
+    def report(payload: Dict[str, Any]) -> None:
+        elapsed = int((datetime.now(CMP_TIMEZONE) - start_time).total_seconds())
+        _set_module2_bom_job(
+            job_id,
+            status="running",
+            progress=int(payload.get("progress", 0)),
+            step=str(payload.get("step") or ""),
+            processed_rows=int(payload.get("processed_rows") or 0),
+            total_rows=int(payload.get("total_rows") or 0),
+            elapsed_seconds=elapsed,
+            error_message="",
+        )
+
+    try:
+        _set_module2_bom_job(
+            job_id,
+            status="running",
+            progress=1,
+            step="Queued",
+            processed_rows=0,
+            total_rows=0,
+            elapsed_seconds=0,
+            error_message="",
+        )
+        summary = generate_standard_bom_total_usage_file(
+            bom_path=bom_paths,
+            output_path=output_path,
+            mapping=mapping,
+            source_version=source_version,
+            source_date=source_date,
+            progress_callback=report,
+        )
+        LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.write_bytes(output_path.read_bytes())
+        summary["latest_filename"] = LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.name
+        summary["latest_download_url"] = f"/download/{LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.name}"
+        _set_module2_bom_job(
+            job_id,
+            status="success",
+            progress=100,
+            step="Completed",
+            processed_rows=int(summary.get("standard_bom_total_usage_rows", 0)),
+            total_rows=int(summary.get("standard_bom_total_usage_rows", 0)),
+            elapsed_seconds=int((datetime.now(CMP_TIMEZONE) - start_time).total_seconds()),
+            output_filename=output_path.name,
+            download_url=f"/download/{output_path.name}",
+            summary=summary,
+            error_message="",
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        _set_module2_bom_job(
+            job_id,
+            status="failed",
+            progress=100,
+            step="Failed",
+            elapsed_seconds=int((datetime.now(CMP_TIMEZONE) - start_time).total_seconds()),
+            error_message=str(exc),
+            traceback=traceback.format_exc(),
+        )
+
 
 def _extract_source_version_date(filename: str) -> Dict[str, str]:
     text = filename or ""
@@ -129,92 +223,6 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
             step="CCL 係數對應失敗",
             message=str(exc),
         )
-
-
-def _set_module2_bom_job(job_id: str, **updates: Any) -> None:
-    job = MODULE2_BOM_JOBS.setdefault(job_id, {})
-    job.update(updates)
-    job["updated_at"] = _cmp_now_iso()
-
-
-def _run_module2_bom_job(
-    job_id: str,
-    token: str,
-    bom_paths: list[Path],
-    template_path: Path,
-    output_path: Path,
-    mapping: dict[str, str | None],
-) -> None:
-    """Module 2A background job: Standard BOM -> 標準BOM表總用量.
-
-    This first-stage job intentionally does not generate Raw Material Bulk,
-    does not apply Step1 annual quantities, and does not apply supplier mapping.
-    The generated intermediate workbook is saved as the latest Module 2A source
-    for the later Module 2B Raw Material Bulk Output step.
-    """
-    global MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
-
-    def report(**payload: Any) -> None:
-        progress = int(payload.get("progress", MODULE2_BOM_JOBS.get(job_id, {}).get("progress", 0)) or 0)
-        update: Dict[str, Any] = {
-            "status": payload.get("status", "running"),
-            "progress": max(0, min(100, progress)),
-            "step": payload.get("step") or "MODULE 2A Processing",
-            "stage": payload.get("stage", "processing"),
-        }
-        for key in ("processed_rows", "total_rows", "current_file", "remaining_seconds"):
-            if key in payload and payload.get(key) is not None:
-                update[key] = payload.get(key)
-        _set_module2_bom_job(job_id, **update)
-
-    try:
-        report(status="running", progress=3, step="MODULE 2A Processing", stage="started", processed_rows=0, total_rows=0)
-
-        # Preserve the uploaded Raw Material Bulk template for the upcoming 2B step.
-        if template_path.exists():
-            shutil.copy2(template_path, LATEST_RAW_MATERIAL_TEMPLATE_PATH)
-
-        summary = generate_standard_bom_total_usage_file(
-            bom_path=bom_paths,
-            output_path=output_path,
-            mapping=mapping,
-            progress_callback=report,
-        )
-
-        LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.write_bytes(output_path.read_bytes())
-        MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH = output_path
-        summary["standard_bom_total_usage_latest"] = LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.name
-        summary["standard_bom_total_usage_latest_download_url"] = f"/download/{LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.name}"
-        summary["raw_material_template_source_filename"] = template_path.name
-        summary["raw_material_template_latest"] = LATEST_RAW_MATERIAL_TEMPLATE_PATH.name if LATEST_RAW_MATERIAL_TEMPLATE_PATH.exists() else ""
-        summary["app_version"] = "CMP_V17_0_MODULE2A_TOTAL_USAGE_SPLIT"
-        summary["bom_formatter_version"] = BOM_FORMATTER_VERSION
-
-        _set_module2_bom_job(
-            job_id,
-            status="success",
-            progress=100,
-            step="MODULE 2A Completed",
-            stage="completed",
-            message="標準BOM表總用量已完成。",
-            processed_rows=int(summary.get("standard_bom_total_usage_rows", 0) or 0),
-            total_rows=int(summary.get("standard_bom_total_usage_rows", 0) or 0),
-            summary=summary,
-            download_url=summary.get("download_url", f"/download/{output_path.name}"),
-            app_version="CMP_V17_0_MODULE2A_TOTAL_USAGE_SPLIT",
-            bom_formatter_version=BOM_FORMATTER_VERSION,
-        )
-    except Exception as exc:
-        traceback.print_exc()
-        _set_module2_bom_job(
-            job_id,
-            status="error",
-            progress=100,
-            step="MODULE 2A Failed",
-            stage="failed",
-            message=str(exc),
-        )
-
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -2138,18 +2146,12 @@ def module3_search_factor_library(
 
 
 # =========================================================
-# Module 2A · BOM Expansion
+# Module 2A · Standard BOM Total Usage
 # Standard BOM -> 標準BOM表總用量
 # =========================================================
 @app.post("/process-bom-expansion")
 async def process_bom_expansion(request: Request):
-    """Module 2A BOM Expansion.
-
-    Stage 1 only expands Standard BOM to final raw material total usage per
-    finished product and exports a Standard-BOM-shaped intermediate workbook.
-    Raw Material Bulk writing and Supplier mapping are intentionally separated
-    into later stages.
-    """
+    """Module 2A only: expand Standard BOM into the total-usage intermediate file."""
     try:
         form = await request.form()
     except Exception as exc:
@@ -2164,39 +2166,15 @@ async def process_bom_expansion(request: Request):
         if is_upload_file_like(item):
             bom_uploads.append(item)
 
-    template_file = form.get("template_file")
-
     if not bom_uploads:
-        return JSONResponse(
-            {"ok": False, "message": "請至少上傳一個 Standard BOM Excel 檔案"},
-            status_code=400,
-        )
+        return JSONResponse({"ok": False, "message": "請至少上傳一個 Standard BOM Excel 檔案"}, status_code=400)
 
     for bom_file in bom_uploads:
         filename = str(getattr(bom_file, "filename", "") or "")
         if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse(
-                {"ok": False, "message": f"{filename} 不是 Standard BOM Excel 檔案"},
-                status_code=400,
-            )
-
-    # Stage 1 does not write the Raw Material Bulk yet, but preserves this
-    # uploaded template as the latest 2B input so the user will not need to
-    # upload it again in the next step.
-    if not template_file or not getattr(template_file, "filename", None):
-        return JSONResponse(
-            {"ok": False, "message": "請上傳 Raw Material Bulk Template"},
-            status_code=400,
-        )
-
-    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse(
-            {"ok": False, "message": "Raw Material Bulk Template 請上傳 Excel 檔案"},
-            status_code=400,
-        )
+            return JSONResponse({"ok": False, "message": f"{filename} 不是 Standard BOM Excel 檔案"}, status_code=400)
 
     token = uuid.uuid4().hex[:10]
-
     bom_paths: list[Path] = []
     for idx, bom_file in enumerate(bom_uploads, start=1):
         filename = str(getattr(bom_file, "filename", "") or f"bom_{idx}.xlsx")
@@ -2204,70 +2182,79 @@ async def process_bom_expansion(request: Request):
         saved_bom.write_bytes(await bom_file.read())
         bom_paths.append(saved_bom)
 
-    template_path = UPLOAD_DIR / f"raw_material_template_{token}_{Path(template_file.filename).name}"
-    template_path.write_bytes(await template_file.read())
+    mapping = {
+        "parent_col": "",
+        "component_col": "",
+        "qty_col": "",
+        "unit_col": "",
+        "description_col": "",
+        "material_group_col": "",
+        "valid_from_col": "",
+    }
+    source_version = str(form.get("bom_version") or form.get("source_version") or "").strip()
+    source_date = str(form.get("bom_date") or form.get("source_date") or "").strip()
+    if not source_version or not source_date:
+        inferred = _extract_source_version_date(Path(str(getattr(bom_uploads[0], "filename", "") or "")).name)
+        source_version = source_version or inferred.get("source_version", "")
+        source_date = source_date or inferred.get("source_date", "")
 
     output_path = OUTPUT_DIR / f"standard_bom_total_usage_{token}.xlsx"
-
-    # Header matching is removed from the Module 2A frontend. Keep this empty so
-    # the official Standard BOM column names are used consistently.
-    mapping: dict[str, str | None] = {}
-
-    job_id = token
     _set_module2_bom_job(
-        job_id,
+        token,
         status="queued",
         progress=0,
-        step="MODULE 2A Queued",
-        stage="queued",
-        message="標準BOM表總用量已建立背景工作。",
+        step="Queued",
         processed_rows=0,
         total_rows=0,
-        created_at=_cmp_now_iso(),
-        updated_at=_cmp_now_iso(),
+        elapsed_seconds=0,
+        output_filename=output_path.name,
+        download_url="",
+        error_message="",
     )
     MODULE2_BOM_EXECUTOR.submit(
-        _run_module2_bom_job,
-        job_id,
+        _run_module2a_standard_bom_total_usage_job,
         token,
         bom_paths,
-        template_path,
         output_path,
         mapping,
+        source_version,
+        source_date,
     )
 
     return {
         "ok": True,
-        "job_id": job_id,
-        "message": "標準BOM表總用量 background job started.",
-        "app_version": "CMP_V17_0_MODULE2A_TOTAL_USAGE_SPLIT",
+        "message": "MODULE 2A job created.",
+        "job_id": token,
+        "app_version": "CMP_MODULE2A_STANDARD_BOM_TOTAL_USAGE_V1",
         "bom_formatter_version": BOM_FORMATTER_VERSION,
-        "status_url": f"/module2/bom-job/{job_id}",
-    }
-
-
-@app.get("/module2/standard-bom-total-usage-source")
-def module2_standard_bom_total_usage_source():
-    path = LATEST_STANDARD_BOM_TOTAL_USAGE_PATH
-    if not path.exists():
-        return {
-            "ok": False,
-            "message": "尚未找到 Module 2A 產出的標準BOM表總用量，請先完成 Module 2A。",
-        }
-    stat = path.stat()
-    return {
-        "ok": True,
-        "filename": path.name,
-        "size_bytes": stat.st_size,
-        "modified_at": _cmp_mtime_iso(path),
-        "download_url": f"/download/{path.name}",
-        **_source_meta_for_path(path, "Module 2A"),
     }
 
 
 @app.get("/module2/bom-job/{job_id}")
-def module2_get_bom_job(job_id: str):
-    job = MODULE2_BOM_JOBS.get(job_id)
+def module2_bom_job_status(job_id: str):
+    job = _get_module2_bom_job(job_id)
     if not job:
-        return JSONResponse({"ok": False, "message": "找不到 Module 2 BOM Expansion 工作，請重新執行。"}, status_code=404)
-    return {"ok": True, "job": job}
+        return JSONResponse(
+            {
+                "ok": False,
+                "status": "missing",
+                "message": "找不到此 MODULE 2A 任務，可能因服務重啟或任務狀態已被清除，請重新執行。",
+            },
+            status_code=404,
+        )
+    return {"ok": True, **job}
+
+
+@app.get("/module2/standard-bom-total-usage-source")
+def module2_standard_bom_total_usage_source():
+    if not LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.exists():
+        return JSONResponse(
+            {"ok": False, "message": "尚未找到 MODULE 2A 產出的標準BOM表總用量，請先完成 Module 2A。"},
+            status_code=404,
+        )
+    return {
+        "ok": True,
+        "filename": LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.name,
+        "download_url": f"/download/{LATEST_STANDARD_BOM_TOTAL_USAGE_PATH.name}",
+        **_source_meta_for_path(LATEST_STANDARD_BOM_TOTAL_USAGE_PATH, "Module 2A Standard BOM Total Usage"),
+    }

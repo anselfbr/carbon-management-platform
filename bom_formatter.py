@@ -17,6 +17,10 @@ ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
 BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
+EXCEL_MAX_DATA_ROWS = 1048575
+STANDARD_BOM_TOTAL_USAGE_SAFE_SHEET_ROWS = 900000
+STANDARD_BOM_TOTAL_USAGE_SHEET_PREFIX = "標準BOM表總用量"
+STANDARD_BOM_TOTAL_USAGE_SUMMARY_SHEET = "輸出摘要"
 
 
 DEFAULT_MAPPING = {
@@ -270,41 +274,11 @@ def _year_end(d: date) -> date:
     return date(d.year, 12, 31)
 
 
-TEMPLATE_CLEAR_EXTRA_ROWS = 100
-TEMPLATE_CLEAR_FULL_MAX_ROWS = 5000
-
-
-def _clear_target_cells(
-    ws,
-    start_row: int,
-    columns: list[int],
-    data_row_count: int | None = None,
-    extra_rows: int = TEMPLATE_CLEAR_EXTRA_ROWS,
-) -> None:
-    """Clear target template values without scanning a whole formatted worksheet.
-
-    Some bulk templates carry formatting/data-validation far below the real data
-    area, so ``ws.max_row`` can be much larger than the rows that actually need
-    clearing.  Clearing every formatted row is slow and can trigger high memory
-    usage in Render.  For newly-copied templates we only need to clear existing
-    sample rows plus the rows that will be written in this run.
-    """
-    unique_columns = sorted({int(c) for c in columns if c})
-    if not unique_columns:
-        return
-
-    actual_data_rows = max(0, int(data_row_count or 0))
-    required_last_row = start_row + actual_data_rows + max(0, int(extra_rows or 0)) - 1
-    if ws.max_row <= TEMPLATE_CLEAR_FULL_MAX_ROWS:
-        max_row = max(ws.max_row, required_last_row, start_row)
-    else:
-        # Large max_row usually means styles/validations extend far down the sheet.
-        # Avoid clearing those empty formatted rows; they do not contain run output.
-        max_row = max(required_last_row, start_row)
-
+def _clear_target_cells(ws, start_row: int, columns: list[int]) -> None:
+    max_row = max(ws.max_row, start_row)
     for row_idx in range(start_row, max_row + 1):
-        for col_idx in unique_columns:
-            ws.cell(row=row_idx, column=col_idx).value = None
+        for col_idx in columns:
+            ws.cell(row_idx, col_idx).value = None
 
 def _normalize_template_header(value: Any) -> str:
     """Normalize a bulk-template header for resilient column matching."""
@@ -354,34 +328,13 @@ def _find_template_optional_column(ws, aliases: list[str]) -> int | None:
 
 def _write_template_value(ws, row_idx: int, col_idx: int | None, value: Any) -> None:
     if col_idx:
-        ws.cell(row=row_idx, column=int(col_idx)).value = value
+        ws.cell(row_idx, int(col_idx)).value = value
 
 
-def _write_template_row(ws, row_idx: int, values_by_column: dict[int | None, Any]) -> None:
-    """Write one sparse template row with fewer helper calls in the hot path."""
-    for col_idx, value in values_by_column.items():
-        if col_idx:
-            ws.cell(row=row_idx, column=int(col_idx)).value = value
-
-
-def _clear_template_columns(
-    ws,
-    start_row: int,
-    columns: list[int],
-    data_row_count: int | None = None,
-    extra_rows: int = TEMPLATE_CLEAR_EXTRA_ROWS,
-) -> None:
+def _clear_template_columns(ws, start_row: int, columns: list[int]) -> None:
     unique_columns = sorted({int(c) for c in columns if c})
     if unique_columns:
-        _clear_target_cells(ws, start_row, unique_columns, data_row_count=data_row_count, extra_rows=extra_rows)
-
-
-def _ensure_dataframe_columns(df: pd.DataFrame, defaults: dict[str, Any]) -> pd.DataFrame:
-    """Ensure optional output columns exist without rebuilding the DataFrame."""
-    for col, default in defaults.items():
-        if col not in df.columns:
-            df[col] = default
-    return df
+        _clear_target_cells(ws, start_row, unique_columns)
 
 RAW_MATERIAL_NAME_ALIASES = ["raw_material_name", "Raw Material Name", "原物料名稱", "原料名稱"]
 RAW_MATERIAL_CODE_ALIASES = ["raw_material_code", "Raw Material Code", "Raw Material ID", "Raw Material Number", "原物料代碼", "原料代碼"]
@@ -2082,43 +2035,20 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
         "supplier_address": _find_template_column(ws, SUPPLIER_BULK_ADDRESS_ALIASES, 4),
         "unit_name": _find_template_column(ws, SUPPLIER_BULK_UNIT_ALIASES, 5),
     }
+    _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
+
     rows: list[dict[str, str]] = []
     seen: set[tuple[str, str, str, str, str]] = set()
-
-    # Large-data optimization: avoid DataFrame.iterrows() in the supplier bulk
-    # hot path.  ``itertuples(name=None)`` is faster and avoids building a Series
-    # object for every row.
-    supplier_source_cols = [
-        "supplier_code", "vendor_code", "Vendor", "Vender", "Supplier Code",
-        "transport_destination", "Transportation Destination", "transportation_destination",
-        "production_site", "Production Site", "Unit Name",
-        "supplier_name", "Supplier Name", "Supplier Name (optional)",
-        "supplier_master_name", "Vendor Name", "Search Term",
-        "supplier_country_area", "Country/Area", "country_area", "Country",
-        "supplier_address", "Supplier Address", "transport_origin", "Transportation Origin",
-    ]
-    supplier_source_cols = list(dict.fromkeys([c for c in supplier_source_cols if c in expanded_with_suppliers.columns]))
-    source_index = {col: idx for idx, col in enumerate(supplier_source_cols)}
-
-    def tuple_first_text(values: tuple[Any, ...], names: list[str]) -> str:
-        for name in names:
-            idx = source_index.get(name)
-            if idx is not None:
-                text = _safe_text(values[idx])
-                if text:
-                    return text
-        return ""
-
-    for values in expanded_with_suppliers[supplier_source_cols].itertuples(index=False, name=None):
-        supplier_code = _normalize_vendor_code(tuple_first_text(values, ["supplier_code", "vendor_code", "Vendor", "Vender", "Supplier Code"]))
+    for _, row in expanded_with_suppliers.iterrows():
+        supplier_code = _normalize_vendor_code(_first_text(row, ["supplier_code", "vendor_code", "Vendor", "Vender", "Supplier Code"]))
         if not supplier_code:
             continue
-        unit_name = tuple_first_text(values, ["transport_destination", "Transportation Destination", "transportation_destination", "production_site", "Production Site", "Unit Name"])
-        supplier_name = tuple_first_text(values, ["supplier_name", "Supplier Name", "Supplier Name (optional)"])
+        unit_name = _first_text(row, ["transport_destination", "Transportation Destination", "transportation_destination", "production_site", "Production Site", "Unit Name"])
+        supplier_name = _first_text(row, ["supplier_name", "Supplier Name", "Supplier Name (optional)"])
         if not supplier_name:
-            supplier_name = tuple_first_text(values, ["supplier_master_name", "Vendor Name", "Search Term"])
-        country_area = tuple_first_text(values, ["supplier_country_area", "Country/Area", "country_area", "Country"])
-        supplier_address = tuple_first_text(values, ["supplier_address", "Supplier Address", "transport_origin", "Transportation Origin"])
+            supplier_name = _first_text(row, ["supplier_master_name", "Vendor Name", "Search Term"])
+        country_area = _first_text(row, ["supplier_country_area", "Country/Area", "country_area", "Country"])
+        supplier_address = _first_text(row, ["supplier_address", "Supplier Address", "transport_origin", "Transportation Origin"])
         key = (supplier_name, supplier_code, country_area, supplier_address, unit_name)
         if key in seen:
             continue
@@ -2131,17 +2061,14 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
             "unit_name": unit_name,
         })
 
-    _clear_template_columns(ws, DATA_START_ROW, list(cols.values()), data_row_count=len(rows))
-
-    for offset, row in enumerate(rows):
-        row_idx = DATA_START_ROW + offset
-        _write_template_row(ws, row_idx, {
-            cols["supplier_name"]: row["supplier_name"],
-            cols["supplier_code"]: row["supplier_code"],
-            cols["country_area"]: row["country_area"],
-            cols["supplier_address"]: row["supplier_address"],
-            cols["unit_name"]: row["unit_name"],
-        })
+    row_idx = DATA_START_ROW
+    for row in rows:
+        _write_template_value(ws, row_idx, cols["supplier_name"], row["supplier_name"])
+        _write_template_value(ws, row_idx, cols["supplier_code"], row["supplier_code"])
+        _write_template_value(ws, row_idx, cols["country_area"], row["country_area"])
+        _write_template_value(ws, row_idx, cols["supplier_address"], row["supplier_address"])
+        _write_template_value(ws, row_idx, cols["unit_name"], row["unit_name"])
+        row_idx += 1
 
     wb.save(output_path)
     return {
@@ -2211,81 +2138,45 @@ def _write_raw_material_bulk_from_exploded(
         tbc_supplier_map=tbc_supplier_map,
     )
 
-    # Large-data optimization: clear only the data area required for this run.
-    # This avoids iterating through far-down template formatting rows.
-    _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()), data_row_count=len(expanded))
+    _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
+    _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()))
 
-    expanded = _ensure_dataframe_columns(expanded, {
-        "raw_material": "",
-        "valid_from": None,
-        "usage": 0.0,
-        "unit": "",
-        "supplier_name": "",
-        "transport_origin": "",
-        "transport_destination": "",
-        "target_product": "",
-        "material_group": "",
-        "net_weight": "",
-        "gross_weight": "",
-        "weight_uom": "",
-        "description": "",
-    })
-    activity_source_cols = [
-        "raw_material", "valid_from", "usage", "unit", "supplier_name",
-        "transport_origin", "transport_destination", "target_product",
-        "material_group", "net_weight", "gross_weight", "weight_uom",
-    ]
-
-    for offset, values in enumerate(expanded[activity_source_cols].itertuples(index=False, name=None)):
-        (
-            raw_material, valid_from, usage, unit, supplier_name, transport_origin,
-            transport_destination, target_product, material_group, net_weight,
-            gross_weight, weight_uom,
-        ) = values
+    row_idx = DATA_START_ROW
+    for _, r in expanded.iterrows():
+        valid_from = r["valid_from"]
         if not isinstance(valid_from, date):
             valid_from = _date_from_value(valid_from)
-        usage_value = float(usage) if not pd.isna(usage) else 0
-        row_idx = DATA_START_ROW + offset
-        _write_template_row(activity_ws, row_idx, {
-            activity_cols["raw_name"]: raw_material,
-            activity_cols["raw_code"]: raw_material,
-            activity_cols["start_date"]: _year_start(valid_from),
-            activity_cols["end_date"]: _year_end(valid_from),
-            activity_cols["document_type"]: document_type_value,
-            activity_cols["document_number"]: "",
-            activity_cols["usage"]: usage_value,
-            activity_cols["unit"]: unit,
-            activity_cols["data_source"]: "SAP",
-            activity_cols["data_source_other"]: "",
-            activity_cols["supplier_name"]: supplier_name,
-            activity_cols["transport_origin"]: transport_origin,
-            activity_cols["transport_destination"]: transport_destination,
-            activity_cols["target_product"]: target_product,
-            activity_cols["comment"]: "",
-            activity_cols["material_group"]: material_group,
-            activity_cols.get("net_weight"): net_weight,
-            activity_cols.get("gross_weight"): gross_weight,
-            activity_cols.get("weight_unit"): weight_uom,
-        })
-        activity_ws.cell(row=row_idx, column=activity_cols["start_date"]).number_format = "yyyy/mm/dd"
-        activity_ws.cell(row=row_idx, column=activity_cols["end_date"]).number_format = "yyyy/mm/dd"
+        usage_value = float(r["usage"]) if not pd.isna(r["usage"]) else 0
+        _write_template_value(activity_ws, row_idx, activity_cols["raw_name"], r["raw_material"])
+        _write_template_value(activity_ws, row_idx, activity_cols["raw_code"], r["raw_material"])
+        _write_template_value(activity_ws, row_idx, activity_cols["start_date"], _year_start(valid_from))
+        _write_template_value(activity_ws, row_idx, activity_cols["end_date"], _year_end(valid_from))
+        _write_template_value(activity_ws, row_idx, activity_cols["document_type"], document_type_value)
+        _write_template_value(activity_ws, row_idx, activity_cols["document_number"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["usage"], usage_value)
+        _write_template_value(activity_ws, row_idx, activity_cols["unit"], r["unit"])
+        _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
+        _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], r.get("supplier_name", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], r.get("transport_origin", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], r.get("transport_destination", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols["target_product"], r["target_product"])
+        _write_template_value(activity_ws, row_idx, activity_cols["comment"], "")
+        _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
+        _write_template_value(activity_ws, row_idx, activity_cols.get("net_weight"), r.get("net_weight", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols.get("gross_weight"), r.get("gross_weight", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols.get("weight_unit"), r.get("weight_uom", ""))
+        activity_ws.cell(row_idx, activity_cols["start_date"]).number_format = "yyyy/mm/dd"
+        activity_ws.cell(row_idx, activity_cols["end_date"]).number_format = "yyyy/mm/dd"
+        row_idx += 1
 
-    raw_unique = (
-        expanded[["raw_material", "description"]]
-        .sort_values(["raw_material"])
-        .drop_duplicates(subset=["raw_material"])
-        if not expanded.empty
-        else pd.DataFrame(columns=["raw_material", "description"])
-    )
-    _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()), data_row_count=len(raw_unique))
-    for offset, values in enumerate(raw_unique[["raw_material", "description"]].itertuples(index=False, name=None)):
-        raw_material, description = values
-        row_idx = DATA_START_ROW + offset
-        _write_template_row(raw_ws, row_idx, {
-            raw_cols["raw_name"]: raw_material,
-            raw_cols["raw_code"]: raw_material,
-            raw_cols["description"]: description,
-        })
+    raw_unique = expanded.sort_values(["raw_material"]).drop_duplicates(subset=["raw_material"])[["raw_material", "description"]] if not expanded.empty else pd.DataFrame(columns=["raw_material", "description"])
+    row_idx = DATA_START_ROW
+    for _, r in raw_unique.iterrows():
+        _write_template_value(raw_ws, row_idx, raw_cols["raw_name"], r["raw_material"])
+        _write_template_value(raw_ws, row_idx, raw_cols["raw_code"], r["raw_material"])
+        _write_template_value(raw_ws, row_idx, raw_cols["description"], r["description"])
+        row_idx += 1
 
     wb.save(output_path)
     result = {
@@ -2302,6 +2193,273 @@ def _write_raw_material_bulk_from_exploded(
     if return_expanded:
         return result, expanded
     return result
+
+
+def _first_bom_columns(bom_paths: str | Path | list[str | Path] | tuple[str | Path, ...]) -> list[str]:
+    paths = _as_bom_path_list(bom_paths)
+    if not paths:
+        return []
+    first = _read_excel_first_sheet(paths[0])
+    return [str(c) for c in first.columns]
+
+
+def _build_standard_bom_total_usage_rows(
+    exploded: pd.DataFrame,
+    output_columns: list[str],
+    used_columns: dict[str, Any],
+    source_version: str = "",
+    source_date: str = "",
+) -> pd.DataFrame:
+    """Return final raw-material usage rows using the uploaded BOM column layout."""
+    if exploded is None or exploded.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    work = exploded.copy()
+    work["target_product"] = work["target_product"].apply(_safe_text)
+    work["raw_material"] = work["raw_material"].apply(_safe_text)
+    work = work.sort_values(["target_product", "raw_material"]).reset_index(drop=True)
+
+    rows: list[dict[str, Any]] = []
+    material_col = str(used_columns.get("material_col") or "")
+    parent_col = str(used_columns.get("parent_col") or "")
+    component_col = str(used_columns.get("component_col") or "")
+    qty_col = str(used_columns.get("qty_col") or "")
+    unit_col = str(used_columns.get("unit_col") or "")
+    description_col = str(used_columns.get("description_col") or "")
+    material_group_col = str(used_columns.get("material_group_col") or "")
+    valid_from_col = str(used_columns.get("valid_from_col") or "")
+    altitem_group_col = str(used_columns.get("altitem_group_col") or "")
+    usage_probability_col = str(used_columns.get("usage_probability_col") or "")
+    net_weight_col = str(used_columns.get("net_weight_col") or "")
+    gross_weight_col = str(used_columns.get("gross_weight_col") or "")
+    weight_uom_col = str(used_columns.get("weight_uom_col") or "")
+
+    extra_version_cols = {
+        "BOM Version": source_version,
+        "Version": source_version,
+        "版次": source_version,
+        "BOM Date": source_date,
+        "File Date": source_date,
+        "Date": source_date,
+        "檔案日期": source_date,
+    }
+
+    for r in work.itertuples(index=False):
+        row = {col: "" for col in output_columns}
+        if material_col in row:
+            row[material_col] = getattr(r, "target_product", "")
+        if parent_col in row:
+            row[parent_col] = getattr(r, "target_product", "")
+        if component_col in row:
+            row[component_col] = getattr(r, "raw_material", "")
+        if qty_col in row:
+            row[qty_col] = getattr(r, "usage", 0)
+        if unit_col in row:
+            row[unit_col] = getattr(r, "unit", "")
+        if description_col in row:
+            row[description_col] = getattr(r, "description", "")
+        if material_group_col in row:
+            row[material_group_col] = getattr(r, "material_group", "")
+        if valid_from_col in row:
+            row[valid_from_col] = getattr(r, "valid_from", "")
+        if altitem_group_col in row:
+            row[altitem_group_col] = ""
+        if usage_probability_col in row:
+            row[usage_probability_col] = ""
+        if net_weight_col in row:
+            row[net_weight_col] = getattr(r, "net_weight", "")
+        if gross_weight_col in row:
+            row[gross_weight_col] = getattr(r, "gross_weight", "")
+        if weight_uom_col in row:
+            row[weight_uom_col] = getattr(r, "weight_uom", "")
+        for col, value in extra_version_cols.items():
+            if col in row:
+                row[col] = value
+        rows.append(row)
+
+    return pd.DataFrame(rows, columns=output_columns)
+
+
+def _standard_bom_total_usage_sheet_plan(
+    total_usage: pd.DataFrame,
+    product_col: str,
+    safe_sheet_rows: int = STANDARD_BOM_TOTAL_USAGE_SAFE_SHEET_ROWS,
+) -> tuple[list[tuple[str, list[str], int]], dict[str, Any]]:
+    if total_usage is None or total_usage.empty:
+        return [(f"{STANDARD_BOM_TOTAL_USAGE_SHEET_PREFIX}_001", [], 0)], {
+            "sheets": 1,
+            "split_by_product": True,
+            "sheet_row_limit": int(safe_sheet_rows),
+        }
+
+    counts = (
+        total_usage[product_col]
+        .astype(str)
+        .groupby(total_usage[product_col].astype(str), dropna=False)
+        .size()
+        .sort_index()
+    )
+    oversized = counts[counts > EXCEL_MAX_DATA_ROWS]
+    if not oversized.empty:
+        product = str(oversized.index[0])
+        rows = int(oversized.iloc[0])
+        raise ValueError(
+            f"單一成品料號 {product} 的總用量列數為 {rows:,}，已超過 Excel 單一工作表上限 {EXCEL_MAX_DATA_ROWS:,}；"
+            "因同一成品不可切分到不同分頁，請先拆分來源 BOM 或改用資料庫/CSV 中間檔。"
+        )
+
+    safe_limit = max(1, min(int(safe_sheet_rows), EXCEL_MAX_DATA_ROWS))
+    sheets: list[tuple[str, list[str], int]] = []
+    current_products: list[str] = []
+    current_rows = 0
+
+    for product, rows_value in counts.items():
+        product_text = str(product)
+        rows = int(rows_value)
+        if current_products and current_rows + rows > safe_limit:
+            sheet_name = f"{STANDARD_BOM_TOTAL_USAGE_SHEET_PREFIX}_{len(sheets) + 1:03d}"
+            sheets.append((sheet_name, current_products, current_rows))
+            current_products = []
+            current_rows = 0
+        current_products.append(product_text)
+        current_rows += rows
+
+    if current_products or not sheets:
+        sheet_name = f"{STANDARD_BOM_TOTAL_USAGE_SHEET_PREFIX}_{len(sheets) + 1:03d}"
+        sheets.append((sheet_name, current_products, current_rows))
+
+    return sheets, {
+        "sheets": int(len(sheets)),
+        "split_by_product": True,
+        "sheet_row_limit": int(safe_limit),
+        "excel_max_data_rows": EXCEL_MAX_DATA_ROWS,
+    }
+
+
+def _write_standard_bom_total_usage_workbook(
+    total_usage: pd.DataFrame,
+    output_path: str | Path,
+    summary: dict[str, Any],
+    safe_sheet_rows: int = STANDARD_BOM_TOTAL_USAGE_SAFE_SHEET_ROWS,
+) -> dict[str, Any]:
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    product_col = str(summary.get("product_column") or "")
+    if not product_col or product_col not in total_usage.columns:
+        raise ValueError("標準BOM表總用量缺少成品料號欄位，無法依成品分頁。")
+
+    sheets, split_summary = _standard_bom_total_usage_sheet_plan(total_usage, product_col, safe_sheet_rows=safe_sheet_rows)
+    sheet_records: list[dict[str, Any]] = []
+
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        summary_rows = [
+            {"項目": "BOM 檔案數", "值": summary.get("bom_files", 0)},
+            {"項目": "BOM 原始列數", "值": summary.get("bom_rows_before_dedup", 0)},
+            {"項目": "BOM 去重後列數", "值": summary.get("bom_rows_after_dedup", 0)},
+            {"項目": "移除重複列數", "值": summary.get("bom_duplicate_rows_removed", 0)},
+            {"項目": "成品料號數", "值": summary.get("products", 0)},
+            {"項目": "半品料號數", "值": summary.get("semi_finished", 0)},
+            {"項目": "最終原物料列數", "值": summary.get("activity_rows", 0)},
+            {"項目": "最終原物料數", "值": summary.get("raw_materials", 0)},
+            {"項目": "最大展開階層", "值": summary.get("max_level", 0)},
+            {"項目": "BOM 版次", "值": summary.get("source_version", "")},
+            {"項目": "檔案日期", "值": summary.get("source_date", "")},
+            {"項目": "分頁原則", "值": "依成品料號分頁；同一成品料號不切分到不同分頁"},
+            {"項目": "單一分頁安全列數", "值": split_summary.get("sheet_row_limit", safe_sheet_rows)},
+        ]
+        pd.DataFrame(summary_rows).to_excel(writer, index=False, sheet_name=STANDARD_BOM_TOTAL_USAGE_SUMMARY_SHEET)
+
+        for sheet_name, products, row_count in sheets:
+            if products:
+                part = total_usage[total_usage[product_col].astype(str).isin(products)].copy()
+            else:
+                part = total_usage.copy()
+            part.to_excel(writer, index=False, sheet_name=sheet_name)
+            sheet_records.append({
+                "sheet_name": sheet_name,
+                "products": int(len(products)),
+                "rows": int(row_count if products else len(part)),
+                "first_product": products[0] if products else "",
+                "last_product": products[-1] if products else "",
+            })
+
+        for sheet in writer.book.worksheets:
+            sheet.freeze_panes = "A2"
+
+    return {
+        "output_filename": output_path.name,
+        "download_url": f"/download/{output_path.name}",
+        "standard_bom_total_usage_file": output_path.name,
+        "standard_bom_total_usage_rows": int(len(total_usage)),
+        "standard_bom_total_usage_sheets": int(len(sheets)),
+        "standard_bom_total_usage_sheet_records": sheet_records,
+        **split_summary,
+    }
+
+
+def generate_standard_bom_total_usage_file(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    source_version: str = "",
+    source_date: str = "",
+    safe_sheet_rows: int = STANDARD_BOM_TOTAL_USAGE_SAFE_SHEET_ROWS,
+    progress_callback: Any | None = None,
+) -> Dict[str, Any]:
+    """Module 2A: generate final raw-material total usage from Standard BOM only."""
+    def report(progress: int, step: str, processed: int = 0, total: int = 0) -> None:
+        if progress_callback:
+            progress_callback({
+                "progress": max(0, min(100, int(progress))),
+                "step": step,
+                "processed_rows": int(processed or 0),
+                "total_rows": int(total or 0),
+            })
+
+    report(5, "Reading Standard BOM files")
+    output_columns = _first_bom_columns(bom_path)
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    report(25, "Applying alternative item probabilities", len(bom_df), len(bom_df))
+
+    exploded, summary = _explode_bom(bom_df)
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    summary["activity_rows"] = int(len(exploded))
+    summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
+    summary.update({
+        "used_columns": used_columns,
+        "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
+        "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
+        "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
+        "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
+        "source_version": source_version,
+        "source_date": source_date,
+    })
+    report(65, "Building Standard BOM total usage rows", len(exploded), len(exploded))
+
+    product_col = str(used_columns.get("material_col") or used_columns.get("parent_col") or "Material")
+    if not output_columns:
+        output_columns = [product_col, str(used_columns.get("component_col") or "Component"), str(used_columns.get("qty_col") or "CS03 Qty"), str(used_columns.get("unit_col") or "CS03 UoM")]
+    total_usage = _build_standard_bom_total_usage_rows(
+        exploded=exploded,
+        output_columns=output_columns,
+        used_columns=used_columns,
+        source_version=source_version,
+        source_date=source_date,
+    )
+    summary["product_column"] = product_col
+    report(82, "Writing Standard BOM total usage workbook", len(total_usage), len(total_usage))
+
+    write_summary = _write_standard_bom_total_usage_workbook(
+        total_usage=total_usage,
+        output_path=output_path,
+        summary=summary,
+        safe_sheet_rows=safe_sheet_rows,
+    )
+    summary.update(write_summary)
+    report(100, "Completed", len(total_usage), len(total_usage))
+    return summary
 
 
 def generate_raw_material_bulk_file(
@@ -2460,199 +2618,3 @@ def generate_raw_material_bulk_files_by_site_zip(
 
 
 BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
-
-
-# =========================================================
-# Module 2A · Standard BOM Total Usage
-# Standard BOM -> final raw material total usage per finished product
-# =========================================================
-
-def _standard_bom_total_usage_dataframe(
-    bom_df: pd.DataFrame,
-    exploded: pd.DataFrame,
-    used_columns: dict[str, Any],
-) -> pd.DataFrame:
-    """Return a Standard-BOM-shaped final raw-material usage table.
-
-    Output preserves all user-facing columns from the original Standard BOM file
-    and rewrites the core BOM fields so each row represents:
-      Finished Product -> Final Raw Material, with semi-finished quantities
-      multiplied through and summed back to the finished product.
-
-    Important: Alternative-item fields are blanked because quantities in this
-    table are already probability-adjusted by _read_bom/_explode_bom.
-    """
-    internal_prefix = "_"
-    original_cols = [c for c in bom_df.columns if not str(c).startswith(internal_prefix)]
-    if not original_cols:
-        original_cols = [
-            used_columns.get("material_col") or "Material",
-            used_columns.get("parent_col") or DEFAULT_MAPPING["parent_col"],
-            used_columns.get("component_col") or DEFAULT_MAPPING["component_col"],
-            used_columns.get("qty_col") or DEFAULT_MAPPING["qty_col"],
-            used_columns.get("unit_col") or DEFAULT_MAPPING["unit_col"],
-            used_columns.get("description_col") or DEFAULT_MAPPING["description_col"],
-            used_columns.get("material_group_col") or DEFAULT_MAPPING["material_group_col"],
-            used_columns.get("valid_from_col") or DEFAULT_MAPPING["valid_from_col"],
-        ]
-        # Preserve order while removing duplicates / blanks.
-        seen_cols = set()
-        original_cols = [c for c in original_cols if c and not (c in seen_cols or seen_cols.add(c))]
-
-    material_col = used_columns.get("material_col") or _find_optional_column(bom_df, DEFAULT_MAPPING["material_col"])
-    parent_col = used_columns.get("parent_col") or DEFAULT_MAPPING["parent_col"]
-    component_col = used_columns.get("component_col") or DEFAULT_MAPPING["component_col"]
-    qty_col = used_columns.get("qty_col") or DEFAULT_MAPPING["qty_col"]
-    unit_col = used_columns.get("unit_col") or DEFAULT_MAPPING["unit_col"]
-    description_col = used_columns.get("description_col") or ""
-    material_group_col = used_columns.get("material_group_col") or ""
-    valid_from_col = used_columns.get("valid_from_col") or ""
-    altitem_group_col = used_columns.get("altitem_group_col") or ""
-    usage_probability_col = used_columns.get("usage_probability_col") or ""
-    net_weight_col = used_columns.get("net_weight_col") or ""
-    gross_weight_col = used_columns.get("gross_weight_col") or ""
-    weight_uom_col = used_columns.get("weight_uom_col") or ""
-
-    # Add required output columns when the uploaded file misses a standard field.
-    for col in [material_col, parent_col, component_col, qty_col, unit_col, description_col, material_group_col, valid_from_col, net_weight_col, gross_weight_col, weight_uom_col]:
-        if col and col not in original_cols:
-            original_cols.append(col)
-
-    component_lookup: dict[str, dict[str, Any]] = {}
-    if isinstance(bom_df, pd.DataFrame) and not bom_df.empty:
-        for _, source_row in bom_df.iterrows():
-            row_dict = source_row.to_dict()
-            component_key = _normalize_material_key(row_dict.get("_component", ""))
-            if component_key and component_key not in component_lookup:
-                component_lookup[component_key] = row_dict
-
-    rows: list[dict[str, Any]] = []
-    exploded = _ensure_dataframe_columns(exploded, {
-        "target_product": "",
-        "raw_material": "",
-        "usage": 0.0,
-        "unit": "",
-        "description": "",
-        "material_group": "",
-        "valid_from": None,
-        "net_weight": "",
-        "gross_weight": "",
-        "weight_uom": "",
-    })
-
-    for values in exploded[[
-        "target_product", "raw_material", "usage", "unit", "description", "material_group",
-        "valid_from", "net_weight", "gross_weight", "weight_uom",
-    ]].itertuples(index=False, name=None):
-        (
-            target_product, raw_material, usage, unit, description, material_group,
-            valid_from, net_weight, gross_weight, weight_uom,
-        ) = values
-        base_source = component_lookup.get(_normalize_material_key(raw_material), {})
-        out_row = {col: base_source.get(col, "") for col in original_cols}
-
-        if material_col:
-            out_row[material_col] = target_product
-        if parent_col:
-            out_row[parent_col] = target_product
-        if component_col:
-            out_row[component_col] = raw_material
-        if qty_col:
-            out_row[qty_col] = float(usage or 0.0)
-        if unit_col:
-            out_row[unit_col] = unit
-        if description_col:
-            out_row[description_col] = description
-        if material_group_col:
-            out_row[material_group_col] = material_group
-        if valid_from_col:
-            out_row[valid_from_col] = valid_from
-        if net_weight_col:
-            out_row[net_weight_col] = net_weight
-        if gross_weight_col:
-            out_row[gross_weight_col] = gross_weight
-        if weight_uom_col:
-            out_row[weight_uom_col] = weight_uom
-
-        # The quantity is already adjusted by alternative item probability.
-        # Blank these fields to prevent a downstream re-application.
-        if altitem_group_col:
-            out_row[altitem_group_col] = ""
-        if usage_probability_col:
-            out_row[usage_probability_col] = ""
-
-        rows.append(out_row)
-
-    return pd.DataFrame(rows, columns=original_cols)
-
-
-def generate_standard_bom_total_usage_file(
-    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
-    output_path: str | Path,
-    mapping: dict[str, str | None] | None = None,
-    progress_callback: Any | None = None,
-) -> Dict[str, Any]:
-    """Generate Module 2A intermediate file: 標準BOM表總用量.
-
-    This function only performs BOM explosion and writes one Standard-BOM-shaped
-    intermediate workbook. It does not read Step1 output, does not generate Raw
-    Material Bulk, and does not apply supplier mapping.
-    """
-    def report(**payload: Any) -> None:
-        if progress_callback:
-            progress_callback(**payload)
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    report(status="running", progress=8, step="Reading Standard BOM", stage="reading_bom", processed_rows=0, total_rows=0)
-    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
-    total_bom_rows = int(len(bom_df))
-    report(status="running", progress=28, step="Expanding BOM to final raw materials", stage="exploding_bom", processed_rows=0, total_rows=total_bom_rows)
-
-    exploded, summary = _explode_bom(bom_df)
-    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
-    summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
-
-    report(status="running", progress=68, step="Aggregating final raw material usage", stage="aggregating_total_usage", processed_rows=int(len(exploded)), total_rows=int(len(exploded)))
-    total_usage_df = _standard_bom_total_usage_dataframe(bom_df, exploded, used_columns)
-
-    report(status="running", progress=82, step="Writing 標準BOM表總用量", stage="writing_total_usage", processed_rows=0, total_rows=int(len(total_usage_df)))
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        total_usage_df.to_excel(writer, index=False, sheet_name="標準BOM表總用量")
-        ws = writer.book["標準BOM表總用量"]
-        ws.freeze_panes = "A2"
-        # Limit auto-width scanning to avoid slowdowns on very large files.
-        for col_cells in ws.iter_cols(min_row=1, max_row=min(ws.max_row, 500), max_col=ws.max_column):
-            max_len = 12
-            letter = col_cells[0].column_letter
-            for cell in col_cells:
-                max_len = max(max_len, len(str(cell.value or "")) + 2)
-            ws.column_dimensions[letter].width = min(max_len, 45)
-
-    report(status="running", progress=96, step="Saving 標準BOM表總用量", stage="saving_total_usage", processed_rows=int(len(total_usage_df)), total_rows=int(len(total_usage_df)))
-
-    result = dict(summary)
-    result.update({
-        "output_filename": output_path.name,
-        "download_url": f"/download/{output_path.name}",
-        "standard_bom_total_usage_filename": output_path.name,
-        "standard_bom_total_usage_download_url": f"/download/{output_path.name}",
-        "standard_bom_total_usage_rows": int(len(total_usage_df)),
-        "activity_rows": int(len(total_usage_df)),
-        "raw_materials": int(exploded["raw_material"].nunique()) if not exploded.empty else 0,
-        "used_columns": used_columns,
-        "bom_files": int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1,
-        "bom_rows_before_dedup": int(used_columns.get("bom_rows_before_dedup", 0)) if isinstance(used_columns, dict) else 0,
-        "bom_rows_after_dedup": int(used_columns.get("bom_rows_after_dedup", 0)) if isinstance(used_columns, dict) else 0,
-        "bom_duplicate_rows_removed": int(used_columns.get("bom_duplicate_rows_removed", 0)) if isinstance(used_columns, dict) else 0,
-        "stage_output_type": "standard_bom_total_usage",
-        "stage_output_sheet": "標準BOM表總用量",
-        "usage_rule": "Per-PC final raw material usage; semi-finished quantities are multiplied through and summed back to the finished product.",
-        "step1_annual_quantity_applied": False,
-        "supplier_mapping_applied": False,
-    })
-    return result
-
-
-BOM_FORMATTER_VERSION = "CMP_V25_0_MODULE2A_STANDARD_BOM_TOTAL_USAGE"
