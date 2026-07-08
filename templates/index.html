@@ -1171,6 +1171,32 @@ function cmpRemainingText(seconds) {
   return lang === 'zh' ? `預估剩餘 ${cmpFormatDuration(value)}` : `~${cmpFormatDuration(value)} remaining`;
 }
 
+
+function cmpLooksLikeDateTimeText(value) {
+  if (value === null || value === undefined) return false;
+  const text = String(value).trim();
+  return /^\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(:\d{2})?/.test(text);
+}
+
+function cmpStatusTimeText(value, mode = '') {
+  if (value === null || value === undefined || value === '') {
+    return mode === 'running' ? cmpRemainingText(NaN) : '';
+  }
+  if (typeof value === 'number') return cmpRemainingText(value);
+  const text = String(value).trim();
+  if (cmpLooksLikeDateTimeText(text)) {
+    // Status-time pills are reserved for ETA / final status.
+    // Raw ISO timestamps should never appear here; show a neutral ETA message while running.
+    return mode === 'running' ? cmpRemainingText(NaN) : `最後更新 ${cmpFormatTaipeiTime(text)}`;
+  }
+  return text;
+}
+
+function cmpBuildTimeText(value) {
+  if (!value) return '';
+  return `建立時間：${cmpFormatTaipeiTime(value)} Asia/Taipei`;
+}
+
 function cmpParseTimeMs(value) {
   if (!value) return null;
   const raw = String(value);
@@ -1452,7 +1478,7 @@ function setBomProcessingState(mode, title, text, timeText, progress) {
   bomProcessingStatus.classList.add(mode);
   bomStatusTitle.textContent = title;
   bomStatusText.textContent = text;
-  bomStatusTime.textContent = timeText;
+  bomStatusTime.textContent = cmpStatusTimeText(timeText, mode);
   bomProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   cmpApplyI18n();
 }
@@ -1621,7 +1647,7 @@ function setModule3CclResult(mode, title, text, timeText = 'Idle', progress = 0)
   module3CclResult.classList.add(mode);
   if (module3CclStatusTitle) module3CclStatusTitle.textContent = title;
   if (module3CclStatusText) module3CclStatusText.textContent = text;
-  if (module3CclStatusTime) module3CclStatusTime.textContent = timeText;
+  if (module3CclStatusTime) module3CclStatusTime.textContent = cmpStatusTimeText(timeText, mode);
   if (module3CclProgressBar) module3CclProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   cmpApplyI18n();
 }
@@ -2091,7 +2117,7 @@ function setProcessingState(mode, title, text, timeText, progress) {
   processingStatus.classList.add(mode);
   statusTitle.textContent = title;
   statusText.textContent = text;
-  statusTime.textContent = timeText;
+  statusTime.textContent = cmpStatusTimeText(timeText, mode);
   progressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   cmpApplyI18n();
 }
@@ -2226,7 +2252,7 @@ function setBulkProcessingState(mode, title, text, timeText, progress) {
   bulkProcessingStatus.classList.add(mode);
   bulkStatusTitle.textContent = title;
   bulkStatusText.textContent = text;
-  bulkStatusTime.textContent = timeText;
+  bulkStatusTime.textContent = cmpStatusTimeText(timeText, mode);
   bulkProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
   cmpApplyI18n();
 }
@@ -2413,7 +2439,7 @@ ruleForm.onsubmit = async (e) => {
     }
     if (title) title.textContent = titleText || '';
     if (text) text.textContent = bodyText || '';
-    if (time) time.textContent = timeText || '';
+    if (time) time.textContent = cmpStatusTimeText(timeText, mode);
     if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
   }
 
@@ -2533,7 +2559,7 @@ ruleForm.onsubmit = async (e) => {
     }
     if (title) title.textContent = titleText || '';
     if (text) text.textContent = bodyText || '';
-    if (time) time.textContent = timeText || '';
+    if (time) time.textContent = cmpStatusTimeText(timeText, mode);
     if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
   }
 
@@ -2564,7 +2590,7 @@ ruleForm.onsubmit = async (e) => {
       if (module2bTotalUsageSourceText) {
         module2bTotalUsageSourceText.textContent = totalUsage.ok === false
           ? (totalUsage.message || '尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。')
-          : `來源：Module 2A 標準BOM表總用量｜檔案：${totalUsage.filename || ''}｜建立時間：${totalUsage.modified_at || ''}`;
+          : `來源：Module 2A 標準BOM表總用量｜檔案：${totalUsage.filename || ''}${totalUsage.modified_at ? `｜${cmpBuildTimeText(totalUsage.modified_at)}` : ''}`;
       }
     } catch (err) {
       if (module2bStep1SourceText) module2bStep1SourceText.textContent = '無法更新 Module 1 Step 1 最新產出資訊，請重新整理頁面或查看後端 log。';
@@ -2681,7 +2707,7 @@ ruleForm.onsubmit = async (e) => {
     }
     if (title) title.textContent = titleText || '';
     if (text) text.textContent = bodyText || '';
-    if (time) time.textContent = timeText || '';
+    if (time) time.textContent = cmpStatusTimeText(timeText, mode);
     if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
   }
 
@@ -2712,7 +2738,7 @@ ruleForm.onsubmit = async (e) => {
       if (module2cRawBulkSourceText) {
         module2cRawBulkSourceText.textContent = rawBulk.ok === false
           ? (rawBulk.message || '尚未找到 Module 2B Raw Material Bulk ZIP，請先完成 Module 2B。')
-          : `來源：Module 2B Raw Material Bulk ZIP｜檔案：${rawBulk.filename || ''}｜建立時間：${rawBulk.modified_at || ''}`;
+          : `來源：Module 2B Raw Material Bulk ZIP｜檔案：${rawBulk.filename || ''}${rawBulk.modified_at ? `｜${cmpBuildTimeText(rawBulk.modified_at)}` : ''}`;
       }
     } catch (err) {
       if (module2cStep1SourceText) module2cStep1SourceText.textContent = '無法更新 Module 1 Step 1 最新產出資訊，請重新整理頁面或查看後端 log。';
