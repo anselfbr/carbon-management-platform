@@ -603,15 +603,9 @@
                 <label for="module2aBomFiles">上傳標準 BOM 檔案</label>
                 <input id="module2aBomFiles" name="module2a_bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
 
-                <div class="module2a-meta-grid">
-                  <label>
-                    <span>版次</span>
-                    <input id="module2aVersion" name="bom_version" type="text" placeholder="例如 v1 / 2024Q4" />
-                  </label>
-                  <label>
-                    <span>檔案日期</span>
-                    <input id="module2aDate" name="bom_date" type="date" />
-                  </label>
+                <div id="module2aStep1Source" class="module3-source-card">
+                  <b>引用 Module 1 Step 1 最新產出資訊</b>
+                  <p id="module2aStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
                 </div>
 
                 <button type="submit" class="btn-secondary">
@@ -688,8 +682,11 @@
           </section>
 
           <section class="card insight-card">
-            <h2 data-i18n="bomExpansionLogic">BOM Expansion Logic</h2>
-            <p data-i18n="bomColumnMappingHint">Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.</p>
+            <details class="bom-logic-details">
+              <summary>
+                <span data-i18n="bomExpansionLogic">BOM Expansion Logic</span>
+              </summary>
+              <p data-i18n="bomColumnMappingHint">Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.</p>
 
             <div class="logic-mapping-table">
               <div class="logic-mapping-row" data-default="Parent Node">
@@ -777,6 +774,7 @@
             <p data-i18n="rawMaterialBulkOutputHint">Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.</p>
 
             <pre id="bomLog" class="rule-log">BOM Expansion is ready.</pre>
+            </details>
           </section>
         </section>
       </section>
@@ -952,6 +950,7 @@ const bomStatusTime = document.getElementById('bomStatusTime');
 const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
 const bomStep1SourceText = document.getElementById('bomStep1SourceText');
+const module2aStep1SourceText = document.getElementById('module2aStep1SourceText');
 const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
 const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
@@ -1275,14 +1274,18 @@ function setBomProcessingState(mode, title, text, timeText, progress) {
 
 
 async function refreshBomStep1Source() {
-  if (!bomStep1SourceText) return;
+  if (!bomStep1SourceText && !module2aStep1SourceText) return;
   try {
     const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'Module 1 Step 1 output';
-    bomStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${cmpSourceMetaText(data)}`;
+    const sourceText = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${cmpSourceMetaText(data)}`;
+    if (bomStep1SourceText) bomStep1SourceText.textContent = sourceText;
+    if (module2aStep1SourceText) module2aStep1SourceText.textContent = sourceText;
   } catch (err) {
-    bomStep1SourceText.textContent = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
+    const message = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
+    if (bomStep1SourceText) bomStep1SourceText.textContent = message;
+    if (module2aStep1SourceText) module2aStep1SourceText.textContent = message;
   }
 }
 
@@ -2285,7 +2288,7 @@ ruleForm.onsubmit = async (e) => {
       download.classList.add('disabled');
     }
     setState('running', 'MODULE 2A queued', 'Uploading Standard BOM files...', 'Queued', 3);
-    if (log) log.textContent = 'Uploading and creating MODULE 2A job...';
+    if (log) log.textContent = `Uploading and creating MODULE 2A job...\n${module2aStep1SourceText ? module2aStep1SourceText.textContent : ''}`;
 
     try {
       const fd = new FormData(form);

@@ -135,7 +135,15 @@ def _get_module2a_job(job_id: str) -> Dict[str, Any] | None:
     return None
 
 
-def _run_module2a_total_usage_job(job_id: str, bom_paths: list[Path], output_path: Path, bom_version: str, bom_date: str) -> None:
+def _run_module2a_total_usage_job(
+    job_id: str,
+    bom_paths: list[Path],
+    output_path: Path,
+    bom_version: str,
+    bom_date: str,
+    step1_source_filename: str = "",
+    step1_source_modified_at: str = "",
+) -> None:
     started_at = _cmp_now_iso()
 
     def progress_callback(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
@@ -165,6 +173,8 @@ def _run_module2a_total_usage_job(job_id: str, bom_paths: list[Path], output_pat
             output_path=output_path,
             bom_version=bom_version,
             bom_date=bom_date,
+            source_filename=step1_source_filename,
+            source_modified_at=step1_source_modified_at,
             progress_callback=progress_callback,
         )
         if output_path.exists():
@@ -2181,8 +2191,21 @@ async def module2a_standard_bom_total_usage_job(request: Request):
             return JSONResponse({"ok": False, "message": f"{filename} 不是標準 BOM Excel 檔案"}, status_code=400)
 
     job_id = uuid.uuid4().hex[:10]
-    bom_version = str(form.get("bom_version") or "").strip()
-    bom_date = str(form.get("bom_date") or "").strip()
+
+    # MODULE 2A uses the latest Module 1 Step 1 output only as source metadata.
+    # It does not read Step 1 rows and does not require users to type version/date.
+    step1_source_filename = ""
+    step1_source_modified_at = ""
+    bom_version = ""
+    bom_date = ""
+    step1_source = _find_latest_module1_step1_output()
+    if step1_source:
+        step1_source_filename = step1_source.name
+        step1_source_modified_at = _cmp_mtime_iso(step1_source)
+        step1_meta = _source_meta_for_path(step1_source, "")
+        bom_version = str(step1_meta.get("source_version") or "").strip()
+        bom_date = str(step1_meta.get("source_date") or "").strip()
+
     bom_paths: list[Path] = []
     for idx, bom_file in enumerate(bom_uploads, start=1):
         filename = str(getattr(bom_file, "filename", "") or f"standard_bom_{idx}.xlsx")
@@ -2202,9 +2225,20 @@ async def module2a_standard_bom_total_usage_job(request: Request):
         bom_files=len(bom_paths),
         bom_version=bom_version,
         bom_date=bom_date,
+        step1_source_filename=step1_source_filename,
+        step1_source_modified_at=step1_source_modified_at,
         output_filename=output_path.name,
     )
-    MODULE2A_EXECUTOR.submit(_run_module2a_total_usage_job, job_id, bom_paths, output_path, bom_version, bom_date)
+    MODULE2A_EXECUTOR.submit(
+        _run_module2a_total_usage_job,
+        job_id,
+        bom_paths,
+        output_path,
+        bom_version,
+        bom_date,
+        step1_source_filename,
+        step1_source_modified_at,
+    )
     return {"ok": True, "job_id": job_id, "status_url": f"/module2/bom-job/{job_id}"}
 
 

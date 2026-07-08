@@ -2602,3 +2602,44 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* Module 2A source metadata and native collapsible BOM logic panel */
+.module2a-form .module3-source-card {
+  margin: 8px 0 18px;
+}
+
+.bom-logic-details {
+  width: 100%;
+}
+
+.bom-logic-details > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--ink, #102a44);
+  margin-bottom: 12px;
+}
+
+.bom-logic-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.bom-logic-details > summary::after {
+  content: "展開";
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--muted, #65758b);
+  border: 1px solid rgba(17, 48, 82, 0.18);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(247, 250, 252, 0.92);
+}
+
+.bom-logic-details[open] > summary::after {
+  content: "收合";
+}

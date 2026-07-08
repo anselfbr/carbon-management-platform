@@ -2534,6 +2534,10 @@ def _write_standard_bom_total_usage_workbook(
     summary_rows = [
         ["項目", "值"],
         ["輸出檔案", output_path.name],
+        ["Module 1 Step 1 來源檔案", str(summary.get("source_filename", "") or "")],
+        ["來源版次", str(summary.get("bom_version", "") or "")],
+        ["來源日期", str(summary.get("bom_date", "") or "")],
+        ["來源建立時間", str(summary.get("source_modified_at", "") or "")],
         ["BOM 檔案數", int(summary.get("bom_files", 0) or 0)],
         ["BOM 原始列數", int(summary.get("bom_rows_before_dedup", 0) or 0)],
         ["BOM 去重後列數", int(summary.get("bom_rows_after_dedup", 0) or 0)],
@@ -2590,6 +2594,8 @@ def generate_standard_bom_total_usage_file(
     mapping: dict[str, str | None] | None = None,
     bom_version: str | None = None,
     bom_date: str | None = None,
+    source_filename: str | None = None,
+    source_modified_at: str | None = None,
     max_rows_per_sheet: int = STANDARD_BOM_TOTAL_USAGE_SAFE_ROWS_PER_SHEET,
     progress_callback=None,
 ) -> Dict[str, Any]:
@@ -2611,6 +2617,8 @@ def generate_standard_bom_total_usage_file(
     summary["module2a_rule"] = "Standard BOM -> final raw-material total usage only; Raw Material Bulk Template is not read or written."
     summary["bom_version"] = str(bom_version or "").strip()
     summary["bom_date"] = str(bom_date or "").strip()
+    summary["source_filename"] = str(source_filename or "").strip()
+    summary["source_modified_at"] = str(source_modified_at or "").strip()
 
     if progress_callback:
         progress_callback(step="Aggregating final raw material usage", processed=int(len(exploded)), total=int(len(exploded)), progress=72)
