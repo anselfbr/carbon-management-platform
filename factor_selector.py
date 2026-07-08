@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import zipfile
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
@@ -17,6 +18,117 @@ CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
 FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V1_20260708"
+
+
+
+
+_XML_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_XML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+
+def _xml_escape(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&apos;"))
+
+
+def _excel_col_letter(idx: int) -> str:
+    letters = ""
+    while idx:
+        idx, rem = divmod(idx - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def _xlsx_cell_xml(row_idx: int, col_idx: int, value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    ref = f"{_excel_col_letter(col_idx)}{row_idx}"
+    if isinstance(value, bool):
+        return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'
+    if isinstance(value, (int, float)):
+        return f'<c r="{ref}"><v>{value}</v></c>'
+    return f'<c r="{ref}" t="inlineStr"><is><t>{_xml_escape(value)}</t></is></c>'
+
+
+def _xlsx_row_xml(row_idx: int, values: list[Any]) -> str:
+    return f'<row r="{row_idx}">' + "".join(_xlsx_cell_xml(row_idx, c, v) for c, v in enumerate(values, 1)) + '</row>'
+
+
+def _workbook_sheet_parts(xlsx_path: str | Path) -> dict[str, str]:
+    with zipfile.ZipFile(xlsx_path, "r") as zf:
+        wb_xml = zf.read("xl/workbook.xml")
+        rel_xml = zf.read("xl/_rels/workbook.xml.rels")
+    wb_root = ET.fromstring(wb_xml)
+    rel_root = ET.fromstring(rel_xml)
+    rels = {}
+    for rel in rel_root:
+        rid = rel.attrib.get("Id")
+        target = rel.attrib.get("Target", "")
+        if rid and target:
+            target = target.lstrip("/")
+            if not target.startswith("xl/"):
+                target = "xl/" + target
+            rels[rid] = target
+    parts = {}
+    for sheet in wb_root.findall(f".//{{{_XML_MAIN_NS}}}sheet"):
+        name = sheet.attrib.get("name", "")
+        rid = sheet.attrib.get(f"{{{_XML_REL_NS}}}id")
+        if name and rid in rels:
+            parts[name] = rels[rid]
+    return parts
+
+
+def _replace_sheetdata_xml(original_xml: bytes, rows_iter) -> bytes:
+    text = original_xml.decode("utf-8")
+    start = text.find("<sheetData")
+    if start < 0:
+        return original_xml
+    open_end = text.find(">", start)
+    close = text.find("</sheetData>", open_end)
+    if open_end < 0 or close < 0:
+        return original_xml
+    sheetdata_open = text[start:open_end + 1]
+    old_sheetdata = text[open_end + 1:close]
+    header_rows = []
+    for match in re.finditer(r"<row\b[^>]*\br=\"(\d+)\"[^>]*>.*?</row>", old_sheetdata, flags=re.S):
+        try:
+            row_no = int(match.group(1))
+        except Exception:
+            continue
+        if row_no < DATA_START_ROW:
+            header_rows.append(match.group(0))
+    row_idx = DATA_START_ROW
+    new_rows = list(header_rows)
+    for values in rows_iter:
+        new_rows.append(_xlsx_row_xml(row_idx, list(values)))
+        row_idx += 1
+    return (text[:start] + sheetdata_open + "".join(new_rows) + "</sheetData>" + text[close + len("</sheetData>"):]).encode("utf-8")
+
+
+def _rows_from_csv_spool(csv_path: str | Path):
+    import csv
+    with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
+        for row in csv.reader(fh):
+            yield row
+
+
+def _write_template_preserving_activity_sheet_xlsx(source_path: str | Path, output_path: str | Path, activity_rows_iter) -> str:
+    source_path = Path(source_path)
+    output_path = Path(output_path)
+    parts = _workbook_sheet_parts(source_path)
+    activity_part = parts.get(ACTIVITY_SHEET_NAME)
+    if not activity_part:
+        raise ValueError(f"找不到分頁：{ACTIVITY_SHEET_NAME}")
+    tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    with zipfile.ZipFile(source_path, "r") as zin, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+            if info.filename == activity_part:
+                data = _replace_sheetdata_xml(data, activity_rows_iter())
+            zout.writestr(info, data)
+    tmp_path.replace(output_path)
+    return "xlsx_zip_template_preserving_activity_stream"
 
 
 def _norm(value: Any) -> str:
@@ -249,8 +361,6 @@ def apply_ccl_factors_to_raw_material_bulk(
         src_wb.close()
         raise ValueError(f"找不到分頁：{ACTIVITY_SHEET_NAME}")
 
-    out_wb = Workbook(write_only=True)
-
     matched = 0
     unmatched = 0
     written_rows = 0
@@ -277,57 +387,53 @@ def apply_ccl_factors_to_raw_material_bulk(
         output_width = max(max(len(r) for r in header_rows), max(c for c in cols.values() if c))
 
         _emit_progress(progress_callback, 38, "建立正式 Raw Material Bulk 欄位結構", 45, 0, total_activity_rows)
-        out_ws = out_wb.create_sheet(title=ACTIVITY_SHEET_NAME)
-        for hrow in header_rows:
-            out_ws.append(_pad_row(list(hrow), output_width))
-
         t0 = time.perf_counter()
-        for idx, values in enumerate(src_ws.iter_rows(min_row=DATA_START_ROW, max_row=src_ws.max_row, values_only=True), start=1):
-            row_values = _pad_row(list(values or []), output_width)
-            material = _text(row_values[cols["material"] - 1] if len(row_values) >= cols["material"] else None)
-            if material:
-                non_empty_material_rows += 1
-                item = ccl_map.get(_normalize_material_key(material))
-                if item:
-                    row_values[cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
-                    row_values[cols["emission_factor"] - 1] = item.get("emission_factor")
-                    row_values[cols["factor_source"] - 1] = "Ecoinvent"
-                    row_values[cols["factor_comment"] - 1] = "CCLibrary"
-                    row_values[cols["country"] - 1] = "GLO"
-                    row_values[cols["enabled_date"] - 1] = row_values[cols["doc_start"] - 1] if cols.get("doc_start") else None
-                    row_values[cols["data_quality"] - 1] = "SECONDARY"
-                    matched += 1
-                    written_rows += 1
-                else:
-                    unmatched += 1
-            out_ws.append(row_values)
-            if idx == 1 or idx % 1000 == 0:
-                elapsed = max(0.001, time.perf_counter() - t0)
-                rate = idx / elapsed
-                remaining = int(max(1, (total_activity_rows - idx) / rate + 15)) if rate > 0 and total_activity_rows else 60
-                progress = 40 + int(min(48, idx / max(1, total_activity_rows) * 48))
-                _emit_progress(
-                    progress_callback,
-                    progress,
-                    "比對原物料並串流寫入 CCL 係數欄位",
-                    remaining,
-                    idx,
-                    total_activity_rows,
-                )
-        perf["stream_map_and_write_activity"] = time.perf_counter() - t0
-
-        t0 = time.perf_counter()
-        _emit_progress(progress_callback, 89, "複製 Raw Material Bulk 其他分頁", 20, total_activity_rows, total_activity_rows)
-        for sheet_name in src_wb.sheetnames:
-            if sheet_name == ACTIVITY_SHEET_NAME:
-                continue
-            copied_other_rows += _copy_non_activity_sheet_streaming(src_wb[sheet_name], out_wb)
-        perf["copy_other_sheets"] = time.perf_counter() - t0
+        import csv
+        with tempfile.NamedTemporaryFile("w", newline="", encoding="utf-8-sig", suffix=".csv", delete=False) as activity_tmp:
+            activity_spool_path = Path(activity_tmp.name)
+            activity_writer = csv.writer(activity_tmp)
+            for idx, values in enumerate(src_ws.iter_rows(min_row=DATA_START_ROW, max_row=src_ws.max_row, values_only=True), start=1):
+                row_values = _pad_row(list(values or []), output_width)
+                material = _text(row_values[cols["material"] - 1] if len(row_values) >= cols["material"] else None)
+                if material:
+                    non_empty_material_rows += 1
+                    item = ccl_map.get(_normalize_material_key(material))
+                    if item:
+                        row_values[cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
+                        row_values[cols["emission_factor"] - 1] = item.get("emission_factor")
+                        row_values[cols["factor_source"] - 1] = "Ecoinvent"
+                        row_values[cols["factor_comment"] - 1] = "CCLibrary"
+                        row_values[cols["country"] - 1] = "GLO"
+                        row_values[cols["enabled_date"] - 1] = row_values[cols["doc_start"] - 1] if cols.get("doc_start") else ""
+                        row_values[cols["data_quality"] - 1] = "SECONDARY"
+                        matched += 1
+                        written_rows += 1
+                    else:
+                        unmatched += 1
+                activity_writer.writerow(row_values)
+                if idx == 1 or idx % 1000 == 0:
+                    elapsed = max(0.001, time.perf_counter() - t0)
+                    rate = idx / elapsed
+                    remaining = int(max(1, (total_activity_rows - idx) / rate + 15)) if rate > 0 and total_activity_rows else 60
+                    progress = 40 + int(min(48, idx / max(1, total_activity_rows) * 48))
+                    _emit_progress(progress_callback, progress, "比對原物料並串流寫入 CCL 係數欄位", remaining, idx, total_activity_rows)
+        perf["stream_map_and_spool_activity"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
         _emit_progress(progress_callback, 94, "儲存已填入係數的正式 Bulk 檔", 15, total_activity_rows, total_activity_rows)
-        out_wb.save(output_path)
-        perf["save_writeonly_workbook"] = time.perf_counter() - t0
+        try:
+            _write_template_preserving_activity_sheet_xlsx(
+                raw_material_bulk_path,
+                output_path,
+                activity_rows_iter=lambda: _rows_from_csv_spool(activity_spool_path),
+            )
+        finally:
+            try:
+                activity_spool_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        perf["save_template_preserving_workbook"] = time.perf_counter() - t0
+        copied_other_rows = 0
     finally:
         src_wb.close()
 
@@ -348,7 +454,7 @@ def apply_ccl_factors_to_raw_material_bulk(
         "performance_seconds": {k: round(v, 3) for k, v in perf.items()},
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         "large_dataset_mode": True,
-        "template_strategy": "write_only workbook; preserve formal sheet names/headers; append missing factor columns; no full-template load",
+        "template_strategy": "Smart Template Engine: preserve source Raw Material Bulk XLSX package, all worksheets, row 1/2 headers, styles, formulas, validations, hidden sheets, freeze panes and autofilter; stream-replace only Sheet1 activity data rows and fill CCL factor fields including Country/Area and Enabled Date.",
     }
 
 
