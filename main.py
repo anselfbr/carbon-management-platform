@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+import shutil
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_standard_bom_total_usage_file
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, apply_ccl_factors_to_raw_material_bulk_package, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,6 +28,7 @@ RULE_LIBRARY_DIR = BASE_DIR / "rule_library"
 FACTOR_LIBRARY_DIR = DATA_DIR / "factor_library"
 LATEST_BOM_STRUCTURE_PATH = OUTPUT_DIR / "bom_structure_latest.xlsx"
 LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
+MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH = OUTPUT_DIR / "standard_bom_total_usage_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 
 
@@ -49,6 +52,10 @@ print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
+MODULE2A_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+MODULE2A_JOBS: Dict[str, Dict[str, Any]] = {}
+MODULE2A_JOB_DIR = OUTPUT_DIR / "module2a_jobs"
+MODULE2A_JOB_DIR.mkdir(parents=True, exist_ok=True)
 
 CMP_TIMEZONE = ZoneInfo("Asia/Taipei")
 
@@ -79,6 +86,113 @@ def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
     job = MODULE3_CCL_JOBS.setdefault(job_id, {})
     job.update(updates)
     job["updated_at"] = _cmp_now_iso()
+
+
+
+def _module2a_job_path(job_id: str) -> Path:
+    return MODULE2A_JOB_DIR / f"{job_id}.json"
+
+
+def _json_safe_module2a(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    if isinstance(value, dict):
+        return {str(k): _json_safe_module2a(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_module2a(v) for v in value]
+    return value
+
+
+def _set_module2a_job(job_id: str, **updates: Any) -> None:
+    job = MODULE2A_JOBS.setdefault(job_id, {})
+    job.update(updates)
+    job["job_id"] = job_id
+    job["last_heartbeat"] = _cmp_now_iso()
+    try:
+        _module2a_job_path(job_id).write_text(
+            json.dumps(_json_safe_module2a(job), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        traceback.print_exc()
+
+
+def _get_module2a_job(job_id: str) -> Dict[str, Any] | None:
+    job = MODULE2A_JOBS.get(job_id)
+    if job:
+        return job
+    path = _module2a_job_path(job_id)
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                MODULE2A_JOBS[job_id] = loaded
+                return loaded
+        except Exception:
+            traceback.print_exc()
+    return None
+
+
+def _run_module2a_total_usage_job(job_id: str, bom_paths: list[Path], output_path: Path, bom_version: str, bom_date: str) -> None:
+    started_at = _cmp_now_iso()
+
+    def progress_callback(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
+        _set_module2a_job(
+            job_id,
+            status="running",
+            step=step,
+            processed_rows=int(processed or 0),
+            total_rows=int(total or 0),
+            progress=int(max(0, min(100, progress or 0))),
+            **extra,
+        )
+
+    try:
+        _set_module2a_job(
+            job_id,
+            status="running",
+            step="Queued",
+            progress=1,
+            processed_rows=0,
+            total_rows=0,
+            started_at=started_at,
+            output_filename=output_path.name,
+        )
+        summary = generate_standard_bom_total_usage_file(
+            bom_path=bom_paths,
+            output_path=output_path,
+            bom_version=bom_version,
+            bom_date=bom_date,
+            progress_callback=progress_callback,
+        )
+        if output_path.exists():
+            shutil.copy2(output_path, MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH)
+        _set_module2a_job(
+            job_id,
+            status="success",
+            step="Completed",
+            progress=100,
+            processed_rows=int(summary.get("standard_bom_total_usage_rows", 0) or 0),
+            total_rows=int(summary.get("standard_bom_total_usage_rows", 0) or 0),
+            completed_at=_cmp_now_iso(),
+            output_filename=output_path.name,
+            download_url=f"/download/{output_path.name}",
+            latest_filename=MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH.name if MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH.exists() else "",
+            summary=summary,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        _set_module2a_job(
+            job_id,
+            status="failed",
+            step="Failed",
+            progress=100,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+            completed_at=_cmp_now_iso(),
+        )
 
 def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
     def report(progress: int, step: str, remaining_seconds: int | None = None) -> None:
@@ -2034,6 +2148,89 @@ def module3_search_factor_library(
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
 
+
+
+
+# =========================================================
+# Module 2A · Standard BOM Total Usage
+# Standard BOM -> Standard BOM total usage workbook only.
+# Does not read/write Raw Material Bulk Template.
+# =========================================================
+@app.post("/module2a/standard-bom-total-usage-job")
+async def module2a_standard_bom_total_usage_job(request: Request):
+    try:
+        form = await request.form()
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": f"無法讀取上傳表單：{exc}"}, status_code=400)
+
+    def is_upload_file_like(item) -> bool:
+        return bool(getattr(item, "filename", None)) and hasattr(item, "read")
+
+    bom_uploads = []
+    for item in form.getlist("module2a_bom_files") + form.getlist("bom_files") + form.getlist("bom_file"):
+        if is_upload_file_like(item) and id(item) not in {id(x) for x in bom_uploads}:
+            bom_uploads.append(item)
+
+    if not bom_uploads:
+        return JSONResponse({"ok": False, "message": "請至少上傳一個標準 BOM Excel 檔案"}, status_code=400)
+
+    for bom_file in bom_uploads:
+        filename = str(getattr(bom_file, "filename", "") or "")
+        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{filename} 不是標準 BOM Excel 檔案"}, status_code=400)
+
+    job_id = uuid.uuid4().hex[:10]
+    bom_version = str(form.get("bom_version") or "").strip()
+    bom_date = str(form.get("bom_date") or "").strip()
+    bom_paths: list[Path] = []
+    for idx, bom_file in enumerate(bom_uploads, start=1):
+        filename = str(getattr(bom_file, "filename", "") or f"standard_bom_{idx}.xlsx")
+        saved = UPLOAD_DIR / f"module2a_standard_bom_{job_id}_{idx}_{Path(filename).name}"
+        saved.write_bytes(await bom_file.read())
+        bom_paths.append(saved)
+
+    output_path = OUTPUT_DIR / f"standard_bom_total_usage_{job_id}.xlsx"
+    _set_module2a_job(
+        job_id,
+        status="queued",
+        step="Queued",
+        progress=0,
+        processed_rows=0,
+        total_rows=0,
+        created_at=_cmp_now_iso(),
+        bom_files=len(bom_paths),
+        bom_version=bom_version,
+        bom_date=bom_date,
+        output_filename=output_path.name,
+    )
+    MODULE2A_EXECUTOR.submit(_run_module2a_total_usage_job, job_id, bom_paths, output_path, bom_version, bom_date)
+    return {"ok": True, "job_id": job_id, "status_url": f"/module2/bom-job/{job_id}"}
+
+
+@app.get("/module2/bom-job/{job_id}")
+def module2_get_bom_job(job_id: str):
+    job = _get_module2a_job(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "message": "找不到 Module 2A job，可能已被清除或服務重啟前未寫入狀態。"}, status_code=404)
+    response = dict(job)
+    response["ok"] = True
+    return response
+
+
+@app.get("/module2/standard-bom-total-usage-source")
+def module2_standard_bom_total_usage_source():
+    path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
+    if not path.exists():
+        return JSONResponse({"ok": False, "message": "尚未產出標準BOM表總用量，請先完成 Module 2A。"}, status_code=404)
+    meta = _extract_source_version_date(path.name)
+    return {
+        "ok": True,
+        "filename": path.name,
+        "download_url": f"/download/{path.name}",
+        "mtime": _cmp_mtime_iso(path),
+        **meta,
+    }
 
 
 # =========================================================

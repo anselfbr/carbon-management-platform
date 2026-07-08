@@ -2552,3 +2552,53 @@ select:focus {
   color: #475569;
   font-size: 0.92rem;
 }
+
+/* Module 2A isolated panel: additive styles only, does not change existing Module 1/2 handlers. */
+.module2a-panel {
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  padding: 22px;
+  margin-bottom: 24px;
+  background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(248,251,255,.96));
+}
+.module2a-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+.module2a-header h2 {
+  margin: 4px 0 6px;
+  color: var(--ink);
+}
+.section-eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.module2a-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.module2a-meta-grid label {
+  display: grid;
+  gap: 8px;
+}
+.module2-legacy-panel details {
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+.module2-legacy-panel summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 800;
+  margin-bottom: 16px;
+}
+@media (max-width: 760px) {
+  .module2a-meta-grid {
+    grid-template-columns: 1fr;
+  }
+}

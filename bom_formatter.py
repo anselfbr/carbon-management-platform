@@ -2346,4 +2346,291 @@ def generate_raw_material_bulk_files_by_site_zip(
     return summary
 
 
+# =========================================================
+# Module 2A · Standard BOM Total Usage
+# Standard BOM -> Standard BOM total usage workbook only.
+# This function intentionally does not read or write Raw Material Bulk templates.
+# =========================================================
+STANDARD_BOM_TOTAL_USAGE_BASE_SHEET_NAME = "標準BOM表總用量"
+STANDARD_BOM_TOTAL_USAGE_SUMMARY_SHEET_NAME = "輸出摘要"
+STANDARD_BOM_TOTAL_USAGE_SAFE_ROWS_PER_SHEET = 900000
+
+
+def _excel_safe_sheet_name(name: str, fallback: str = "Sheet") -> str:
+    text = re.sub(r"[\\/*?:\[\]]", "_", str(name or "").strip())
+    text = text[:31].strip()
+    return text or fallback
+
+
+def _jsonable_text(value: Any) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if pd.isna(value):
+        return ""
+    return value
+
+
+def _standard_bom_total_usage_rows(
+    bom_df: pd.DataFrame,
+    exploded: pd.DataFrame,
+    used_columns: dict[str, Any],
+) -> tuple[list[str], pd.DataFrame]:
+    """Build the output table for Module 2A while keeping original BOM columns.
+
+    The output table preserves all original Standard BOM columns. Only the key
+    BOM fields are rewritten so each row represents final raw-material usage
+    under one finished product:
+      - Material / Parent Node -> finished product
+      - Component -> final raw material
+      - CS03 Qty -> rolled-up total usage
+      - CS03 UoM -> raw material unit
+
+    Alternative item probability is already applied before BOM expansion, so
+    Altitem group and Usage probability% are cleared to avoid double counting in
+    downstream stages.
+    """
+    original_columns = [c for c in bom_df.columns if not str(c).startswith("_")]
+    if not original_columns:
+        original_columns = ["Material", "Parent Node", "Component", "CS03 Qty", "CS03 UoM"]
+
+    material_col = str(used_columns.get("material_col") or "").strip()
+    parent_col = str(used_columns.get("parent_col") or "Parent Node").strip()
+    component_col = str(used_columns.get("component_col") or "Component").strip()
+    qty_col = str(used_columns.get("qty_col") or "CS03 Qty").strip()
+    unit_col = str(used_columns.get("unit_col") or "CS03 UoM").strip()
+    description_col = str(used_columns.get("description_col") or "").strip()
+    material_group_col = str(used_columns.get("material_group_col") or "").strip()
+    valid_from_col = str(used_columns.get("valid_from_col") or "").strip()
+    altitem_group_col = str(used_columns.get("altitem_group_col") or "").strip()
+    usage_probability_col = str(used_columns.get("usage_probability_col") or "").strip()
+    net_weight_col = str(used_columns.get("net_weight_col") or "").strip()
+    gross_weight_col = str(used_columns.get("gross_weight_col") or "").strip()
+    weight_uom_col = str(used_columns.get("weight_uom_col") or "").strip()
+
+    # Representative original BOM row lookup for preserving all non-key fields.
+    by_source_component: dict[tuple[str, str, str], dict[str, Any]] = {}
+    by_component: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in bom_df.itertuples(index=False):
+        row_dict = row._asdict()
+        source = _safe_text(row_dict.get("_bom_material"))
+        component = _safe_text(row_dict.get("_component"))
+        unit = _safe_text(row_dict.get("_uom"))
+        if not component:
+            continue
+        original = {col: row_dict.get(col, "") for col in original_columns}
+        by_source_component.setdefault((source, component, unit), original)
+        by_component.setdefault((component, unit), original)
+
+    trace_detail = exploded.attrs.get("trace_detail")
+    trace_source: dict[tuple[str, str, str], str] = {}
+    if isinstance(trace_detail, pd.DataFrame) and not trace_detail.empty:
+        for row in trace_detail.itertuples(index=False):
+            target = _safe_text(getattr(row, "target_product", ""))
+            raw = _safe_text(getattr(row, "raw_material", ""))
+            unit = _safe_text(getattr(row, "unit", ""))
+            source = _safe_text(getattr(row, "source_material", ""))
+            trace_source.setdefault((target, raw, unit), source)
+
+    output_rows: list[dict[str, Any]] = []
+    if exploded is None or exploded.empty:
+        return original_columns, pd.DataFrame(columns=original_columns)
+
+    work = exploded.sort_values(["target_product", "raw_material", "unit"], kind="mergesort").reset_index(drop=True)
+    for row in work.itertuples(index=False):
+        target_product = _safe_text(getattr(row, "target_product", ""))
+        raw_material = _safe_text(getattr(row, "raw_material", ""))
+        unit = _safe_text(getattr(row, "unit", ""))
+        source = trace_source.get((target_product, raw_material, unit), "")
+        template = by_source_component.get((source, raw_material, unit)) or by_component.get((raw_material, unit)) or {}
+        out = {col: template.get(col, "") for col in original_columns}
+
+        for col, value in [
+            (material_col, target_product),
+            (parent_col, target_product),
+            (component_col, raw_material),
+            (qty_col, float(getattr(row, "usage", 0.0) or 0.0)),
+            (unit_col, unit),
+            (description_col, _safe_text(getattr(row, "description", ""))),
+            (material_group_col, _safe_text(getattr(row, "material_group", ""))),
+            (valid_from_col, getattr(row, "valid_from", "")),
+            (net_weight_col, getattr(row, "net_weight", "")),
+            (gross_weight_col, getattr(row, "gross_weight", "")),
+            (weight_uom_col, getattr(row, "weight_uom", "")),
+        ]:
+            if col and col in out:
+                out[col] = value
+
+        if altitem_group_col and altitem_group_col in out:
+            out[altitem_group_col] = ""
+        if usage_probability_col and usage_probability_col in out:
+            out[usage_probability_col] = ""
+
+        output_rows.append(out)
+
+    return original_columns, pd.DataFrame(output_rows, columns=original_columns)
+
+
+def _write_standard_bom_total_usage_workbook(
+    output_df: pd.DataFrame,
+    output_path: str | Path,
+    summary: dict[str, Any],
+    max_rows_per_sheet: int = STANDARD_BOM_TOTAL_USAGE_SAFE_ROWS_PER_SHEET,
+    product_column_name: str | None = None,
+    progress_callback=None,
+) -> dict[str, Any]:
+    """Write Module 2A workbook and split sheets without splitting products."""
+    from openpyxl import Workbook
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    max_rows_per_sheet = int(max_rows_per_sheet or STANDARD_BOM_TOTAL_USAGE_SAFE_ROWS_PER_SHEET)
+    max_rows_per_sheet = min(max_rows_per_sheet, 1048575)
+    if max_rows_per_sheet < 1:
+        max_rows_per_sheet = STANDARD_BOM_TOTAL_USAGE_SAFE_ROWS_PER_SHEET
+
+    if output_df is None:
+        output_df = pd.DataFrame()
+
+    product_col = product_column_name if product_column_name in output_df.columns else None
+    if product_col is None:
+        product_col = output_df.columns[0] if len(output_df.columns) else "Material"
+
+    sheet_plan: list[dict[str, Any]] = []
+    if output_df.empty:
+        sheet_plan.append({"sheet_name": f"{STANDARD_BOM_TOTAL_USAGE_BASE_SHEET_NAME}_001", "products": [], "rows": 0})
+    else:
+        current_products: list[str] = []
+        current_rows = 0
+        sheet_idx = 1
+        for product, group in output_df.groupby(product_col, sort=True, dropna=False):
+            product_text = _safe_text(product) or "Unassigned"
+            group_rows = int(len(group))
+            if group_rows > max_rows_per_sheet:
+                raise ValueError(
+                    f"單一成品料號 {product_text} 的資料列數 {group_rows:,} 超過 Excel 單一分頁安全上限 {max_rows_per_sheet:,}，無法在不切斷成品料號的前提下輸出。"
+                )
+            if current_rows and current_rows + group_rows > max_rows_per_sheet:
+                sheet_plan.append({
+                    "sheet_name": f"{STANDARD_BOM_TOTAL_USAGE_BASE_SHEET_NAME}_{sheet_idx:03d}",
+                    "products": current_products,
+                    "rows": current_rows,
+                })
+                sheet_idx += 1
+                current_products = []
+                current_rows = 0
+            current_products.append(product_text)
+            current_rows += group_rows
+        sheet_plan.append({
+            "sheet_name": f"{STANDARD_BOM_TOTAL_USAGE_BASE_SHEET_NAME}_{sheet_idx:03d}",
+            "products": current_products,
+            "rows": current_rows,
+        })
+
+    if progress_callback:
+        progress_callback(step="Writing output workbook", processed=0, total=int(len(output_df)), progress=86)
+
+    wb = Workbook(write_only=True)
+    summary_ws = wb.create_sheet(STANDARD_BOM_TOTAL_USAGE_SUMMARY_SHEET_NAME)
+    summary_rows = [
+        ["項目", "值"],
+        ["輸出檔案", output_path.name],
+        ["BOM 檔案數", int(summary.get("bom_files", 0) or 0)],
+        ["BOM 原始列數", int(summary.get("bom_rows_before_dedup", 0) or 0)],
+        ["BOM 去重後列數", int(summary.get("bom_rows_after_dedup", 0) or 0)],
+        ["重複列移除", int(summary.get("bom_duplicate_rows_removed", 0) or 0)],
+        ["成品數", int(summary.get("products", 0) or 0)],
+        ["半品數", int(summary.get("semi_finished", 0) or 0)],
+        ["最終原物料列數", int(len(output_df))],
+        ["最終原物料數", int(summary.get("raw_materials", 0) or 0)],
+        ["最大階層", int(summary.get("max_level", 0) or 0)],
+        ["Altitem rows", int(summary.get("altitem_rows", 0) or 0)],
+        ["Altitem adjusted rows", int(summary.get("altitem_adjusted_rows", 0) or 0)],
+        ["Altitem probability missing rows", int(summary.get("altitem_probability_missing_rows", 0) or 0)],
+        ["分頁安全上限", int(max_rows_per_sheet)],
+        ["分頁數", int(len(sheet_plan))],
+    ]
+    for row in summary_rows:
+        summary_ws.append(row)
+    summary_ws.append([])
+    summary_ws.append(["Sheet", "資料列數", "成品數", "第一個成品", "最後一個成品"])
+    for plan in sheet_plan:
+        products = plan.get("products") or []
+        summary_ws.append([plan["sheet_name"], int(plan["rows"]), int(len(products)), products[0] if products else "", products[-1] if products else ""])
+
+    headers = list(output_df.columns)
+    processed = 0
+    total = int(len(output_df))
+    for plan in sheet_plan:
+        ws = wb.create_sheet(_excel_safe_sheet_name(plan["sheet_name"]))
+        ws.append(headers)
+        products = set(plan.get("products") or [])
+        if output_df.empty:
+            continue
+        part = output_df[output_df[product_col].apply(lambda x: _safe_text(x) or "Unassigned").isin(products)]
+        for row in part.itertuples(index=False, name=None):
+            ws.append([_jsonable_text(v) for v in row])
+            processed += 1
+            if progress_callback and (processed % 5000 == 0 or processed == total):
+                progress_callback(step=f"Writing {plan['sheet_name']}", processed=processed, total=total, progress=min(98, 86 + int((processed / max(total, 1)) * 12)))
+
+    wb.save(output_path)
+    return {
+        "output_filename": output_path.name,
+        "download_url": f"/download/{output_path.name}",
+        "sheet_count": int(len(sheet_plan)),
+        "sheet_plan": sheet_plan,
+        "rows_per_sheet_limit": int(max_rows_per_sheet),
+        "standard_bom_total_usage_rows": int(len(output_df)),
+    }
+
+
+def generate_standard_bom_total_usage_file(
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    bom_version: str | None = None,
+    bom_date: str | None = None,
+    max_rows_per_sheet: int = STANDARD_BOM_TOTAL_USAGE_SAFE_ROWS_PER_SHEET,
+    progress_callback=None,
+) -> Dict[str, Any]:
+    """Generate Module 2A Standard BOM total usage workbook.
+
+    This is intentionally separated from Raw Material Bulk generation. It reads
+    only Standard BOM files, explodes semi-finished items to final raw materials,
+    aggregates usage back to finished products, and writes an intermediate Excel
+    workbook for Module 2B.
+    """
+    if progress_callback:
+        progress_callback(step="Reading Standard BOM", processed=0, total=0, progress=8)
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+
+    if progress_callback:
+        progress_callback(step="Expanding BOM", processed=0, total=int(used_columns.get("bom_rows_after_dedup", len(bom_df))), progress=32)
+    exploded, summary = _explode_bom(bom_df)
+    summary.update(used_columns)
+    summary["module2a_rule"] = "Standard BOM -> final raw-material total usage only; Raw Material Bulk Template is not read or written."
+    summary["bom_version"] = str(bom_version or "").strip()
+    summary["bom_date"] = str(bom_date or "").strip()
+
+    if progress_callback:
+        progress_callback(step="Aggregating final raw material usage", processed=int(len(exploded)), total=int(len(exploded)), progress=72)
+    headers, output_df = _standard_bom_total_usage_rows(bom_df=bom_df, exploded=exploded, used_columns=used_columns)
+    summary["output_columns"] = headers
+    summary["standard_bom_total_usage_rows"] = int(len(output_df))
+
+    product_col = str(used_columns.get("material_col") or "").strip() or str(used_columns.get("parent_col") or "Parent Node").strip()
+    write_summary = _write_standard_bom_total_usage_workbook(
+        output_df=output_df,
+        output_path=output_path,
+        summary=summary,
+        max_rows_per_sheet=max_rows_per_sheet,
+        product_column_name=product_col,
+        progress_callback=progress_callback,
+    )
+    summary.update(write_summary)
+    if progress_callback:
+        progress_callback(step="Completed", processed=int(len(output_df)), total=int(len(output_df)), progress=100)
+    return summary
+
+
 BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"

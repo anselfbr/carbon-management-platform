@@ -590,6 +590,58 @@
       <section id="bom-expansion" class="page-section">
         <section class="workspace">
           <section class="card primary-card">
+            <div class="module2a-panel">
+              <div class="module2a-header">
+                <div>
+                  <p class="section-eyebrow">MODULE 2A</p>
+                  <h2>產出標準BOM表總用量</h2>
+                  <p class="form-hint">第一段只處理標準 BOM 展開與最終原物料用量加總，不讀取、不寫入 Raw Material Bulk Template。</p>
+                </div>
+              </div>
+
+              <form id="module2aForm" class="form-panel module2a-form">
+                <label for="module2aBomFiles">上傳標準 BOM 檔案</label>
+                <input id="module2aBomFiles" name="module2a_bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
+
+                <div class="module2a-meta-grid">
+                  <label>
+                    <span>版次</span>
+                    <input id="module2aVersion" name="bom_version" type="text" placeholder="例如 v1 / 2024Q4" />
+                  </label>
+                  <label>
+                    <span>檔案日期</span>
+                    <input id="module2aDate" name="bom_date" type="date" />
+                  </label>
+                </div>
+
+                <button type="submit" class="btn-secondary">
+                  <span class="btn-icon">⌘</span>
+                  <span>產出標準BOM表總用量</span>
+                </button>
+              </form>
+
+              <div id="module2aProcessingStatus" class="processing-status idle">
+                <div class="status-header">
+                  <div class="spinner"></div>
+                  <div>
+                    <b id="module2aStatusTitle">MODULE 2A ready</b>
+                    <p id="module2aStatusText">上傳標準 BOM 後開始產出標準BOM表總用量。</p>
+                  </div>
+                  <span id="module2aStatusTime" class="status-time">Idle</span>
+                </div>
+                <div class="progress-track">
+                  <div id="module2aProgressBar" class="progress-bar"></div>
+                </div>
+              </div>
+
+              <a id="module2aDownload" class="download disabled" href="#">下載標準BOM表總用量</a>
+              <pre id="module2aLog" class="rule-log">MODULE 2A is ready.</pre>
+            </div>
+
+            <div class="module2-legacy-panel">
+              <details>
+                <summary>進階 / 原 Raw Material Bulk 一次式輸出流程（保留原功能）</summary>
+
             <form id="bomForm" class="form-panel">
               <label data-i18n="uploadStandardBomFiles">Upload Standard BOM Files</label>
               <input id="bomFile" name="bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
@@ -630,6 +682,8 @@
             <a id="workingHourRollupDownload" class="download disabled" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
             <a id="supplierBulkDownload" class="download disabled" href="#"><span data-i18n="downloadSupplierBulk">Download Supplier Bulk Create</span></a>
 
+              </details>
+            </div>
 
           </section>
 
@@ -2134,6 +2188,121 @@ ruleForm.onsubmit = async (e) => {
     ruleLog.textContent = cmpT('errorPrefix', 'Error: ') + err.message;
   }
 };
+
+
+// MODULE 2A isolated Standard BOM total usage flow.
+// This block uses unique element IDs and does not modify Module 1 or legacy Module 2 handlers.
+(function () {
+  const form = document.getElementById('module2aForm');
+  if (!form) return;
+
+  const statusBox = document.getElementById('module2aProcessingStatus');
+  const title = document.getElementById('module2aStatusTitle');
+  const text = document.getElementById('module2aStatusText');
+  const time = document.getElementById('module2aStatusTime');
+  const bar = document.getElementById('module2aProgressBar');
+  const log = document.getElementById('module2aLog');
+  const download = document.getElementById('module2aDownload');
+  let pollTimer = null;
+
+  function setState(mode, titleText, bodyText, timeText, progress) {
+    if (statusBox) {
+      statusBox.classList.remove('idle', 'running', 'success', 'error');
+      statusBox.classList.add(mode);
+    }
+    if (title) title.textContent = titleText || '';
+    if (text) text.textContent = bodyText || '';
+    if (time) time.textContent = timeText || '';
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
+  }
+
+  async function readJsonOrText(res) {
+    const raw = await res.text();
+    try {
+      const data = raw ? JSON.parse(raw) : {};
+      if (!res.ok || data.ok === false) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      return data;
+    } catch (err) {
+      if (raw && raw.trim().startsWith('<')) throw new Error('伺服器回傳錯誤頁面，請查看 Render log。');
+      if (err instanceof SyntaxError) throw new Error(raw || `HTTP ${res.status}`);
+      throw err;
+    }
+  }
+
+  function summaryText(job) {
+    const s = job.summary || {};
+    return [
+      `BOM files: ${s.bom_files || job.bom_files || 0}`,
+      `BOM rows: ${s.bom_rows_after_dedup || 0}`,
+      `Products: ${s.products || 0}`,
+      `Rows: ${s.standard_bom_total_usage_rows || job.processed_rows || 0}`,
+      `Sheets: ${s.sheet_count || 0}`,
+      `Max level: ${s.max_level || 0}`,
+    ].join('; ');
+  }
+
+  async function poll(jobId) {
+    try {
+      const res = await fetch(`/module2/bom-job/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      const job = await readJsonOrText(res);
+      const progress = Number(job.progress || 0);
+      const processed = Number(job.processed_rows || 0);
+      const total = Number(job.total_rows || 0);
+      const rowText = total ? `Rows: ${processed.toLocaleString()} / ${total.toLocaleString()}` : `Rows: ${processed.toLocaleString()}`;
+
+      if (job.status === 'success') {
+        clearInterval(pollTimer);
+        setState('success', 'MODULE 2A completed', summaryText(job), 'Completed', 100);
+        if (download && job.download_url) {
+          download.href = job.download_url;
+          download.classList.remove('disabled');
+        }
+        if (log) log.textContent = `Completed.\n${summaryText(job)}\nDownload: ${job.output_filename || ''}`;
+        return;
+      }
+
+      if (job.status === 'failed') {
+        clearInterval(pollTimer);
+        setState('error', 'MODULE 2A failed', job.error || '處理失敗，請查看 Render log。', 'Error', 100);
+        if (log) log.textContent = `Error: ${job.error || 'Unknown error'}\nStep: ${job.step || ''}`;
+        return;
+      }
+
+      setState('running', 'MODULE 2A processing', `${job.step || 'Processing'} · ${rowText}`, job.last_heartbeat || 'Running', progress);
+      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nLast heartbeat: ${job.last_heartbeat || ''}`;
+    } catch (err) {
+      clearInterval(pollTimer);
+      setState('error', 'MODULE 2A failed', err.message || '狀態查詢失敗', 'Error', 100);
+      if (log) log.textContent = `Polling error: ${err.message || err}`;
+    }
+  }
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (pollTimer) clearInterval(pollTimer);
+    if (download) {
+      download.href = '#';
+      download.classList.add('disabled');
+    }
+    setState('running', 'MODULE 2A queued', 'Uploading Standard BOM files...', 'Queued', 3);
+    if (log) log.textContent = 'Uploading and creating MODULE 2A job...';
+
+    try {
+      const fd = new FormData(form);
+      const res = await fetch('/module2a/standard-bom-total-usage-job', { method: 'POST', body: fd });
+      const data = await readJsonOrText(res);
+      const jobId = data.job_id;
+      if (!jobId) throw new Error('未取得 job_id');
+      setState('running', 'MODULE 2A processing', `Job created: ${jobId}`, 'Running', 5);
+      await poll(jobId);
+      pollTimer = setInterval(() => poll(jobId), 1500);
+    } catch (err) {
+      setState('error', 'MODULE 2A failed', err.message || '建立任務失敗', 'Error', 100);
+      if (log) log.textContent = `Error: ${err.message || err}`;
+    }
+  });
+})();
+
 </script>
 <script src="/static/i18n.js"></script>
 </body>
