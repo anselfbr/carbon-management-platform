@@ -31,6 +31,7 @@ LATEST_WORKING_HOUR_ROLLUP_PATH = OUTPUT_DIR / "working_hour_rollup_latest.xlsx"
 MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH = OUTPUT_DIR / "standard_bom_total_usage_latest.xlsx"
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH = OUTPUT_DIR / "module2b_raw_material_bulk_latest.zip"
+MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH = OUTPUT_DIR / "module2c_supplier_mapped_raw_material_bulk_latest.zip"
 
 
 RULE_SET_MAP = {
@@ -339,6 +340,7 @@ def _run_module2c_supplier_mapping_job(
         output_path = output_dir / str(summary.get("output_filename", f"supplier_mapped_raw_material_bulk_by_site_{token}.zip"))
         if output_path.exists():
             MODULE2_RAW_MATERIAL_BULK_PATH = output_path
+            shutil.copy2(output_path, MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH)
         summary["module1_step1_source"] = step1_source
         summary["module2b_raw_bulk_source"] = raw_bulk_source
         _set_module2a_job(
@@ -2121,21 +2123,64 @@ def _source_meta_for_path(path: Path, default_version: str = "") -> Dict[str, st
         meta["source_version"] = default_version
     return meta
 
-def _find_latest_module2_raw_material_bulk() -> Path | None:
-    """Return the most recent Module 2 raw material bulk package/file.
+def _find_latest_module2c_supplier_mapped_raw_material_bulk_zip() -> Path | None:
+    """Return the latest Module 2C supplier-mapped Raw Material Bulk ZIP for Module 3."""
+    if MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH.exists():
+        return MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH
+    candidates: list[Path] = []
+    for pattern in ("supplier_mapped_raw_material_bulk_by_site_*.zip", "supplier_mapped_raw_material_activity_data_bulk_by_site_*.zip"):
+        for path in OUTPUT_DIR.glob(pattern):
+            if path.name.startswith("~$"):
+                continue
+            candidates.append(path)
+    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
-    Module 2 now normally exports by-site raw material bulk as ZIP. Module 3
-    accepts that ZIP directly and processes every Excel inside it. Single Excel
-    output remains supported for backward compatibility.
+
+def _module2_raw_bulk_source_label(path: Path) -> str:
+    name = path.name.lower()
+    if path == MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH or "supplier_mapped" in name:
+        return "Module 2C Supplier-mapped Raw Material Bulk ZIP"
+    if path == MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH or name.startswith("module2b_") or "raw_material_activity_data_bulk_by_site" in name:
+        return "Module 2B Raw Material Bulk ZIP"
+    return "Module 2 Raw Material Bulk"
+
+
+def _module2_raw_bulk_source_stage(path: Path) -> str:
+    name = path.name.lower()
+    if path == MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH or "supplier_mapped" in name:
+        return "module2c"
+    if path == MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH or name.startswith("module2b_"):
+        return "module2b"
+    return "module2"
+
+
+def _find_latest_module2_raw_material_bulk() -> Path | None:
+    """Return the latest Module 2 raw material bulk package/file for Module 3.
+
+    Preference order:
+    1. Module 2C supplier-mapped Raw Material Bulk ZIP
+    2. Module 2B Raw Material Bulk ZIP
+    3. Legacy Module 2 raw material bulk outputs
     """
     global MODULE2_RAW_MATERIAL_BULK_PATH
     if MODULE2_RAW_MATERIAL_BULK_PATH and MODULE2_RAW_MATERIAL_BULK_PATH.exists():
         return MODULE2_RAW_MATERIAL_BULK_PATH
+
+    module2c_zip = _find_latest_module2c_supplier_mapped_raw_material_bulk_zip()
+    if module2c_zip:
+        MODULE2_RAW_MATERIAL_BULK_PATH = module2c_zip
+        return module2c_zip
+
+    module2b_zip = _find_latest_module2b_raw_material_bulk_zip()
+    if module2b_zip:
+        MODULE2_RAW_MATERIAL_BULK_PATH = module2b_zip
+        return module2b_zip
+
     candidates: list[Path] = []
     for pattern in ("raw_material_activity_data_bulk_by_site_*.zip", "raw_material_activity_data_bulk_*.zip", "raw_material_activity_data_bulk_*.xlsx"):
         for path in OUTPUT_DIR.glob(pattern):
             name = path.name.lower()
-            if name.endswith("_latest.xlsx"):
+            if name.endswith("_latest.xlsx") or path.name.startswith("~$"):
                 continue
             candidates.append(path)
     if not candidates:
@@ -2170,11 +2215,14 @@ def module3_raw_material_bulk_source():
             "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。",
         }
     stat = raw_path.stat()
-    meta = _source_meta_for_path(raw_path, "Module 2 ZIP" if raw_path.suffix.lower() == ".zip" else "Module 2 Excel")
+    source_label = _module2_raw_bulk_source_label(raw_path)
+    meta = _source_meta_for_path(raw_path, source_label)
     return {
         "ok": True,
         "filename": raw_path.name,
         "source_type": "zip_package" if raw_path.suffix.lower() == ".zip" else "excel_file",
+        "source_stage": _module2_raw_bulk_source_stage(raw_path),
+        "source_label": source_label,
         "size_bytes": stat.st_size,
         "modified_at": _cmp_mtime_iso(raw_path),
         "download_url": f"/download/{raw_path.name}",
@@ -2214,12 +2262,20 @@ async def module3_apply_ccl_factors_job(
         step="工作已建立，等待背景處理",
         message="CCL 係數對應已開始。",
         source_filename=raw_path.name,
-        source_meta=_source_meta_for_path(raw_path, "Module 2 ZIP" if raw_path.suffix.lower() == ".zip" else "Module 2 Excel"),
+        source_meta=_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)),
         remaining_seconds=30,
         created_at=_cmp_now_iso(),
     )
     MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path)
-    return {"ok": True, "job_id": job_id, "message": "CCL 係數對應已開始。", "source_filename": raw_path.name, **_source_meta_for_path(raw_path, "Module 2 ZIP" if raw_path.suffix.lower() == ".zip" else "Module 2 Excel")}
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "message": "CCL 係數對應已開始。",
+        "source_filename": raw_path.name,
+        "source_label": _module2_raw_bulk_source_label(raw_path),
+        "source_stage": _module2_raw_bulk_source_stage(raw_path),
+        **_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)),
+    }
 
 
 @app.get("/module3/ccl-job/{job_id}")
@@ -2255,7 +2311,9 @@ async def module3_apply_ccl_factors(
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path)
         summary["app_version"] = "CMP_MODULE3_DIRECT_MODULE2_BULK_V2_2"
         summary["source_filename"] = raw_path.name
-        summary.update(_source_meta_for_path(raw_path, "Module 2 ZIP" if raw_path.suffix.lower() == ".zip" else "Module 2 Excel"))
+        summary["source_label"] = _module2_raw_bulk_source_label(raw_path)
+        summary["source_stage"] = _module2_raw_bulk_source_stage(raw_path)
+        summary.update(_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)))
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -2450,22 +2508,40 @@ def module2_standard_bom_total_usage_source():
 def module2b_source_info():
     step1_path = _find_latest_module1_step1_output()
     total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
-    if not step1_path:
-        return JSONResponse({"ok": False, "message": "尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。"}, status_code=404)
-    if not total_usage_path.exists():
-        return JSONResponse({"ok": False, "message": "尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。"}, status_code=404)
-    step1_info = {
-        "filename": step1_path.name,
-        "modified_at": _cmp_mtime_iso(step1_path),
-        "download_url": f"/download/{step1_path.name}",
-        **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+
+    if step1_path:
+        step1_info = {
+            "ok": True,
+            "filename": step1_path.name,
+            "modified_at": _cmp_mtime_iso(step1_path),
+            "download_url": f"/download/{step1_path.name}",
+            **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+        }
+    else:
+        step1_info = {
+            "ok": False,
+            "message": "尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。",
+        }
+
+    if total_usage_path.exists():
+        total_usage_info = {
+            "ok": True,
+            "filename": total_usage_path.name,
+            "modified_at": _cmp_mtime_iso(total_usage_path),
+            "download_url": f"/download/{total_usage_path.name}",
+        }
+    else:
+        total_usage_info = {
+            "ok": False,
+            "message": "尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。",
+        }
+
+    return {
+        "ok": True,
+        "ready": bool(step1_path and total_usage_path.exists()),
+        "module1_step1": step1_info,
+        "module2a_total_usage": total_usage_info,
     }
-    total_usage_info = {
-        "filename": total_usage_path.name,
-        "modified_at": _cmp_mtime_iso(total_usage_path),
-        "download_url": f"/download/{total_usage_path.name}",
-    }
-    return {"ok": True, "module1_step1": step1_info, "module2a_total_usage": total_usage_info}
 
 
 @app.post("/module2b/raw-material-bulk-job")
@@ -2530,24 +2606,42 @@ async def module2b_raw_material_bulk_job(request: Request):
 def module2c_source_info():
     step1_path = _find_latest_module1_step1_output()
     raw_bulk_zip = _find_latest_module2b_raw_material_bulk_zip()
-    if not step1_path:
-        return JSONResponse({"ok": False, "message": "尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。"}, status_code=404)
-    if not raw_bulk_zip:
-        return JSONResponse({"ok": False, "message": "尚未找到 Module 2B Raw Material Bulk ZIP，請先完成 Module 2B。"}, status_code=404)
-    step1_info = {
-        "filename": step1_path.name,
-        "modified_at": _cmp_mtime_iso(step1_path),
-        "download_url": f"/download/{step1_path.name}",
-        **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+
+    if step1_path:
+        step1_info = {
+            "ok": True,
+            "filename": step1_path.name,
+            "modified_at": _cmp_mtime_iso(step1_path),
+            "download_url": f"/download/{step1_path.name}",
+            **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+        }
+    else:
+        step1_info = {
+            "ok": False,
+            "message": "尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。",
+        }
+
+    if raw_bulk_zip:
+        raw_bulk_info = {
+            "ok": True,
+            "filename": raw_bulk_zip.name,
+            "modified_at": _cmp_mtime_iso(raw_bulk_zip),
+            "download_url": f"/download/{raw_bulk_zip.name}",
+            "source_type": "zip_package",
+            **_source_meta_for_path(raw_bulk_zip, "Module 2B ZIP"),
+        }
+    else:
+        raw_bulk_info = {
+            "ok": False,
+            "message": "尚未找到 Module 2B Raw Material Bulk ZIP，請先完成 Module 2B。",
+        }
+
+    return {
+        "ok": True,
+        "ready": bool(step1_path and raw_bulk_zip),
+        "module1_step1": step1_info,
+        "module2b_raw_bulk": raw_bulk_info,
     }
-    raw_bulk_info = {
-        "filename": raw_bulk_zip.name,
-        "modified_at": _cmp_mtime_iso(raw_bulk_zip),
-        "download_url": f"/download/{raw_bulk_zip.name}",
-        "source_type": "zip_package",
-        **_source_meta_for_path(raw_bulk_zip, "Module 2B ZIP"),
-    }
-    return {"ok": True, "module1_step1": step1_info, "module2b_raw_bulk": raw_bulk_info}
 
 
 @app.post("/module2c/supplier-mapping-bulk-job")

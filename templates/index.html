@@ -1556,7 +1556,8 @@ async function refreshModule3RawBulkSource() {
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'raw material bulk';
     const typeText = data.source_type === 'zip_package' ? 'ZIP 原物料 Bulk 包' : '原物料 Bulk 檔';
-    module3RawBulkSourceText.textContent = `來源：Module 2 最新產出｜類型：${typeText}｜檔案：${filename}${cmpSourceMetaText(data)}`;
+    const sourceLabel = data.source_label || 'Module 2 最新原物料 Bulk';
+    module3RawBulkSourceText.textContent = `來源：${sourceLabel}｜類型：${typeText}｜檔案：${filename}${cmpSourceMetaText(data)}`;
   } catch (err) {
     module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
   }
@@ -2456,13 +2457,18 @@ ruleForm.onsubmit = async (e) => {
       const step1 = data.module1_step1 || {};
       const totalUsage = data.module2a_total_usage || {};
       if (module2bStep1SourceText) {
-        module2bStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
+        module2bStep1SourceText.textContent = step1.ok === false
+          ? (step1.message || '尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。')
+          : `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
       }
       if (module2bTotalUsageSourceText) {
-        module2bTotalUsageSourceText.textContent = `來源：Module 2A 標準BOM表總用量｜檔案：${totalUsage.filename || ''}｜建立時間：${totalUsage.modified_at || ''}`;
+        module2bTotalUsageSourceText.textContent = totalUsage.ok === false
+          ? (totalUsage.message || '尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。')
+          : `來源：Module 2A 標準BOM表總用量｜檔案：${totalUsage.filename || ''}｜建立時間：${totalUsage.modified_at || ''}`;
       }
     } catch (err) {
       const msg = err.message || '尚未找到 Module 2B 必要來源檔。';
+      if (module2bStep1SourceText) module2bStep1SourceText.textContent = msg;
       if (module2bTotalUsageSourceText) module2bTotalUsageSourceText.textContent = msg;
     }
   }
@@ -2588,13 +2594,18 @@ ruleForm.onsubmit = async (e) => {
       const step1 = data.module1_step1 || {};
       const rawBulk = data.module2b_raw_bulk || {};
       if (module2cStep1SourceText) {
-        module2cStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
+        module2cStep1SourceText.textContent = step1.ok === false
+          ? (step1.message || '尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。')
+          : `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
       }
       if (module2cRawBulkSourceText) {
-        module2cRawBulkSourceText.textContent = `來源：Module 2B Raw Material Bulk ZIP｜檔案：${rawBulk.filename || ''}｜建立時間：${rawBulk.modified_at || ''}`;
+        module2cRawBulkSourceText.textContent = rawBulk.ok === false
+          ? (rawBulk.message || '尚未找到 Module 2B Raw Material Bulk ZIP，請先完成 Module 2B。')
+          : `來源：Module 2B Raw Material Bulk ZIP｜檔案：${rawBulk.filename || ''}｜建立時間：${rawBulk.modified_at || ''}`;
       }
     } catch (err) {
       const msg = err.message || '尚未找到 Module 2C 必要來源檔。';
+      if (module2cStep1SourceText) module2cStep1SourceText.textContent = msg;
       if (module2cRawBulkSourceText) module2cRawBulkSourceText.textContent = msg;
     }
   }

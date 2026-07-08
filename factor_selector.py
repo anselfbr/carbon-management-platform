@@ -266,6 +266,28 @@ def apply_ccl_factors_to_raw_material_bulk(
     }
 
 
+def _is_raw_material_bulk_zip_member(filename: str) -> bool:
+    """Return True only for Raw Material Bulk workbooks inside Module 2 ZIP packages.
+
+    Module 2C packages may also contain supplier_bulk_create workbooks. Those are
+    not Raw Material Activity Data bulk files and must not be filled with factors.
+    """
+    name = Path(filename).name.lower()
+    if name.startswith("~$") or not name.endswith((".xlsx", ".xlsm", ".xls")):
+        return False
+    if "supplier_bulk" in name or "supplier_create" in name or "supplier-bulk" in name:
+        return False
+    raw_tokens = (
+        "raw_material",
+        "raw-material",
+        "raw materials",
+        "raw_materials",
+        "activity_data_bulk",
+        "activity data bulk",
+    )
+    return any(token in name for token in raw_tokens)
+
+
 def apply_ccl_factors_to_raw_material_bulk_package(
     raw_material_bulk_path: str | Path,
     ccl_mapping_path: str | Path,
@@ -292,14 +314,16 @@ def apply_ccl_factors_to_raw_material_bulk_package(
 
     _emit_progress(progress_callback, 2, "讀取 Module 2 ZIP 內原物料 Bulk 檔案", 60)
     with zipfile.ZipFile(raw_material_bulk_path, "r") as zin:
-        excel_members = [
+        all_excel_members = [
             info for info in zin.infolist()
             if not info.is_dir()
             and not Path(info.filename).name.startswith("~$")
             and Path(info.filename).suffix.lower() in {".xlsx", ".xlsm", ".xls"}
         ]
+        excel_members = [info for info in all_excel_members if _is_raw_material_bulk_zip_member(info.filename)]
+        skipped_excel_members = [Path(info.filename).name for info in all_excel_members if info not in excel_members]
         if not excel_members:
-            raise ValueError("Module 2 ZIP 內找不到原物料 Bulk Excel 檔案。")
+            raise ValueError("Module 2 ZIP 內找不到原物料 Bulk Excel 檔案；已排除 supplier_bulk_create 等非原物料 Bulk 檔。")
 
         ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
         totals = {
@@ -355,6 +379,8 @@ def apply_ccl_factors_to_raw_material_bulk_package(
         "input_package_filename": raw_material_bulk_path.name,
         "processed_file_count": len(processed_files),
         "processed_files": processed_files,
+        "skipped_non_raw_material_bulk_files": skipped_excel_members,
+        "raw_material_bulk_file_filter": "include raw_material/activity_data_bulk workbooks; exclude supplier_bulk_create workbooks",
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         **totals,
     }
@@ -681,7 +707,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_PERFORMANCE_V2_20260704"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_PERFORMANCE_V2_MODULE2C_RAW_BULK_FILTER_20260708"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
