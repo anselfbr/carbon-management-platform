@@ -2824,6 +2824,16 @@ _XML_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 def _xml_escape(value: Any) -> str:
     text = "" if value is None else str(value)
+    # XLSX worksheet XML cannot contain most ASCII control characters.
+    # SAP/exported Excel source files may carry hidden control chars in
+    # descriptions or supplier names; leaving them in sheet XML causes Excel
+    # to show a repair/corruption prompt. Keep TAB/LF/CR only.
+    cleaned = []
+    for ch in text:
+        code = ord(ch)
+        if code in (9, 10, 13) or code >= 32:
+            cleaned.append(ch)
+    text = "".join(cleaned)
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;").replace("'", "&apos;"))
 
@@ -2887,6 +2897,16 @@ def _workbook_sheet_parts(xlsx_path: str | Path) -> dict[str, str]:
     return parts
 
 
+def _update_dimension_ref(sheet_xml: str, max_row: int, max_col: int) -> str:
+    if max_row < 1 or max_col < 1:
+        return sheet_xml
+    ref = f"A1:{_excel_col_letter(max_col)}{max_row}"
+    if re.search(r"<dimension\b[^>]*/>", sheet_xml):
+        return re.sub(r"<dimension\b[^>]*/>", f'<dimension ref="{ref}"/>', sheet_xml, count=1)
+    # Some generated sheets omit dimension. Insert it right after <worksheet ...>.
+    return re.sub(r"(<worksheet\b[^>]*>)", r"\1" + f'<dimension ref="{ref}"/>', sheet_xml, count=1)
+
+
 def _replace_sheetdata_xml(original_xml: bytes, rows_iter) -> bytes:
     text = original_xml.decode("utf-8")
     start = text.find("<sheetData")
@@ -2913,7 +2933,18 @@ def _replace_sheetdata_xml(original_xml: bytes, rows_iter) -> bytes:
     for row_values in rows_iter:
         new_rows.append(_xlsx_row_xml(row_idx, list(row_values)))
         row_idx += 1
+    max_col = 1
+    for vals in new_rows:
+        # Fast estimate from generated cell references and preserved header rows.
+        refs = re.findall(r'<c\b[^>]*\br="([A-Z]+)\d+"', vals)
+        for col_letters in refs:
+            col_no = 0
+            for ch in col_letters:
+                col_no = col_no * 26 + (ord(ch) - 64)
+            max_col = max(max_col, col_no)
+    max_row = max(DATA_START_ROW - 1, row_idx - 1)
     new_xml = text[:start] + sheetdata_open + "".join(new_rows) + "</sheetData>" + text[close + len("</sheetData>"):]
+    new_xml = _update_dimension_ref(new_xml, max_row=max_row, max_col=max_col)
     return new_xml.encode("utf-8")
 
 

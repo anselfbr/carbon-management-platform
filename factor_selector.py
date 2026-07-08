@@ -17,7 +17,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V1_20260708"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V2_20260708"
 
 
 
@@ -28,6 +28,16 @@ _XML_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationshi
 
 def _xml_escape(value: Any) -> str:
     text = "" if value is None else str(value)
+    # XLSX worksheet XML cannot contain most ASCII control characters.
+    # SAP/exported Excel source files may carry hidden control chars in
+    # descriptions or supplier names; leaving them in sheet XML causes Excel
+    # to show a repair/corruption prompt. Keep TAB/LF/CR only.
+    cleaned = []
+    for ch in text:
+        code = ord(ch)
+        if code in (9, 10, 13) or code >= 32:
+            cleaned.append(ch)
+    text = "".join(cleaned)
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             .replace('"', "&quot;").replace("'", "&apos;"))
 
@@ -79,6 +89,16 @@ def _workbook_sheet_parts(xlsx_path: str | Path) -> dict[str, str]:
     return parts
 
 
+def _update_dimension_ref(sheet_xml: str, max_row: int, max_col: int) -> str:
+    if max_row < 1 or max_col < 1:
+        return sheet_xml
+    ref = f"A1:{_excel_col_letter(max_col)}{max_row}"
+    if re.search(r"<dimension\b[^>]*/>", sheet_xml):
+        return re.sub(r"<dimension\b[^>]*/>", f'<dimension ref="{ref}"/>', sheet_xml, count=1)
+    # Some generated sheets omit dimension. Insert it right after <worksheet ...>.
+    return re.sub(r"(<worksheet\b[^>]*>)", r"\1" + f'<dimension ref="{ref}"/>', sheet_xml, count=1)
+
+
 def _replace_sheetdata_xml(original_xml: bytes, rows_iter) -> bytes:
     text = original_xml.decode("utf-8")
     start = text.find("<sheetData")
@@ -103,7 +123,18 @@ def _replace_sheetdata_xml(original_xml: bytes, rows_iter) -> bytes:
     for values in rows_iter:
         new_rows.append(_xlsx_row_xml(row_idx, list(values)))
         row_idx += 1
-    return (text[:start] + sheetdata_open + "".join(new_rows) + "</sheetData>" + text[close + len("</sheetData>"):]).encode("utf-8")
+    max_col = 1
+    for vals in new_rows:
+        refs = re.findall(r'<c\b[^>]*\br="([A-Z]+)\d+"', vals)
+        for col_letters in refs:
+            col_no = 0
+            for ch in col_letters:
+                col_no = col_no * 26 + (ord(ch) - 64)
+            max_col = max(max_col, col_no)
+    max_row = max(DATA_START_ROW - 1, row_idx - 1)
+    new_xml = text[:start] + sheetdata_open + "".join(new_rows) + "</sheetData>" + text[close + len("</sheetData>"):]
+    new_xml = _update_dimension_ref(new_xml, max_row=max_row, max_col=max_col)
+    return new_xml.encode("utf-8")
 
 
 def _rows_from_csv_spool(csv_path: str | Path):
@@ -908,7 +939,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V1_20260708"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V2_20260708"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
