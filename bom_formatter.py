@@ -2641,4 +2641,212 @@ def generate_standard_bom_total_usage_file(
     return summary
 
 
-BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
+# =========================================================
+# Module 2B · Raw Material Bulk from Module 2A Total Usage
+# Standard BOM total usage workbook + Raw Material Bulk Template -> Raw Material Bulk ZIP by Production Site.
+# This function intentionally does not re-expand BOM and does not apply Supplier mapping.
+# =========================================================
+def _read_standard_bom_total_usage_workbook(
+    standard_total_usage_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Read Module 2A output workbook and convert it to the exploded schema.
+
+    Module 2A output preserves Standard BOM columns but already contains final
+    raw-material usage per finished product. Module 2B must not call _explode_bom
+    again and must not apply Altitem probability again.
+    """
+    path = Path(standard_total_usage_path)
+    if not path.exists():
+        raise FileNotFoundError(f"找不到 Module 2A 標準BOM表總用量檔案：{path}")
+
+    m = _resolve_mapping(mapping)
+    try:
+        sheets = pd.read_excel(path, sheet_name=None, dtype=object)
+    except Exception as exc:
+        raise ValueError(f"無法讀取標準BOM表總用量檔案：{exc}") from exc
+
+    parts: list[pd.DataFrame] = []
+    sheet_names: list[str] = []
+    for sheet_name, df in sheets.items():
+        name = str(sheet_name or "").strip()
+        if name == STANDARD_BOM_TOTAL_USAGE_SUMMARY_SHEET_NAME:
+            continue
+        if not name.startswith(STANDARD_BOM_TOTAL_USAGE_BASE_SHEET_NAME):
+            continue
+        if df is None:
+            continue
+        part = df.copy()
+        if part.empty:
+            continue
+        part["_module2a_sheet"] = name
+        parts.append(part)
+        sheet_names.append(name)
+
+    if not parts:
+        raise ValueError("標準BOM表總用量檔案中找不到可讀取的『標準BOM表總用量』分頁，請先完成 Module 2A。")
+
+    df = pd.concat(parts, ignore_index=True)
+    material_col = _find_optional_column(df, m.get("material_col", "Material"))
+    parent_col = _find_optional_column(df, m.get("parent_col", "Parent Node"))
+    component_col = _find_column(df, m["component_col"])
+    qty_col = _find_column(df, m["qty_col"])
+    unit_col = _find_column(df, m["unit_col"])
+    description_col = _find_optional_column(df, m.get("description_col", "Component Description"))
+    material_group_col = _find_optional_column(df, m.get("material_group_col", "Material group"))
+    valid_from_col = _find_optional_column(df, m.get("valid_from_col", "BOM Valid From"))
+    net_weight_col = _find_optional_column(df, m.get("net_weight_col", "Net weight"))
+    gross_weight_col = _find_optional_column(df, m.get("gross_weight_col", "Gross weight"))
+    weight_uom_col = _find_optional_column(df, m.get("weight_uom_col", "Weight UoM"))
+
+    target_col = material_col or parent_col
+    if not target_col:
+        raise ValueError("標準BOM表總用量缺少成品料號欄位：Material 或 Parent Node")
+
+    work = pd.DataFrame({
+        "target_product": df[target_col].apply(_safe_text),
+        "source_material": df[target_col].apply(_safe_text),
+        "raw_material": df[component_col].apply(_safe_text),
+        "usage": df[qty_col].apply(_safe_number),
+        "unit": df[unit_col].apply(_safe_text),
+        "description": df[description_col].apply(_safe_text) if description_col else "",
+        "material_group": df[material_group_col].apply(_safe_text) if material_group_col else "",
+        "valid_from": df[valid_from_col].apply(_date_from_value) if valid_from_col else date(datetime.now().year, 1, 1),
+        "level": 0,
+        "net_weight": df[net_weight_col].apply(_safe_number) if net_weight_col else "",
+        "gross_weight": df[gross_weight_col].apply(_safe_number) if gross_weight_col else "",
+        "weight_uom": df[weight_uom_col].apply(_safe_text) if weight_uom_col else "",
+    })
+    before_filter = int(len(work))
+    work = work[(work["target_product"] != "") & (work["raw_material"] != "")].copy()
+    return work, {
+        "module2a_total_usage_source_filename": path.name,
+        "module2a_total_usage_source_sheets": sheet_names,
+        "module2a_total_usage_rows_read": int(before_filter),
+        "module2a_total_usage_valid_rows": int(len(work)),
+        "module2a_total_usage_rule": "Read Module 2A total usage as per-PC final raw-material usage; BOM is not re-expanded and Altitem probability is not re-applied.",
+        "used_columns": {
+            "target_product_col": str(target_col),
+            "component_col": str(component_col),
+            "qty_col": str(qty_col),
+            "unit_col": str(unit_col),
+            "description_col": str(description_col or ""),
+            "material_group_col": str(material_group_col or ""),
+            "valid_from_col": str(valid_from_col or ""),
+            "net_weight_col": str(net_weight_col or ""),
+            "gross_weight_col": str(gross_weight_col or ""),
+            "weight_uom_col": str(weight_uom_col or ""),
+        },
+    }
+
+
+def generate_raw_material_bulk_from_standard_total_usage_zip(
+    standard_total_usage_path: str | Path,
+    raw_material_template_path: str | Path,
+    output_dir: str | Path,
+    token: str,
+    step1_output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    progress_callback=None,
+) -> Dict[str, Any]:
+    """Generate Module 2B Raw Material Bulk ZIP by site from Module 2A output.
+
+    Rules preserved from the current Raw Material Bulk writer:
+    - Usage = 2A per-PC final raw-material usage × Module 1 Step1 annual quantity.
+    - Transportation Destination = Module 1 Step1 Production Site.
+    - Output is split by Production Site.
+    - Raw Material Bulk Template is preserved and only target cells are written.
+    - Supplier mapping is not applied in Module 2B; it is reserved for Module 2C.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if progress_callback:
+        progress_callback(step="Reading Module 2A total usage", processed=0, total=0, progress=8)
+    exploded, summary = _read_standard_bom_total_usage_workbook(standard_total_usage_path, mapping=mapping)
+    exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+
+    if progress_callback:
+        progress_callback(step="Applying Module 1 annual quantity", processed=int(len(exploded)), total=int(len(exploded)), progress=22)
+    annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
+    exploded, annual_usage_summary = _apply_annual_quantity_to_exploded_usage(exploded, annual_qty_map)
+    exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+
+    if progress_callback:
+        progress_callback(step="Mapping Production Site", processed=int(len(exploded)), total=int(len(exploded)), progress=36)
+    site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
+    work = exploded.copy()
+    if work.empty:
+        work["_production_site"] = "Unassigned"
+    else:
+        work["_target_key"] = work["target_product"].apply(_normalize_material_key)
+        work["_production_site"] = work["_target_key"].map(site_map).fillna("Unassigned")
+        work["_production_site"] = work["_production_site"].apply(lambda x: str(x or "").strip() or "Unassigned")
+        work["transport_destination"] = work["_production_site"]
+        if "material_group" not in work.columns:
+            work["material_group"] = ""
+
+    site_values = sorted({str(x).strip() or "Unassigned" for x in work["_production_site"].tolist()}) if not work.empty else ["Unassigned"]
+    generated_files: list[dict[str, Any]] = []
+    zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
+    zip_path = output_dir / zip_filename
+    processed_rows = 0
+    total_rows = int(len(work))
+
+    if progress_callback:
+        progress_callback(step="Writing Raw Material Bulk files", processed=0, total=total_rows, progress=45)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for idx, site in enumerate(site_values, start=1):
+            site_df = work[work["_production_site"] == site].copy().drop(columns=["_target_key", "_production_site"], errors="ignore")
+            safe_site = _sanitize_filename_part(site)
+            file_path = output_dir / f"raw_material_activity_data_bulk_{safe_site}_{token}.xlsx"
+            if progress_callback:
+                progress_callback(
+                    step=f"Writing Raw Material Bulk: {site}",
+                    processed=processed_rows,
+                    total=total_rows,
+                    progress=min(95, 45 + int((idx - 1) / max(len(site_values), 1) * 45)),
+                    current_site=str(site),
+                )
+            write_summary = _write_raw_material_bulk_from_exploded(
+                exploded=site_df,
+                raw_material_template_path=raw_material_template_path,
+                output_path=file_path,
+                supplier_map=None,
+                return_expanded=False,
+            )
+            processed_rows += int(len(site_df))
+            zf.write(file_path, arcname=file_path.name)
+            generated_files.append({
+                "production_site": site,
+                "filename": file_path.name,
+                "activity_rows": int(write_summary.get("activity_rows", 0)),
+                "raw_materials": int(write_summary.get("raw_materials", 0)),
+            })
+
+    unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
+    result = dict(summary)
+    result.update(annual_qty_source_summary)
+    result.update(annual_usage_summary)
+    result.update(step1_summary)
+    result.update({
+        "output_filename": zip_filename,
+        "download_url": f"/download/{zip_filename}",
+        "split_by_production_site": True,
+        "production_site_files": generated_files,
+        "production_site_count": int(len(site_values)),
+        "unassigned_rows": int(unassigned_rows),
+        "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
+        "zero_annual_usage_rows_excluded": int(zero_annual_usage_rows_excluded),
+        "activity_rows": int(total_rows),
+        "raw_materials": int(work["raw_material"].nunique()) if not work.empty else 0,
+        "supplier_status": "Deferred to Module 2C",
+        "supplier_upload_files": 0,
+        "supplier_bulk_generated": False,
+        "module2b_rule": "2A total usage -> Module 1 annual quantity/site mapping -> Raw Material Bulk ZIP; supplier mapping is not applied in Module 2B.",
+    })
+    if progress_callback:
+        progress_callback(step="Completed", processed=total_rows, total=total_rows, progress=100)
+    return result
+
+
+BOM_FORMATTER_VERSION = "CMP_V25_0_MODULE2B_STAGED_RAW_BULK"

@@ -2643,3 +2643,11 @@ select:focus {
 .bom-logic-details[open] > summary::after {
   content: "收合";
 }
+
+/* Module 2B staged Raw Material Bulk output */
+.module2b-panel {
+  margin-top: 24px;
+}
+.module2b-form {
+  margin-top: 14px;
+}

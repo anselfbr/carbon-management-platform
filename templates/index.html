@@ -632,6 +632,52 @@
               <pre id="module2aLog" class="rule-log">MODULE 2A is ready.</pre>
             </div>
 
+            <div class="module2a-panel module2b-panel">
+              <div class="module2a-header">
+                <div>
+                  <span class="module-label">MODULE 2B</span>
+                  <h3>寫入 Raw Material Bulk</h3>
+                  <p>第二段自動引用 MODULE 2A 產出的標準BOM表總用量與 Module 1 Step 1 最新產出，並依既有規則寫入 Raw Material Bulk Template。</p>
+                </div>
+              </div>
+
+              <div class="module3-source-card">
+                <b>引用 Module 1 Step 1 最新產出資訊</b>
+                <p id="module2bStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+              </div>
+
+              <div class="module3-source-card">
+                <b>引用 Module 2A 標準BOM表總用量</b>
+                <p id="module2bTotalUsageSourceText">來源：Module 2A 標準BOM表總用量檢查中...</p>
+              </div>
+
+              <form id="module2bForm" class="form-panel module2b-form">
+                <label for="module2bTemplateFile">上傳原物料 Raw Material Bulk Template</label>
+                <input id="module2bTemplateFile" name="module2b_template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+
+                <button type="submit" class="btn-primary">
+                  <span class="btn-icon">⌘</span>
+                  <span>寫入 Raw Material Bulk</span>
+                </button>
+              </form>
+
+              <div id="module2bProcessingStatus" class="processing-status idle">
+                <div class="status-row">
+                  <div>
+                    <b id="module2bStatusTitle">MODULE 2B ready</b>
+                    <p id="module2bStatusText">請先完成 MODULE 2A，並上傳 Raw Material Bulk Template。</p>
+                  </div>
+                  <span id="module2bStatusTime" class="status-time">Idle</span>
+                </div>
+                <div class="progress-track">
+                  <div id="module2bProgressBar" class="progress-bar"></div>
+                </div>
+              </div>
+
+              <a id="module2bDownload" class="download disabled" href="#">下載 Raw Material Bulk ZIP</a>
+              <pre id="module2bLog" class="rule-log">MODULE 2B is ready.</pre>
+            </div>
+
             <div class="module2-legacy-panel">
               <details>
                 <summary>進階 / 原 Raw Material Bulk 一次式輸出流程（保留原功能）</summary>
@@ -951,6 +997,8 @@ const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
 const bomStep1SourceText = document.getElementById('bomStep1SourceText');
 const module2aStep1SourceText = document.getElementById('module2aStep1SourceText');
+const module2bStep1SourceText = document.getElementById('module2bStep1SourceText');
+const module2bTotalUsageSourceText = document.getElementById('module2bTotalUsageSourceText');
 const module3CclForm = document.getElementById('module3CclForm');
 const module3CclResult = document.getElementById('module3CclResult');
 const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
@@ -1274,7 +1322,7 @@ function setBomProcessingState(mode, title, text, timeText, progress) {
 
 
 async function refreshBomStep1Source() {
-  if (!bomStep1SourceText && !module2aStep1SourceText) return;
+  if (!bomStep1SourceText && !module2aStep1SourceText && !module2bStep1SourceText) return;
   try {
     const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
@@ -1282,10 +1330,12 @@ async function refreshBomStep1Source() {
     const sourceText = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${cmpSourceMetaText(data)}`;
     if (bomStep1SourceText) bomStep1SourceText.textContent = sourceText;
     if (module2aStep1SourceText) module2aStep1SourceText.textContent = sourceText;
+    if (module2bStep1SourceText) module2bStep1SourceText.textContent = sourceText;
   } catch (err) {
     const message = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
     if (bomStep1SourceText) bomStep1SourceText.textContent = message;
     if (module2aStep1SourceText) module2aStep1SourceText.textContent = message;
+    if (module2bStep1SourceText) module2bStep1SourceText.textContent = message;
   }
 }
 
@@ -2304,6 +2354,139 @@ ruleForm.onsubmit = async (e) => {
       if (log) log.textContent = `Error: ${err.message || err}`;
     }
   });
+
+})();
+
+// MODULE 2B isolated Raw Material Bulk output flow.
+// Reads latest Module 2A total usage on the server; only uploads Raw Material Bulk Template.
+(function () {
+  const form = document.getElementById('module2bForm');
+  if (!form) return;
+
+  const statusBox = document.getElementById('module2bProcessingStatus');
+  const title = document.getElementById('module2bStatusTitle');
+  const text = document.getElementById('module2bStatusText');
+  const time = document.getElementById('module2bStatusTime');
+  const bar = document.getElementById('module2bProgressBar');
+  const log = document.getElementById('module2bLog');
+  const download = document.getElementById('module2bDownload');
+  let pollTimer = null;
+
+  function setState(mode, titleText, bodyText, timeText, progress) {
+    if (statusBox) {
+      statusBox.classList.remove('idle', 'running', 'success', 'error');
+      statusBox.classList.add(mode);
+    }
+    if (title) title.textContent = titleText || '';
+    if (text) text.textContent = bodyText || '';
+    if (time) time.textContent = timeText || '';
+    if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
+  }
+
+  async function readJsonOrText(res) {
+    const raw = await res.text();
+    try {
+      const data = raw ? JSON.parse(raw) : {};
+      if (!res.ok || data.ok === false) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+      return data;
+    } catch (err) {
+      if (raw && raw.trim().startsWith('<')) throw new Error('伺服器回傳錯誤頁面，請查看 Render log。');
+      if (err instanceof SyntaxError) throw new Error(raw || `HTTP ${res.status}`);
+      throw err;
+    }
+  }
+
+  async function refreshModule2bSources() {
+    try {
+      const res = await fetch('/module2b/source-info', { cache: 'no-store' });
+      const data = await readJsonOrText(res);
+      const step1 = data.module1_step1 || {};
+      const totalUsage = data.module2a_total_usage || {};
+      if (module2bStep1SourceText) {
+        module2bStep1SourceText.textContent = `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
+      }
+      if (module2bTotalUsageSourceText) {
+        module2bTotalUsageSourceText.textContent = `來源：Module 2A 標準BOM表總用量｜檔案：${totalUsage.filename || ''}｜建立時間：${totalUsage.modified_at || ''}`;
+      }
+    } catch (err) {
+      const msg = err.message || '尚未找到 Module 2B 必要來源檔。';
+      if (module2bTotalUsageSourceText) module2bTotalUsageSourceText.textContent = msg;
+    }
+  }
+
+  function summaryText(job) {
+    const s = job.summary || {};
+    return [
+      `Rows: ${s.activity_rows || job.processed_rows || 0}`,
+      `Raw materials: ${s.raw_materials || 0}`,
+      `Production sites: ${s.production_site_count || 0}`,
+      `Unassigned rows: ${s.unassigned_rows || 0}`,
+      `Annual qty matched rows: ${s.annual_quantity_matched_rows || 0}`,
+    ].join('; ');
+  }
+
+  async function poll(jobId) {
+    try {
+      const res = await fetch(`/module2/bom-job/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      const job = await readJsonOrText(res);
+      const progress = Number(job.progress || 0);
+      const processed = Number(job.processed_rows || 0);
+      const total = Number(job.total_rows || 0);
+      const rowText = total ? `Rows: ${processed.toLocaleString()} / ${total.toLocaleString()}` : `Rows: ${processed.toLocaleString()}`;
+
+      if (job.status === 'success') {
+        clearInterval(pollTimer);
+        setState('success', 'MODULE 2B completed', summaryText(job), 'Completed', 100);
+        if (download && job.download_url) {
+          download.href = job.download_url;
+          download.classList.remove('disabled');
+        }
+        if (log) log.textContent = `Completed.\n${summaryText(job)}\nDownload: ${job.output_filename || ''}`;
+        return;
+      }
+
+      if (job.status === 'failed') {
+        clearInterval(pollTimer);
+        setState('error', 'MODULE 2B failed', job.error || '處理失敗，請查看 Render log。', 'Error', 100);
+        if (log) log.textContent = `Error: ${job.error || 'Unknown error'}\nStep: ${job.step || ''}`;
+        return;
+      }
+
+      setState('running', 'MODULE 2B processing', `${job.step || 'Processing'} · ${rowText}`, job.last_heartbeat || 'Running', progress);
+      if (log) log.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nLast heartbeat: ${job.last_heartbeat || ''}`;
+    } catch (err) {
+      clearInterval(pollTimer);
+      setState('error', 'MODULE 2B failed', err.message || '狀態查詢失敗', 'Error', 100);
+      if (log) log.textContent = `Polling error: ${err.message || err}`;
+    }
+  }
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (pollTimer) clearInterval(pollTimer);
+    if (download) {
+      download.href = '#';
+      download.classList.add('disabled');
+    }
+    setState('running', 'MODULE 2B queued', 'Uploading Raw Material Bulk Template...', 'Queued', 3);
+    if (log) log.textContent = `Uploading and creating MODULE 2B job...\n${module2bStep1SourceText ? module2bStep1SourceText.textContent : ''}\n${module2bTotalUsageSourceText ? module2bTotalUsageSourceText.textContent : ''}`;
+
+    try {
+      const fd = new FormData(form);
+      const res = await fetch('/module2b/raw-material-bulk-job', { method: 'POST', body: fd });
+      const data = await readJsonOrText(res);
+      const jobId = data.job_id;
+      if (!jobId) throw new Error('未取得 job_id');
+      setState('running', 'MODULE 2B processing', `Job created: ${jobId}`, 'Running', 5);
+      await poll(jobId);
+      pollTimer = setInterval(() => poll(jobId), 1500);
+    } catch (err) {
+      setState('error', 'MODULE 2B failed', err.message || '建立任務失敗', 'Error', 100);
+      if (log) log.textContent = `Error: ${err.message || err}`;
+    }
+  });
+
+  refreshModule2bSources();
 })();
 
 </script>

@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_standard_bom_total_usage_file
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_standard_bom_total_usage_file, generate_raw_material_bulk_from_standard_total_usage_zip
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, apply_ccl_factors_to_raw_material_bulk_package, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -53,6 +53,7 @@ print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
 MODULE2A_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+MODULE2B_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 MODULE2A_JOBS: Dict[str, Dict[str, Any]] = {}
 MODULE2A_JOB_DIR = OUTPUT_DIR / "module2a_jobs"
 MODULE2A_JOB_DIR.mkdir(parents=True, exist_ok=True)
@@ -197,6 +198,84 @@ def _run_module2a_total_usage_job(
         _set_module2a_job(
             job_id,
             status="failed",
+            step="Failed",
+            progress=100,
+            error=str(exc),
+            traceback=traceback.format_exc(),
+            completed_at=_cmp_now_iso(),
+        )
+
+
+def _run_module2b_raw_bulk_job(
+    job_id: str,
+    total_usage_path: Path,
+    template_path: Path,
+    output_dir: Path,
+    token: str,
+    step1_path: Path,
+    step1_source: Dict[str, str],
+) -> None:
+    global MODULE2_RAW_MATERIAL_BULK_PATH
+    started_at = _cmp_now_iso()
+
+    def progress_callback(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
+        _set_module2a_job(
+            job_id,
+            status="running",
+            module="2B",
+            step=step,
+            processed_rows=int(processed or 0),
+            total_rows=int(total or 0),
+            progress=int(max(0, min(100, progress or 0))),
+            **extra,
+        )
+
+    try:
+        _set_module2a_job(
+            job_id,
+            status="running",
+            module="2B",
+            step="Queued",
+            progress=1,
+            processed_rows=0,
+            total_rows=0,
+            started_at=started_at,
+            module1_step1_source=step1_source,
+            module2a_total_usage_filename=total_usage_path.name,
+        )
+        summary = generate_raw_material_bulk_from_standard_total_usage_zip(
+            standard_total_usage_path=total_usage_path,
+            raw_material_template_path=template_path,
+            output_dir=output_dir,
+            token=token,
+            step1_output_path=step1_path,
+            progress_callback=progress_callback,
+        )
+        output_path = output_dir / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
+        if output_path.exists():
+            MODULE2_RAW_MATERIAL_BULK_PATH = output_path
+        summary["module1_step1_source_filename"] = step1_path.name
+        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
+        summary["module1_step1_source"] = step1_source
+        _set_module2a_job(
+            job_id,
+            status="success",
+            module="2B",
+            step="Completed",
+            progress=100,
+            processed_rows=int(summary.get("activity_rows", 0) or 0),
+            total_rows=int(summary.get("activity_rows", 0) or 0),
+            completed_at=_cmp_now_iso(),
+            output_filename=output_path.name,
+            download_url=f"/download/{output_path.name}",
+            summary=summary,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        _set_module2a_job(
+            job_id,
+            status="failed",
+            module="2B",
             step="Failed",
             progress=100,
             error=str(exc),
@@ -2265,6 +2344,84 @@ def module2_standard_bom_total_usage_source():
         "mtime": _cmp_mtime_iso(path),
         **meta,
     }
+
+
+@app.get("/module2b/source-info")
+def module2b_source_info():
+    step1_path = _find_latest_module1_step1_output()
+    total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
+    if not step1_path:
+        return JSONResponse({"ok": False, "message": "尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。"}, status_code=404)
+    if not total_usage_path.exists():
+        return JSONResponse({"ok": False, "message": "尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。"}, status_code=404)
+    step1_info = {
+        "filename": step1_path.name,
+        "modified_at": _cmp_mtime_iso(step1_path),
+        "download_url": f"/download/{step1_path.name}",
+        **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+    }
+    total_usage_info = {
+        "filename": total_usage_path.name,
+        "modified_at": _cmp_mtime_iso(total_usage_path),
+        "download_url": f"/download/{total_usage_path.name}",
+    }
+    return {"ok": True, "module1_step1": step1_info, "module2a_total_usage": total_usage_info}
+
+
+@app.post("/module2b/raw-material-bulk-job")
+async def module2b_raw_material_bulk_job(request: Request):
+    try:
+        form = await request.form()
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": f"無法讀取上傳表單：{exc}"}, status_code=400)
+
+    template_file = form.get("module2b_template_file") or form.get("template_file")
+    if not template_file or not getattr(template_file, "filename", None):
+        return JSONResponse({"ok": False, "message": "請上傳 Raw Material Bulk Template。"}, status_code=400)
+    filename = str(getattr(template_file, "filename", "") or "")
+    if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "Raw Material Bulk Template 請上傳 Excel 檔案。"}, status_code=400)
+
+    step1_path = _find_latest_module1_step1_output()
+    if step1_path is None:
+        return JSONResponse({"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"}, status_code=400)
+    total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
+    if not total_usage_path.exists():
+        return JSONResponse({"ok": False, "message": "尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。"}, status_code=400)
+
+    token = uuid.uuid4().hex[:10]
+    job_id = token
+    template_path = UPLOAD_DIR / f"module2b_raw_material_template_{token}_{Path(filename).name}"
+    template_path.write_bytes(await template_file.read())
+    step1_source = {
+        "filename": step1_path.name,
+        "modified_at": _cmp_mtime_iso(step1_path),
+        "download_url": f"/download/{step1_path.name}",
+        **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+    }
+    _set_module2a_job(
+        job_id,
+        status="queued",
+        module="2B",
+        step="Queued",
+        progress=1,
+        processed_rows=0,
+        total_rows=0,
+        module1_step1_source=step1_source,
+        module2a_total_usage_filename=total_usage_path.name,
+    )
+    MODULE2B_EXECUTOR.submit(
+        _run_module2b_raw_bulk_job,
+        job_id,
+        total_usage_path,
+        template_path,
+        OUTPUT_DIR,
+        token,
+        step1_path,
+        step1_source,
+    )
+    return {"ok": True, "job_id": job_id, "status_url": f"/module2/bom-job/{job_id}"}
 
 
 # =========================================================
