@@ -1563,6 +1563,8 @@ async function refreshModule3RawBulkSource() {
   }
 }
 
+window.cmpRefreshModule3RawBulkSource = refreshModule3RawBulkSource;
+
 function startModule3CclPolling(jobId, startTime) {
   clearInterval(module3CclPollTimer);
   module3CclPollTimer = setInterval(async () => {
@@ -2365,6 +2367,9 @@ ruleForm.onsubmit = async (e) => {
           download.classList.remove('disabled');
         }
         if (log) log.textContent = `Completed.\n${summaryText(job)}\nDownload: ${job.output_filename || ''}`;
+        if (typeof window.cmpRefreshModule2bSources === 'function') {
+          await window.cmpRefreshModule2bSources();
+        }
         return;
       }
 
@@ -2467,11 +2472,12 @@ ruleForm.onsubmit = async (e) => {
           : `來源：Module 2A 標準BOM表總用量｜檔案：${totalUsage.filename || ''}｜建立時間：${totalUsage.modified_at || ''}`;
       }
     } catch (err) {
-      const msg = err.message || '尚未找到 Module 2B 必要來源檔。';
-      if (module2bStep1SourceText) module2bStep1SourceText.textContent = msg;
-      if (module2bTotalUsageSourceText) module2bTotalUsageSourceText.textContent = msg;
+      if (module2bStep1SourceText) module2bStep1SourceText.textContent = '無法更新 Module 1 Step 1 最新產出資訊，請重新整理頁面或查看後端 log。';
+      if (module2bTotalUsageSourceText) module2bTotalUsageSourceText.textContent = '無法更新 Module 2A 標準BOM表總用量來源，請重新整理頁面或查看後端 log。';
     }
   }
+
+  window.cmpRefreshModule2bSources = refreshModule2bSources;
 
   function summaryText(job) {
     const s = job.summary || {};
@@ -2501,6 +2507,13 @@ ruleForm.onsubmit = async (e) => {
           download.classList.remove('disabled');
         }
         if (log) log.textContent = `Completed.\n${summaryText(job)}\nDownload: ${job.output_filename || ''}`;
+        await refreshModule2bSources();
+        if (typeof window.cmpRefreshModule2cSources === 'function') {
+          await window.cmpRefreshModule2cSources();
+        }
+        if (typeof window.cmpRefreshModule3RawBulkSource === 'function') {
+          await window.cmpRefreshModule3RawBulkSource();
+        }
         return;
       }
 
@@ -2604,11 +2617,12 @@ ruleForm.onsubmit = async (e) => {
           : `來源：Module 2B Raw Material Bulk ZIP｜檔案：${rawBulk.filename || ''}｜建立時間：${rawBulk.modified_at || ''}`;
       }
     } catch (err) {
-      const msg = err.message || '尚未找到 Module 2C 必要來源檔。';
-      if (module2cStep1SourceText) module2cStep1SourceText.textContent = msg;
-      if (module2cRawBulkSourceText) module2cRawBulkSourceText.textContent = msg;
+      if (module2cStep1SourceText) module2cStep1SourceText.textContent = '無法更新 Module 1 Step 1 最新產出資訊，請重新整理頁面或查看後端 log。';
+      if (module2cRawBulkSourceText) module2cRawBulkSourceText.textContent = '無法更新 Module 2B Raw Material Bulk ZIP 來源，請重新整理頁面或查看後端 log。';
     }
   }
+
+  window.cmpRefreshModule2cSources = refreshModule2cSources;
 
   function summaryText(job) {
     const s = job.summary || {};
@@ -2640,6 +2654,9 @@ ruleForm.onsubmit = async (e) => {
         }
         if (log) log.textContent = `Completed.\n${summaryText(job)}\nDownload: ${job.output_filename || ''}`;
         await refreshModule2cSources();
+        if (typeof window.cmpRefreshModule3RawBulkSource === 'function') {
+          await window.cmpRefreshModule3RawBulkSource();
+        }
         return;
       }
 
