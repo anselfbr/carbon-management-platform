@@ -2935,6 +2935,49 @@ def _xml_escape_attr(value: Any) -> str:
     return sx.escape(text, {'"': '&quot;'})
 
 
+
+
+_XML_NS_ATTR_PREFIXES = {
+    "http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac": "x14ac",
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships": "r",
+    "http://www.w3.org/XML/1998/namespace": "xml",
+}
+
+def _xml_attr_name(name: Any) -> str | None:
+    """Return a safe serialized XML attribute name.
+
+    ElementTree stores namespaced attributes as ``{namespace}local``.  If those
+    keys are written manually, Excel receives invalid XML like
+    ``{http://...}dyDescent`` and cannot open the workbook.  Keep only known
+    worksheet-level namespaces that are already declared on the worksheet root.
+    Unknown namespaced attributes are non-critical for data rows, so omit them
+    rather than generating a corrupt XLSX.
+    """
+    text = str(name or "")
+    if not text:
+        return None
+    if text.startswith("{") and "}" in text:
+        ns_uri, local = text[1:].split("}", 1)
+        prefix = _XML_NS_ATTR_PREFIXES.get(ns_uri)
+        if not prefix or not local:
+            return None
+        return f"{prefix}:{local}"
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_.:-]*$", text):
+        return text
+    return None
+
+def _xml_attrs_text(attrs: dict[Any, Any]) -> str:
+    parts = []
+    for k, v in attrs.items():
+        if v is None:
+            continue
+        safe_name = _xml_attr_name(k)
+        if not safe_name:
+            continue
+        parts.append(f'{safe_name}="{_xml_escape_attr(v)}"')
+    return " ".join(parts)
+
+
 def _is_blank_xlsx_value(value: Any) -> bool:
     if value is None:
         return True
@@ -3076,7 +3119,7 @@ def _translate_formula_text(formula: str, origin: str, dest: str) -> str:
 def _build_xlsx_row_xml(row_idx: int, values: list[Any], width: int, row_attrs: dict[str, str], cell_templates: dict[int, dict[str, Any]]) -> bytes:
     attrs = {"r": str(row_idx)}
     attrs.update(row_attrs)
-    row_attr_text = " ".join(f'{k}="{_xml_escape_attr(v)}"' for k, v in attrs.items() if v is not None)
+    row_attr_text = _xml_attrs_text(attrs)
     parts: list[str] = [f"<row {row_attr_text}>"]
     for col_idx in range(1, int(width) + 1):
         value = values[col_idx - 1] if col_idx - 1 < len(values) else None
@@ -3092,7 +3135,7 @@ def _build_xlsx_row_xml(row_idx: int, values: list[Any], width: int, row_attrs: 
                     cell_attrs[k] = v
             if cell_type and cell_type != "n":
                 cell_attrs["t"] = cell_type
-            attr_text = " ".join(f'{k}="{_xml_escape_attr(v)}"' for k, v in cell_attrs.items())
+            attr_text = _xml_attrs_text(cell_attrs)
             parts.append(f"<c {attr_text}>{body}</c>")
             continue
         formula = tmpl.get("formula")
@@ -3101,9 +3144,9 @@ def _build_xlsx_row_xml(row_idx: int, values: list[Any], width: int, row_attrs: 
             for k, v in tmpl_attrs.items():
                 if k not in {"t"}:
                     cell_attrs[k] = v
-            attr_text = " ".join(f'{k}="{_xml_escape_attr(v)}"' for k, v in cell_attrs.items())
+            attr_text = _xml_attrs_text(cell_attrs)
             f_attrs = {k: v for k, v in (tmpl.get("formula_attrs") or {}).items() if k not in {"ref", "si", "t"}}
-            f_attr_text = (" " + " ".join(f'{k}="{_xml_escape_attr(v)}"' for k, v in f_attrs.items())) if f_attrs else ""
+            f_attr_text = (" " + _xml_attrs_text(f_attrs)) if f_attrs else ""
             formula_text = _translate_formula_text(str(formula), origin=_xlsx_cell_ref(DATA_START_ROW, col_idx), dest=cell_ref)
             parts.append(f"<c {attr_text}><f{f_attr_text}>{_xml_escape_text(formula_text)}</f></c>")
     parts.append("</row>")
