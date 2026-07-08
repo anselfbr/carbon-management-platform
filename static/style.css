@@ -2552,16 +2552,3 @@ select:focus {
   color: #475569;
   font-size: 0.92rem;
 }
-
-.form-grid {
-  display: grid;
-  gap: 14px;
-}
-.form-grid.two-col {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-@media (max-width: 720px) {
-  .form-grid.two-col {
-    grid-template-columns: 1fr;
-  }
-}
