@@ -352,20 +352,15 @@
             </div>
 
             <div class="module3-source-card" id="bulkStep1SourceCard">
-              <b>M1 Step1 自動引用狀態</b>
-              <p id="bulkStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+              <b>引用Module 1 step1 年度產品產量與分類結果</b>
+              <p id="bulkStep1SourceText">來源：Module 1 step1 年度產品產量與分類結果檢查中...</p>
             </div>
             <div class="module3-source-card" id="bulkM2aRollupSourceCard">
-              <b>M2A 半品工時來源狀態</b>
-              <p id="bulkM2aRollupSourceText">工時來源選擇「包含半品工時」時才需要 Module 2A Working Hour Roll-up。</p>
+              <b>引用Module 2A working_hour_rollup</b>
+              <p id="bulkM2aRollupSourceText">工時來源選擇「包含半品工時」時才需要 Module 2A working_hour_rollup。</p>
             </div>
 
             <form id="bulkForm" class="form-panel">
-              <div class="module3-source-card">
-                <b>Module 1 Step 1 Output</b>
-                <p>此檔案已改為系統自動抓取最新產出，不需再手動上傳。若狀態欄顯示尚未找到，請先完成 M1 Step1。</p>
-              </div>
-
               <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
               <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
@@ -389,7 +384,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="bulkStatusTitle">Ready for batch formatting</b>
-                  <p id="bulkStatusText">系統會自動引用最新 M1 Step1 產出；請上傳 Bulk Template 以產出格式化檔案。</p>
+                  <p id="bulkStatusText">系統會自動引用 Module 1 step1 年度產品產量與分類結果；若選擇包含半品工時，會引用 Module 2A working_hour_rollup。請上傳 Bulk Template 以產出格式化檔案。</p>
                 </div>
                 <span id="bulkStatusTime" class="status-time">Idle</span>
               </div>
@@ -478,14 +473,14 @@
             <div class="section-title">
               <div>
                 <h2 data-i18n="module3CclZoneTitle">A. CCLibrary Emission Factor Database</h2>
-                <p data-i18n="module3CclZoneLead">Use the latest Raw Material Bulk from Module 2 and the Lite-On CCL mapping table to import CCL Items and emission factors.</p>
+                <p data-i18n="module3CclZoneLead">Use Module 2C Raw Material Bulk and the Lite-On CCL mapping table to import CCL Items and emission factors.</p>
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
             <form id="module3CclForm" class="module3-action-panel" enctype="multipart/form-data">
               <div id="module3RawBulkSource" class="module3-source-card">
-                <b>Raw Material Activity Data</b>
-                <p id="module3RawBulkSourceText">來源：Module 2 最新產出檔案檢查中...</p>
+                <b>引用 Module 2C Raw Material Bulk</b>
+                <p id="module3RawBulkSourceText">來源：Module 2C Raw Material Bulk 檢查中...</p>
               </div>
 
               <label data-i18n="module3UploadCclMapping">上傳光寶 CCL 係數組配表</label>
@@ -1689,12 +1684,12 @@ async function refreshModule3RawBulkSource() {
     const data = await readJsonOrThrow(res);
     const filename = data.filename || 'raw material bulk';
     const typeText = data.source_type === 'zip_package' ? 'ZIP 原物料 Bulk 包' : '原物料 Bulk 檔';
-    const sourceLabel = data.source_label || 'Module 2 最新原物料 Bulk';
+    const sourceLabel = 'Module 2C Raw Material Bulk';
     const templateTime = data.final_template_modified_at ? `｜Template 時間：${data.final_template_modified_at}` : '';
     const finalTemplate = data.final_template_filename ? `｜最終套版 Template：${data.final_template_filename}${templateTime}` : '｜尚未找到最終套版 Template';
     module3RawBulkSourceText.textContent = `來源：${sourceLabel}｜類型：${typeText}｜檔案：${filename}${cmpSourceMetaText(data)}${finalTemplate}`;
   } catch (err) {
-    module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
+    module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2C Raw Material Bulk，請先完成 Module 2C。';
   }
 }
 
@@ -2363,23 +2358,23 @@ async function refreshBulkStep2Sources() {
     const rollup = data.module2a_working_hour_rollup || {};
     if (bulkStep1SourceText) {
       bulkStep1SourceText.textContent = step1.ok === false
-        ? (step1.message || '尚未找到 Module 1 Step 1 最新產出。')
-        : `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}${step1.modified_at ? `｜${cmpBuildTimeText(step1.modified_at)}` : ''}`;
+        ? (step1.message || '尚未找到 Module 1 step1 年度產品產量與分類結果。')
+        : `來源：Module 1 step1 年度產品產量與分類結果｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}${step1.modified_at ? `｜${cmpBuildTimeText(step1.modified_at)}` : ''}`;
     }
     if (bulkM2aRollupSourceText) {
       if (bulkStep2UsesSemiHours()) {
         bulkM2aRollupSourceText.textContent = rollup.ok === false
-          ? (rollup.message || '尚未找到 Module 2A Working Hour Roll-up。請先完成 Module 2A。')
-          : `來源：Module 2A Working Hour Roll-up｜檔案：${rollup.filename || ''}${rollup.modified_at ? `｜${cmpBuildTimeText(rollup.modified_at)}` : ''}`;
+          ? (rollup.message || '尚未找到 Module 2A working_hour_rollup。請先完成 Module 2A。')
+          : `來源：Module 2A working_hour_rollup｜檔案：${rollup.filename || ''}${rollup.modified_at ? `｜${cmpBuildTimeText(rollup.modified_at)}` : ''}`;
       } else {
         bulkM2aRollupSourceText.textContent = rollup.ok === false
-          ? '目前工時來源為 Direct Working Hour；M2A Working Hour Roll-up 非必要。'
-          : `目前工時來源為 Direct Working Hour；M2A 檔案非必要，但已可用：${rollup.filename || ''}${rollup.modified_at ? `｜${cmpBuildTimeText(rollup.modified_at)}` : ''}`;
+          ? '目前工時來源為 Direct Working Hour；Module 2A working_hour_rollup 非必要。'
+          : `目前工時來源為 Direct Working Hour；Module 2A working_hour_rollup 非必要，但已可用：${rollup.filename || ''}${rollup.modified_at ? `｜${cmpBuildTimeText(rollup.modified_at)}` : ''}`;
       }
     }
   } catch (err) {
-    if (bulkStep1SourceText) bulkStep1SourceText.textContent = '無法更新 Module 1 Step 1 自動引用狀態，請重新整理或查看後端 log。';
-    if (bulkM2aRollupSourceText) bulkM2aRollupSourceText.textContent = '無法更新 Module 2A Working Hour Roll-up 狀態，請重新整理或查看後端 log。';
+    if (bulkStep1SourceText) bulkStep1SourceText.textContent = '無法更新 Module 1 step1 年度產品產量與分類結果引用狀態，請重新整理或查看後端 log。';
+    if (bulkM2aRollupSourceText) bulkM2aRollupSourceText.textContent = '無法更新 Module 2A working_hour_rollup 狀態，請重新整理或查看後端 log。';
   }
 }
 
@@ -2388,7 +2383,7 @@ window.cmpRefreshBulkStep2Sources = refreshBulkStep2Sources;
 if (bulkWorkingHourSource) {
   bulkWorkingHourSource.addEventListener('change', async () => {
     if (bulkWorkingHourSource.value === 'include_semi') {
-      bulkStatusText.textContent = '工時來源：包含半品工時。系統會自動引用 M2A Working Hour Roll-up。';
+      bulkStatusText.textContent = '工時來源：包含半品工時。系統會自動引用 Module 2A working_hour_rollup。';
     } else {
       bulkStatusText.textContent = cmpT('directWorkingHourEnabled', 'Direct Working Hour Enabled.');
     }
@@ -2409,9 +2404,9 @@ bulkForm.addEventListener('submit', async (e) => {
   const fd = new FormData(bulkForm);
   const workingHourSource = bulkWorkingHourSource ? bulkWorkingHourSource.value : 'direct';
   if (workingHourSource === 'include_semi') {
-    bulkStatusText.textContent = 'Checking latest Module 2A Working Hour Roll-up for semi-finished working hours.';
+    bulkStatusText.textContent = 'Checking latest Module 2A working_hour_rollup for semi-finished working hours.';
   } else {
-    bulkStatusText.textContent = 'Checking latest Module 1 Step 1 output. Step 1 output is auto-fetched; only Bulk Template upload is required.';
+    bulkStatusText.textContent = 'Checking latest Module 1 step1 年度產品產量與分類結果. Step1 output is auto-fetched; only Bulk Template upload is required.';
   }
 
   try {

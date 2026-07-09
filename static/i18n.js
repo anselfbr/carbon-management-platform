@@ -89,8 +89,8 @@
         "zh": "A. CCL係數資料庫"
     },
     "module3CclZoneLead": {
-        "en": "Use the latest Raw Material Bulk from Module 2 and the Lite-On CCL mapping table to import CCL Items and emission factors.",
-        "zh": "直接使用 Module 2 最新產出的 Raw Material Bulk，並依光寶 CCL 係數組配表帶入 CCL Item 與碳係數。"
+        "en": "Use Module 2C Raw Material Bulk and the Lite-On CCL mapping table to import CCL Items and emission factors.",
+        "zh": "直接使用 Module 2C Raw Material Bulk，並依光寶 CCL 係數組配表帶入 CCL Item 與碳係數。"
     },
     "backToModule3Menu": {
         "en": "Back to Module 3 Menu",

@@ -191,10 +191,10 @@ def _run_module2a_total_usage_job(
         if output_path.exists():
             shutil.copy2(output_path, MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH)
 
-        summary["module2a_working_hour_rollup_policy"] = "M2A now creates working_hour_rollup_latest.xlsx for M1 Step2 only when a latest Module 1 Step1 output is available. M1 Step2 requires this file only when Working Hour Source = Include Semi-finished Working Hour."
+        summary["module2a_working_hour_rollup_policy"] = "Module 2A creates working_hour_rollup_latest.xlsx for M1 Step2 when Module 1 step1 annual output/classification is available. M1 Step2 requires this file only when Working Hour Source = Include Semi-finished Working Hour."
         summary["working_hour_rollup_required_by_step2"] = False
         summary["working_hour_rollup_status"] = "skipped"
-        summary["working_hour_rollup_message"] = "未找到 Module 1 Step 1 最新產出，因此僅產出標準BOM表總用量；M1 Step2 若選擇 Direct Working Hour 不需要此檔。"
+        summary["working_hour_rollup_message"] = "未找到 Module 1 step1 年度產品產量與分類結果，因此僅產出標準BOM表總用量；M1 Step2 若選擇 Direct Working Hour 不需要此檔。"
 
         resolved_step1_path = Path(step1_source_path) if step1_source_path else _find_latest_module1_step1_output()
         if resolved_step1_path and resolved_step1_path.exists():
@@ -2058,7 +2058,7 @@ async def process(request: Request):
 
 # =========================================================
 # Step 2 · Batch Data Formatting
-# Step1 Output + Bulk Template -> Formatted Product Activity Bulk
+# Module 1 step1 annual output/classification + Bulk Template -> Formatted Product Activity Bulk
 # =========================================================
 @app.post("/generate-bulk-file")
 async def generate_bulk_file(
@@ -2084,7 +2084,7 @@ async def generate_bulk_file(
         if step1_path is None or not step1_path.exists():
             return JSONResponse({
                 "ok": False,
-                "message": "尚未找到 Module 1 Step 1 最新產出。請先完成 Module 1 Step 1，或於 M1 Step2 手動上傳 Step 1 Output。",
+                "message": "尚未找到 Module 1 step1 年度產品產量與分類結果。請先完成 Module 1 Step 1。",
             }, status_code=400)
 
     template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
@@ -2097,7 +2097,7 @@ async def generate_bulk_file(
         if not LATEST_WORKING_HOUR_ROLLUP_PATH.exists():
             return JSONResponse({
                 "ok": False,
-                "message": "選擇『包含半品工時』時需要 Module 2A 產出的 Working Hour Roll-up。請先完成 Module 2A；若只使用直接工時，請將 Working Hour Source 改為 Direct Working Hour。"
+                "message": "選擇『包含半品工時』時需要 Module 2A working_hour_rollup。請先完成 Module 2A；若只使用直接工時，請將 Working Hour Source 改為 Direct Working Hour。"
             }, status_code=400)
         working_hour_rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH
         bom_structure_path = LATEST_BOM_STRUCTURE_PATH if LATEST_BOM_STRUCTURE_PATH.exists() else None
@@ -2117,7 +2117,7 @@ async def generate_bulk_file(
         summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}" if step1_path else ""
         summary["module2a_working_hour_rollup_used"] = bool(working_hour_rollup_path and Path(working_hour_rollup_path).exists())
         summary["module2a_working_hour_rollup_filename"] = Path(working_hour_rollup_path).name if working_hour_rollup_path else ""
-        summary["working_hour_source_rule"] = "M2A Working Hour Roll-up is required only when Working Hour Source = Include Semi-finished Working Hour."
+        summary["working_hour_source_rule"] = "Module 2A working_hour_rollup is required only when Working Hour Source = Include Semi-finished Working Hour."
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -2251,7 +2251,7 @@ def _source_info_for_existing_path(path: Path | None, label: str, missing_messag
 def module1_step2_source_info():
     """Source status for M1 Step2 auto-fetch.
 
-    Step2 always needs Module 1 Step1 output. Module 2A Working Hour Roll-up is
+    Step2 always needs Module 1 step1 annual output/classification. Module 2A working_hour_rollup is
     required only when users select Include Semi-finished Working Hour.
     """
     step1_path = _find_latest_module1_step1_output()
@@ -2263,8 +2263,8 @@ def module1_step2_source_info():
         "ready_include_semi": bool(step1_path and step1_path.exists() and rollup_path and rollup_path.exists()),
         "module1_step1": _source_info_for_existing_path(
             step1_path,
-            "Module 1 Step 1",
-            "尚未找到 Module 1 Step 1 最新產出。請先完成 Module 1 Step 1，或在 Step2 手動上傳 Step 1 Output。",
+            "Module 1 step1 年度產品產量與分類結果",
+            "尚未找到 Module 1 step1 年度產品產量與分類結果。請先完成 Module 1 Step 1。",
         ),
         "module2a_standard_bom_total_usage": _source_info_for_existing_path(
             total_usage_path,
@@ -2273,10 +2273,10 @@ def module1_step2_source_info():
         ),
         "module2a_working_hour_rollup": _source_info_for_existing_path(
             rollup_path,
-            "Module 2A Working Hour Roll-up",
-            "尚未找到 Module 2A Working Hour Roll-up。M1 Step2 選擇『包含半品工時』時才需要；Direct Working Hour 不需要此檔。",
+            "Module 2A working_hour_rollup",
+            "尚未找到 Module 2A working_hour_rollup。M1 Step2 選擇『包含半品工時』時才需要；Direct Working Hour 不需要此檔。",
         ),
-        "rule": "M2A files are required by M1 Step2 only when Working Hour Source = Include Semi-finished Working Hour.",
+        "rule": "M1 Step2 always references Module 1 step1 annual output/classification; Module 2A working_hour_rollup is required only when Working Hour Source = Include Semi-finished Working Hour.",
     }
 
 def _find_latest_module2c_supplier_mapped_raw_material_bulk_zip() -> Path | None:
@@ -2295,7 +2295,7 @@ def _find_latest_module2c_supplier_mapped_raw_material_bulk_zip() -> Path | None
 def _module2_raw_bulk_source_label(path: Path) -> str:
     name = path.name.lower()
     if path == MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH or "supplier_mapped" in name:
-        return "Module 2C Supplier-mapped Raw Material Bulk ZIP"
+        return "Module 2C Raw Material Bulk"
     if path == MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH or name.startswith("module2b_") or "raw_material_activity_data_bulk_by_site" in name:
         return "Module 2B Raw Material Bulk ZIP"
     return "Module 2 Raw Material Bulk"
@@ -2314,18 +2314,23 @@ def _find_latest_module2_raw_material_bulk() -> Path | None:
     """Return the latest Module 2 raw material bulk package/file for Module 3.
 
     Preference order:
-    1. Module 2C supplier-mapped Raw Material Bulk ZIP
+    1. Module 2C Raw Material Bulk ZIP
     2. Module 2B Raw Material Bulk ZIP
     3. Legacy Module 2 raw material bulk outputs
+
+    M3 should always prefer Module 2C even if an older Module 2B path is cached
+    in memory from a previous source-status refresh.
     """
     global MODULE2_RAW_MATERIAL_BULK_PATH
-    if MODULE2_RAW_MATERIAL_BULK_PATH and MODULE2_RAW_MATERIAL_BULK_PATH.exists():
-        return MODULE2_RAW_MATERIAL_BULK_PATH
-
     module2c_zip = _find_latest_module2c_supplier_mapped_raw_material_bulk_zip()
     if module2c_zip:
         MODULE2_RAW_MATERIAL_BULK_PATH = module2c_zip
         return module2c_zip
+
+    if MODULE2_RAW_MATERIAL_BULK_PATH and MODULE2_RAW_MATERIAL_BULK_PATH.exists():
+        cached_stage = _module2_raw_bulk_source_stage(MODULE2_RAW_MATERIAL_BULK_PATH)
+        if cached_stage in {"module2b", "module2"}:
+            return MODULE2_RAW_MATERIAL_BULK_PATH
 
     module2b_zip = _find_latest_module2b_raw_material_bulk_zip()
     if module2b_zip:
@@ -2394,7 +2399,7 @@ def module3_raw_material_bulk_source():
     if not raw_path:
         return {
             "ok": False,
-            "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。",
+            "message": "尚未找到 Module 2C Raw Material Bulk，請先完成 Module 2C。",
         }
     stat = raw_path.stat()
     raw_template_path = _find_latest_raw_material_bulk_template()
@@ -2429,7 +2434,7 @@ async def module3_apply_ccl_factors_job(
     raw_path = _find_latest_module2_raw_material_bulk()
     if not raw_path:
         return JSONResponse(
-            {"ok": False, "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。"},
+            {"ok": False, "message": "尚未找到 Module 2C Raw Material Bulk，請先完成 Module 2C。"},
             status_code=400,
         )
     raw_template_path = _find_latest_raw_material_bulk_template()
@@ -2490,7 +2495,7 @@ async def module3_apply_ccl_factors(
     raw_path = _find_latest_module2_raw_material_bulk()
     if not raw_path:
         return JSONResponse(
-            {"ok": False, "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。"},
+            {"ok": False, "message": "尚未找到 Module 2C Raw Material Bulk，請先完成 Module 2C。"},
             status_code=400,
         )
     raw_template_path = _find_latest_raw_material_bulk_template()
