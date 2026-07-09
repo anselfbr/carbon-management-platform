@@ -396,8 +396,8 @@
         "zh": "下載 Module 1A 輸出 Excel"
     },
     "step1WorkOrderProcessing": {
-        "en": "Module 1A · Work Order Processing",
-        "zh": "Module 1A · 工單處理"
+        "en": "Work Order Processing",
+        "zh": "工單處理"
     },
     "uploadSapProductionWorkOrderFiles": {
         "en": "Upload one or multiple SAP production work order files.",
@@ -408,8 +408,8 @@
         "zh": "Module 1A"
     },
     "step2BatchDataFormatting": {
-        "en": "Module 1B · Batch Data Formatting",
-        "zh": "Module 1B · 批次資料格式化"
+        "en": "Batch Data Formatting",
+        "zh": "批次資料格式化"
     },
     "convertStep1OutputBulkTemplate": {
         "en": "Convert Module 1A output and batch file template into a standardized batch file.",
