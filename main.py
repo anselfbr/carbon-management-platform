@@ -147,6 +147,7 @@ def _run_module2a_total_usage_job(
     bom_date: str,
     step1_source_filename: str = "",
     step1_source_modified_at: str = "",
+    step1_source_path: Path | None = None,
 ) -> None:
     started_at = _cmp_now_iso()
 
@@ -160,6 +161,11 @@ def _run_module2a_total_usage_job(
             progress=int(max(0, min(100, progress or 0))),
             **extra,
         )
+
+    def standard_progress_callback(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
+        # Keep room after the total-usage workbook for BOM Structure + Working Hour Roll-up.
+        scaled_progress = 2 + int(max(0, min(100, progress or 0)) * 0.83)
+        progress_callback(step, processed=processed, total=total, progress=min(85, scaled_progress), **extra)
 
     try:
         _set_module2a_job(
@@ -179,10 +185,79 @@ def _run_module2a_total_usage_job(
             bom_date=bom_date,
             source_filename=step1_source_filename,
             source_modified_at=step1_source_modified_at,
-            progress_callback=progress_callback,
+            progress_callback=standard_progress_callback,
         )
         if output_path.exists():
             shutil.copy2(output_path, MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH)
+
+        summary["module2a_working_hour_rollup_policy"] = "M2A now creates working_hour_rollup_latest.xlsx for M1 Step2 only when a latest Module 1 Step1 output is available. M1 Step2 requires this file only when Working Hour Source = Include Semi-finished Working Hour."
+        summary["working_hour_rollup_required_by_step2"] = False
+        summary["working_hour_rollup_status"] = "skipped"
+        summary["working_hour_rollup_message"] = "未找到 Module 1 Step 1 最新產出，因此僅產出標準BOM表總用量；M1 Step2 若選擇 Direct Working Hour 不需要此檔。"
+
+        resolved_step1_path = Path(step1_source_path) if step1_source_path else _find_latest_module1_step1_output()
+        if resolved_step1_path and resolved_step1_path.exists():
+            try:
+                bom_structure_output_path = OUTPUT_DIR / f"bom_structure_{job_id}.xlsx"
+                working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{job_id}.xlsx"
+
+                progress_callback(
+                    "Exporting BOM Structure for working-hour roll-up",
+                    processed=int(summary.get("standard_bom_total_usage_rows", 0) or 0),
+                    total=int(summary.get("standard_bom_total_usage_rows", 0) or 0),
+                    progress=88,
+                )
+                bom_structure_summary = export_bom_structure_file(
+                    bom_path=bom_paths,
+                    output_path=bom_structure_output_path,
+                    mapping=None,
+                )
+                if bom_structure_output_path.exists():
+                    shutil.copy2(bom_structure_output_path, LATEST_BOM_STRUCTURE_PATH)
+                summary["bom_structure_filename"] = bom_structure_output_path.name
+                summary["bom_structure_download_url"] = f"/download/{bom_structure_output_path.name}"
+                summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name if LATEST_BOM_STRUCTURE_PATH.exists() else ""
+                summary["bom_structure_latest_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}" if LATEST_BOM_STRUCTURE_PATH.exists() else ""
+                summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0) or 0)
+
+                progress_callback(
+                    "Generating Working Hour Roll-up",
+                    processed=0,
+                    total=0,
+                    progress=94,
+                )
+                rollup_summary = generate_working_hour_rollup_file(
+                    step1_output_path=resolved_step1_path,
+                    bom_structure_path=bom_structure_output_path,
+                    output_path=working_hour_rollup_output_path,
+                )
+                if working_hour_rollup_output_path.exists():
+                    shutil.copy2(working_hour_rollup_output_path, LATEST_WORKING_HOUR_ROLLUP_PATH)
+                summary["working_hour_rollup_status"] = "success"
+                summary["working_hour_rollup_required_by_step2"] = True
+                summary["working_hour_rollup_message"] = "M2A 已同步產出 working hour rollup；M1 Step2 選擇包含半品工時時會自動引用。"
+                summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
+                summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
+                summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name if LATEST_WORKING_HOUR_ROLLUP_PATH.exists() else ""
+                summary["working_hour_rollup_latest_download_url"] = f"/download/{LATEST_WORKING_HOUR_ROLLUP_PATH.name}" if LATEST_WORKING_HOUR_ROLLUP_PATH.exists() else ""
+                summary["working_hour_rollup_rows"] = int(rollup_summary.get("summary_rows", 0) or 0)
+                summary["working_hour_rollup_detail_rows"] = int(rollup_summary.get("detail_rows", 0) or 0)
+                summary["working_hour_rollup_total_direct_hours"] = float(rollup_summary.get("total_direct_hours", 0) or 0)
+                summary["working_hour_rollup_total_semi_hours"] = float(rollup_summary.get("total_semi_hours", 0) or 0)
+                summary["working_hour_rollup_total_hours"] = float(rollup_summary.get("total_hours", 0) or 0)
+                summary["working_hour_rollup_step1_source_filename"] = resolved_step1_path.name
+            except Exception as rollup_exc:
+                traceback.print_exc()
+                summary["working_hour_rollup_status"] = "failed"
+                summary["working_hour_rollup_required_by_step2"] = True
+                summary["working_hour_rollup_message"] = f"M2A 標準BOM表總用量已完成，但 working hour rollup 產出失敗：{rollup_exc}"
+                summary["working_hour_rollup_error"] = str(rollup_exc)
+                summary["working_hour_rollup_rows"] = 0
+        else:
+            summary["working_hour_rollup_filename"] = ""
+            summary["working_hour_rollup_download_url"] = ""
+            summary["working_hour_rollup_rows"] = 0
+
         _set_module2a_job(
             job_id,
             status="success",
@@ -194,6 +269,9 @@ def _run_module2a_total_usage_job(
             output_filename=output_path.name,
             download_url=f"/download/{output_path.name}",
             latest_filename=MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH.name if MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH.exists() else "",
+            working_hour_rollup_status=summary.get("working_hour_rollup_status", ""),
+            working_hour_rollup_filename=summary.get("working_hour_rollup_filename", ""),
+            working_hour_rollup_download_url=summary.get("working_hour_rollup_download_url", ""),
             summary=summary,
         )
     except Exception as exc:
@@ -1984,32 +2062,42 @@ async def process(request: Request):
 # =========================================================
 @app.post("/generate-bulk-file")
 async def generate_bulk_file(
-    step1_file: UploadFile = File(...),
     template_file: UploadFile = File(...),
+    step1_file: Optional[UploadFile] = File(None),
     working_hour_source: str = Form("direct"),
 ):
-    if not step1_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-        return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
-
-    if not template_file.filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+    if not template_file or not str(template_file.filename or "").lower().endswith((".xlsx", ".xlsm", ".xls")):
         return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
 
     token = uuid.uuid4().hex[:10]
 
-    step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(step1_file.filename).name}"
-    template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
+    uploaded_step1_filename = str(getattr(step1_file, "filename", "") or "").strip() if step1_file else ""
+    if uploaded_step1_filename:
+        if not uploaded_step1_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
+        step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(uploaded_step1_filename).name}"
+        step1_path.write_bytes(await step1_file.read())
+        step1_source_mode = "uploaded"
+    else:
+        step1_path = _find_latest_module1_step1_output()
+        step1_source_mode = "latest"
+        if step1_path is None or not step1_path.exists():
+            return JSONResponse({
+                "ok": False,
+                "message": "尚未找到 Module 1 Step 1 最新產出。請先完成 Module 1 Step 1，或於 M1 Step2 手動上傳 Step 1 Output。",
+            }, status_code=400)
 
-    step1_path.write_bytes(await step1_file.read())
+    template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
     template_path.write_bytes(await template_file.read())
 
     working_hour_source = str(working_hour_source or "direct").strip()
     bom_structure_path = None
     working_hour_rollup_path = None
-    if working_hour_source in ["include_semi", "semi", "semi_finished", "rollup", "rolled_up", "total"]:
+    if _is_include_semi_working_hour_source(working_hour_source):
         if not LATEST_WORKING_HOUR_ROLLUP_PATH.exists():
             return JSONResponse({
                 "ok": False,
-                "message": "No Working Hour Roll-up result found. Please complete Module 2 → BOM Expansion with Step 1 Output first, then return to Step 2 to generate Product Activity Data Bulk."
+                "message": "選擇『包含半品工時』時需要 Module 2A 產出的 Working Hour Roll-up。請先完成 Module 2A；若只使用直接工時，請將 Working Hour Source 改為 Direct Working Hour。"
             }, status_code=400)
         working_hour_rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH
         bom_structure_path = LATEST_BOM_STRUCTURE_PATH if LATEST_BOM_STRUCTURE_PATH.exists() else None
@@ -2024,6 +2112,12 @@ async def generate_bulk_file(
             bom_structure_path=bom_structure_path,
             working_hour_rollup_path=working_hour_rollup_path,
         )
+        summary["module1_step1_source_mode"] = step1_source_mode
+        summary["module1_step1_source_filename"] = step1_path.name if step1_path else ""
+        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}" if step1_path else ""
+        summary["module2a_working_hour_rollup_used"] = bool(working_hour_rollup_path and Path(working_hour_rollup_path).exists())
+        summary["module2a_working_hour_rollup_filename"] = Path(working_hour_rollup_path).name if working_hour_rollup_path else ""
+        summary["working_hour_source_rule"] = "M2A Working Hour Roll-up is required only when Working Hour Source = Include Semi-finished Working Hour."
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -2133,6 +2227,57 @@ def _source_meta_for_path(path: Path, default_version: str = "") -> Dict[str, st
     if default_version and not meta.get("source_version"):
         meta["source_version"] = default_version
     return meta
+
+
+def _is_include_semi_working_hour_source(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"include_semi", "semi", "semi_finished", "rollup", "rolled_up", "total"}
+
+
+def _source_info_for_existing_path(path: Path | None, label: str, missing_message: str) -> Dict[str, Any]:
+    if path and path.exists():
+        stat = path.stat()
+        return {
+            "ok": True,
+            "filename": path.name,
+            "size_bytes": stat.st_size,
+            "modified_at": _cmp_mtime_iso(path),
+            "download_url": f"/download/{path.name}",
+            **_source_meta_for_path(path, label),
+        }
+    return {"ok": False, "message": missing_message}
+
+
+@app.get("/module1/step2/source-info")
+def module1_step2_source_info():
+    """Source status for M1 Step2 auto-fetch.
+
+    Step2 always needs Module 1 Step1 output. Module 2A Working Hour Roll-up is
+    required only when users select Include Semi-finished Working Hour.
+    """
+    step1_path = _find_latest_module1_step1_output()
+    total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH if MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH.exists() else None
+    rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH if LATEST_WORKING_HOUR_ROLLUP_PATH.exists() else None
+    return {
+        "ok": True,
+        "ready_direct": bool(step1_path and step1_path.exists()),
+        "ready_include_semi": bool(step1_path and step1_path.exists() and rollup_path and rollup_path.exists()),
+        "module1_step1": _source_info_for_existing_path(
+            step1_path,
+            "Module 1 Step 1",
+            "尚未找到 Module 1 Step 1 最新產出。請先完成 Module 1 Step 1，或在 Step2 手動上傳 Step 1 Output。",
+        ),
+        "module2a_standard_bom_total_usage": _source_info_for_existing_path(
+            total_usage_path,
+            "Module 2A Standard BOM Total Usage",
+            "尚未找到 Module 2A 標準BOM表總用量。這不影響 Direct Working Hour；只有後續 M2B 或半品工時流程才需要。",
+        ),
+        "module2a_working_hour_rollup": _source_info_for_existing_path(
+            rollup_path,
+            "Module 2A Working Hour Roll-up",
+            "尚未找到 Module 2A Working Hour Roll-up。M1 Step2 選擇『包含半品工時』時才需要；Direct Working Hour 不需要此檔。",
+        ),
+        "rule": "M2A files are required by M1 Step2 only when Working Hour Source = Include Semi-finished Working Hour.",
+    }
 
 def _find_latest_module2c_supplier_mapped_raw_material_bulk_zip() -> Path | None:
     """Return the latest Module 2C supplier-mapped Raw Material Bulk ZIP for Module 3."""
@@ -2519,6 +2664,7 @@ async def module2a_standard_bom_total_usage_job(request: Request):
         bom_date,
         step1_source_filename,
         step1_source_modified_at,
+        step1_source,
     )
     return {"ok": True, "job_id": job_id, "status_url": f"/module2/bom-job/{job_id}"}
 
@@ -2539,13 +2685,21 @@ def module2_standard_bom_total_usage_source():
     if not path.exists():
         return JSONResponse({"ok": False, "message": "尚未產出標準BOM表總用量，請先完成 Module 2A。"}, status_code=404)
     meta = _extract_source_version_date(path.name)
-    return {
+    data = {
         "ok": True,
         "filename": path.name,
         "download_url": f"/download/{path.name}",
         "mtime": _cmp_mtime_iso(path),
         **meta,
     }
+    if LATEST_WORKING_HOUR_ROLLUP_PATH.exists():
+        data["working_hour_rollup"] = {
+            "ok": True,
+            "filename": LATEST_WORKING_HOUR_ROLLUP_PATH.name,
+            "download_url": f"/download/{LATEST_WORKING_HOUR_ROLLUP_PATH.name}",
+            "mtime": _cmp_mtime_iso(LATEST_WORKING_HOUR_ROLLUP_PATH),
+        }
+    return data
 
 
 @app.get("/module2b/source-info")

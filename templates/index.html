@@ -351,9 +351,19 @@
               </div>
             </div>
 
+            <div class="module3-source-card" id="bulkStep1SourceCard">
+              <b>M1 Step1 自動引用狀態</b>
+              <p id="bulkStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+            </div>
+            <div class="module3-source-card" id="bulkM2aRollupSourceCard">
+              <b>M2A 半品工時來源狀態</b>
+              <p id="bulkM2aRollupSourceText">工時來源選擇「包含半品工時」時才需要 Module 2A Working Hour Roll-up。</p>
+            </div>
+
             <form id="bulkForm" class="form-panel">
               <label data-i18n="uploadStep1OutputFile">Upload Step 1 Output File</label>
-              <input id="step1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+              <input id="step1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" />
+              <p class="hint">可留空；系統會自動抓取最新的 Module 1 Step 1 產出檔。若需要指定版本，才手動上傳。</p>
 
               <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
               <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
@@ -630,6 +640,7 @@
               </div>
 
               <a id="module2aDownload" class="download disabled" href="#">下載標準BOM表總用量</a>
+              <a id="module2aWorkingHourRollupDownload" class="download disabled" href="#">下載 Working Hour Roll-up</a>
               <pre id="module2aLog" class="rule-log">MODULE 2A is ready.</pre>
             </div>
 
@@ -1022,6 +1033,8 @@ const bulkStatusTime = document.getElementById('bulkStatusTime');
 const bulkProgressBar = document.getElementById('bulkProgressBar');
 const bulkDownload = document.getElementById('bulkDownload');
 const bulkWorkingHourSource = document.getElementById('bulkWorkingHourSource');
+const bulkStep1SourceText = document.getElementById('bulkStep1SourceText');
+const bulkM2aRollupSourceText = document.getElementById('bulkM2aRollupSourceText');
 const processingStatus = document.getElementById('processingStatus');
 const statusTitle = document.getElementById('statusTitle');
 const statusText = document.getElementById('statusText');
@@ -1407,6 +1420,9 @@ function activatePrepPage(pageId) {
   setDynamicI18n(pageLead, pageMessages[pageId].leadKey, pageMessages[pageId].lead);
   pageLead.style.display = pageMessages[pageId].lead ? 'block' : 'none';
   cmpApplyI18n();
+  if (pageId === 'product-data' && typeof window.cmpRefreshBulkStep2Sources === 'function') {
+    window.cmpRefreshBulkStep2Sources();
+  }
   document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
 }
 
@@ -1758,6 +1774,7 @@ if (module3CclForm) {
 
 refreshModule3RawBulkSource();
 refreshBomStep1Source();
+refreshBulkStep2Sources();
 
 function formatModule3EmissionFactorUnit(unit) {
   const rawUnit = String(unit || '').trim();
@@ -2329,13 +2346,50 @@ function stopBulkProgressError(message) {
   );
 }
 
+
+function bulkStep2UsesSemiHours() {
+  return bulkWorkingHourSource && bulkWorkingHourSource.value === 'include_semi';
+}
+
+async function refreshBulkStep2Sources() {
+  if (!bulkStep1SourceText && !bulkM2aRollupSourceText) return;
+  try {
+    const res = await fetch('/module1/step2/source-info', { cache: 'no-store' });
+    const data = await readJsonOrThrow(res);
+    const step1 = data.module1_step1 || {};
+    const rollup = data.module2a_working_hour_rollup || {};
+    if (bulkStep1SourceText) {
+      bulkStep1SourceText.textContent = step1.ok === false
+        ? (step1.message || '尚未找到 Module 1 Step 1 最新產出。')
+        : `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}${step1.modified_at ? `｜${cmpBuildTimeText(step1.modified_at)}` : ''}`;
+    }
+    if (bulkM2aRollupSourceText) {
+      if (bulkStep2UsesSemiHours()) {
+        bulkM2aRollupSourceText.textContent = rollup.ok === false
+          ? (rollup.message || '尚未找到 Module 2A Working Hour Roll-up。請先完成 Module 2A。')
+          : `來源：Module 2A Working Hour Roll-up｜檔案：${rollup.filename || ''}${rollup.modified_at ? `｜${cmpBuildTimeText(rollup.modified_at)}` : ''}`;
+      } else {
+        bulkM2aRollupSourceText.textContent = rollup.ok === false
+          ? '目前工時來源為 Direct Working Hour；M2A Working Hour Roll-up 非必要。'
+          : `目前工時來源為 Direct Working Hour；M2A 檔案非必要，但已可用：${rollup.filename || ''}${rollup.modified_at ? `｜${cmpBuildTimeText(rollup.modified_at)}` : ''}`;
+      }
+    }
+  } catch (err) {
+    if (bulkStep1SourceText) bulkStep1SourceText.textContent = '無法更新 Module 1 Step 1 自動引用狀態，請重新整理或查看後端 log。';
+    if (bulkM2aRollupSourceText) bulkM2aRollupSourceText.textContent = '無法更新 Module 2A Working Hour Roll-up 狀態，請重新整理或查看後端 log。';
+  }
+}
+
+window.cmpRefreshBulkStep2Sources = refreshBulkStep2Sources;
+
 if (bulkWorkingHourSource) {
-  bulkWorkingHourSource.addEventListener('change', () => {
+  bulkWorkingHourSource.addEventListener('change', async () => {
     if (bulkWorkingHourSource.value === 'include_semi') {
-      bulkStatusText.textContent = cmpT('semiHourHint', 'This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.');
+      bulkStatusText.textContent = '工時來源：包含半品工時。系統會自動引用 M2A Working Hour Roll-up。';
     } else {
       bulkStatusText.textContent = cmpT('directWorkingHourEnabled', 'Direct Working Hour Enabled.');
     }
+    await refreshBulkStep2Sources();
   });
 }
 
@@ -2348,10 +2402,13 @@ bulkForm.addEventListener('submit', async (e) => {
 
   startBulkEstimatedProgress();
 
+  await refreshBulkStep2Sources();
   const fd = new FormData(bulkForm);
   const workingHourSource = bulkWorkingHourSource ? bulkWorkingHourSource.value : 'direct';
   if (workingHourSource === 'include_semi') {
-    bulkStatusText.textContent = cmpT('checkingSemiWorkingHour', 'Checking latest BOM Expansion result for semi-finished working hours.');
+    bulkStatusText.textContent = 'Checking latest Module 2A Working Hour Roll-up for semi-finished working hours.';
+  } else {
+    bulkStatusText.textContent = 'Checking latest Module 1 Step 1 output. Step 1 upload may be left blank for auto-fetch.';
   }
 
   try {
@@ -2441,6 +2498,7 @@ ruleForm.onsubmit = async (e) => {
   const bar = document.getElementById('module2aProgressBar');
   const log = document.getElementById('module2aLog');
   const download = document.getElementById('module2aDownload');
+  const rollupDownload = document.getElementById('module2aWorkingHourRollupDownload');
   let pollTimer = null;
   let etaTracker = cmpCreateEtaTracker(120);
 
@@ -2496,9 +2554,17 @@ ruleForm.onsubmit = async (e) => {
           download.href = job.download_url;
           download.classList.remove('disabled');
         }
-        if (log) log.textContent = `Completed.\n${summaryText(job)}\nDownload: ${job.output_filename || ''}`;
+        const s = job.summary || {};
+        if (rollupDownload && (job.working_hour_rollup_download_url || s.working_hour_rollup_download_url)) {
+          rollupDownload.href = job.working_hour_rollup_download_url || s.working_hour_rollup_download_url;
+          rollupDownload.classList.remove('disabled');
+        }
+        if (log) log.textContent = `Completed.\n${summaryText(job)}\nDownload: ${job.output_filename || ''}\nWorking Hour Roll-up: ${(job.working_hour_rollup_filename || s.working_hour_rollup_filename || s.working_hour_rollup_message || 'Not generated')}`;
         if (typeof window.cmpRefreshModule2bSources === 'function') {
           await window.cmpRefreshModule2bSources();
+        }
+        if (typeof window.cmpRefreshBulkStep2Sources === 'function') {
+          await window.cmpRefreshBulkStep2Sources();
         }
         return;
       }
@@ -2527,6 +2593,10 @@ ruleForm.onsubmit = async (e) => {
     if (download) {
       download.href = '#';
       download.classList.add('disabled');
+    }
+    if (rollupDownload) {
+      rollupDownload.href = '#';
+      rollupDownload.classList.add('disabled');
     }
     setState('running', 'MODULE 2A queued', 'Uploading Standard BOM files...', cmpRemainingText(120), 3);
     if (log) log.textContent = `Uploading and creating MODULE 2A job...\n${module2aStep1SourceText ? module2aStep1SourceText.textContent : ''}`;
