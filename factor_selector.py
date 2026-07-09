@@ -338,7 +338,7 @@ def _rewrite_formula_row_refs(formula_xml: bytes | None, source_row: int, target
     src = str(int(source_row)).encode("ascii")
     dst = str(int(target_row)).encode("ascii")
     pattern = rb'(?<![A-Za-z0-9_])((?:\$?[A-Z]{1,3})\$?)' + src + rb'(?![0-9])'
-    return re.sub(pattern, rb'\1' + dst, formula_xml)
+    return re.sub(pattern, lambda m: m.group(1) + dst, formula_xml)
 
 
 def _manual_row_xml(
