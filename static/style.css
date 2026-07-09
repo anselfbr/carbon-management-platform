@@ -2659,3 +2659,90 @@ select:focus {
   font-size: 1rem;
   line-height: 1.65;
 }
+
+/* 20260709 patch: Module 1 title spacing + sidebar submenu visibility */
+#product-data .module-return-btn {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+#product-data .module1-step-header {
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+
+#product-data #module1b-batch {
+  margin-top: 28px;
+}
+
+#product-data .module1-step-header .section-eyebrow {
+  margin: 0 0 4px;
+}
+
+#product-data .module1-step-header h2 {
+  margin: 4px 0 6px;
+  color: var(--ink, #102a44);
+  font-size: clamp(1.55rem, 2vw, 2rem);
+  line-height: 1.2;
+}
+
+#product-data .module1-step-header .form-hint {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.app-shell.sidebar-expanded .side-nav {
+  min-height: 0;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-right: 6px;
+  padding-bottom: 28px;
+  gap: 6px;
+  overscroll-behavior: contain;
+}
+
+.app-shell.sidebar-expanded .sidebar {
+  gap: 12px;
+}
+
+.app-shell.sidebar-expanded .sub-nav {
+  flex: 0 0 auto;
+  max-height: none !important;
+  overflow: visible !important;
+  margin-bottom: 10px;
+}
+
+.app-shell.sidebar-expanded .sub-nav.collapsed {
+  max-height: 0 !important;
+  overflow: hidden !important;
+  margin-top: -4px;
+  margin-bottom: 0;
+}
+
+@media (min-width: 901px) {
+  .app-shell.sidebar-expanded .sidebar {
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+
+  .app-shell.sidebar-expanded .nav-label {
+    margin-top: 2px;
+    margin-bottom: 4px;
+  }
+
+  .app-shell.sidebar-expanded .nav-item {
+    min-height: 52px;
+    max-height: none;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .app-shell.sidebar-expanded .sub-nav .sub-nav-item {
+    min-height: 32px;
+    padding-top: 5px;
+    padding-bottom: 5px;
+  }
+}
+

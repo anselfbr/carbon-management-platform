@@ -180,6 +180,27 @@
       grid-template-columns: 1fr;
     }
 
+    /* Sidebar submenu visibility refinement - 20260709 */
+    .app-shell.sidebar-expanded .side-nav {
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      padding-bottom: 28px;
+      gap: 6px;
+      overscroll-behavior: contain;
+    }
+    .app-shell.sidebar-expanded .sub-nav {
+      max-height: none !important;
+      overflow: visible !important;
+      margin-bottom: 10px;
+    }
+    .app-shell.sidebar-expanded .sub-nav.collapsed {
+      max-height: 0 !important;
+      overflow: hidden !important;
+      margin-top: -4px;
+      margin-bottom: 0;
+    }
+
+
     @media (max-width: 900px) {
       .rule-import-meta { grid-template-columns: 1fr; }
       .toast-container { left: 16px; right: 16px; top: 16px; }
@@ -1199,6 +1220,24 @@ function isSidebarSubNavExpanded(mainKey) {
   return !!subNav && !subNav.classList.contains('collapsed');
 }
 
+function scrollSidebarSubNavIntoView(mainKey) {
+  const nav = document.querySelector('.side-nav');
+  const subNav = getSidebarSubNav(mainKey);
+  if (!nav || !subNav || subNav.classList.contains('collapsed')) return;
+  window.setTimeout(() => {
+    const buffer = 20;
+    const subBottom = subNav.offsetTop + subNav.offsetHeight;
+    const visibleBottom = nav.scrollTop + nav.clientHeight - buffer;
+    if (subBottom > visibleBottom) {
+      nav.scrollTo({ top: Math.max(0, subBottom - nav.clientHeight + buffer), behavior: 'smooth' });
+    }
+    const navButton = document.querySelector(`.nav-item[data-main="${mainKey}"]`);
+    if (navButton && navButton.offsetTop < nav.scrollTop) {
+      nav.scrollTo({ top: Math.max(0, navButton.offsetTop - buffer), behavior: 'smooth' });
+    }
+  }, 80);
+}
+
 function setSidebarSubNavExpanded(mainKey, expanded = true, collapseOthers = true) {
   const subNav = getSidebarSubNav(mainKey);
   const navButton = document.querySelector(`.nav-item[data-main="${mainKey}"]`);
@@ -1216,6 +1255,7 @@ function setSidebarSubNavExpanded(mainKey, expanded = true, collapseOthers = tru
 
   subNav.classList.toggle('collapsed', !expanded);
   navButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  if (expanded) scrollSidebarSubNavIntoView(mainKey);
 }
 
 function collapseAllSidebarSubNavs() {
