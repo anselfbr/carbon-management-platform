@@ -121,6 +121,65 @@
       from { transform: translateY(-8px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
+
+
+    /* Sidebar sub-layer folding - 20260709 */
+    .side-nav {
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 4px;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,.24) transparent;
+    }
+    .side-nav::-webkit-scrollbar {
+      width: 6px;
+    }
+    .side-nav::-webkit-scrollbar-thumb {
+      background: rgba(255,255,255,.22);
+      border-radius: 999px;
+    }
+    .nav-item.has-subnav {
+      grid-template-columns: 24px 38px minmax(0, 1fr) 18px;
+    }
+    .nav-chevron {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      color: #9fb5cc;
+      font-size: 14px;
+      line-height: 1;
+      transition: transform .18s ease, color .18s ease;
+    }
+    .nav-item:hover .nav-chevron,
+    .nav-item.active .nav-chevron {
+      color: #ffffff;
+    }
+    .nav-item[aria-expanded="true"] .nav-chevron {
+      transform: rotate(180deg);
+    }
+    .sub-nav {
+      max-height: 260px;
+      opacity: 1;
+      overflow: hidden;
+      transition: max-height .22s ease, opacity .18s ease, margin .18s ease, border-color .18s ease;
+    }
+    .sub-nav.collapsed {
+      max-height: 0;
+      opacity: 0;
+      margin-top: -4px;
+      margin-bottom: 0;
+      pointer-events: none;
+      border-left-color: transparent;
+    }
+    .app-shell:not(.sidebar-expanded) .nav-chevron {
+      display: none;
+    }
+    .app-shell:not(.sidebar-expanded) .nav-item.has-subnav {
+      grid-template-columns: 1fr;
+    }
+
     @media (max-width: 900px) {
       .rule-import-meta { grid-template-columns: 1fr; }
       .toast-container { left: 16px; right: 16px; top: 16px; }
@@ -156,13 +215,14 @@
       <nav class="side-nav" aria-label="Platform modules">
         <div class="nav-label" data-i18n="modules">Modules</div>
 
-        <button class="nav-item active" type="button" data-main="prep">
+        <button class="nav-item active has-subnav" type="button" data-main="prep" aria-expanded="true" aria-controls="module1SubNav">
           <span class="module-index">1</span>
           <span class="nav-icon">▣</span>
           <span class="nav-text"><b data-i18n="productDataPreparation">Product Data Preparation</b></span>
+          <span class="nav-chevron" aria-hidden="true">⌄</span>
         </button>
 
-        <div class="sub-nav module1-sub-nav">
+        <div id="module1SubNav" class="sub-nav module1-sub-nav" data-parent="prep">
           <button class="sub-nav-item" type="button" data-page="product-data" data-anchor="module1a-workorder">
             <span class="sub-dot"></span>
             <span data-i18n="module1aShortTitle">Module 1A</span>
@@ -177,13 +237,14 @@
           </button>
         </div>
 
-        <button class="nav-item" type="button" data-main="bom">
+        <button class="nav-item has-subnav" type="button" data-main="bom" aria-expanded="false" aria-controls="module2SubNav">
           <span class="module-index">2</span>
           <span class="nav-icon">⌘</span>
           <span class="nav-text"><b data-i18n="bomExpansion">BOM Expansion</b></span>
+          <span class="nav-chevron" aria-hidden="true">⌄</span>
         </button>
 
-        <div class="sub-nav module2-sub-nav">
+        <div id="module2SubNav" class="sub-nav module2-sub-nav collapsed" data-parent="bom">
           <button class="sub-nav-item" type="button" data-page="bom-expansion" data-anchor="module2a-workspace">
             <span class="sub-dot"></span>
             <span data-i18n="module2aShortTitle">Module 2A</span>
@@ -198,13 +259,14 @@
           </button>
         </div>
 
-        <button class="nav-item" type="button" data-main="factor">
+        <button class="nav-item has-subnav" type="button" data-main="factor" aria-expanded="false" aria-controls="module3SubNav">
           <span class="module-index">3</span>
           <span class="nav-icon">◇</span>
           <span class="nav-text"><b data-i18n="carbonEmissionFactorSelection">Carbon Emission Factor Selection</b></span>
+          <span class="nav-chevron" aria-hidden="true">⌄</span>
         </button>
 
-        <div class="sub-nav module3-sub-nav">
+        <div id="module3SubNav" class="sub-nav module3-sub-nav collapsed" data-parent="factor">
           <button class="sub-nav-item" type="button" data-page="module3-ccl-mapping">
             <span class="sub-dot"></span>
             <span data-i18n="cclMapping">CCLibrary Emission Factor Database</span>
@@ -1123,9 +1185,46 @@
 const menuToggle = document.getElementById('menuToggle');
 const appShell = document.querySelector('.app-shell');
 
+
 menuToggle.onclick = () => {
   appShell.classList.toggle('sidebar-expanded');
 };
+
+function getSidebarSubNav(mainKey) {
+  return document.querySelector(`.sub-nav[data-parent="${mainKey}"]`);
+}
+
+function isSidebarSubNavExpanded(mainKey) {
+  const subNav = getSidebarSubNav(mainKey);
+  return !!subNav && !subNav.classList.contains('collapsed');
+}
+
+function setSidebarSubNavExpanded(mainKey, expanded = true, collapseOthers = true) {
+  const subNav = getSidebarSubNav(mainKey);
+  const navButton = document.querySelector(`.nav-item[data-main="${mainKey}"]`);
+  if (!subNav || !navButton) return;
+
+  if (collapseOthers) {
+    document.querySelectorAll('.sub-nav[data-parent]').forEach(otherSubNav => {
+      if (otherSubNav.dataset.parent !== mainKey) {
+        otherSubNav.classList.add('collapsed');
+        const otherButton = document.querySelector(`.nav-item[data-main="${otherSubNav.dataset.parent}"]`);
+        if (otherButton) otherButton.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+
+  subNav.classList.toggle('collapsed', !expanded);
+  navButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+}
+
+function collapseAllSidebarSubNavs() {
+  document.querySelectorAll('.sub-nav[data-parent]').forEach(subNav => {
+    subNav.classList.add('collapsed');
+    const navButton = document.querySelector(`.nav-item[data-main="${subNav.dataset.parent}"]`);
+    if (navButton) navButton.setAttribute('aria-expanded', 'false');
+  });
+}
 
 const form = document.getElementById('form');
 const log = document.getElementById('log');
@@ -1515,6 +1614,7 @@ const pageMessages = {
 
 
 function activateDashboard() {
+  collapseAllSidebarSubNavs();
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
   document.getElementById('dashboard').classList.add('active');
 
@@ -1558,6 +1658,7 @@ function setActiveSubItem(pageId, anchorId = '') {
 }
 
 function activatePrepPage(pageId = 'module1-entry', anchorId = '') {
+  setSidebarSubNavExpanded('prep', true);
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
   const targetPage = document.getElementById(pageId) || document.getElementById('module1-entry');
   targetPage.classList.add('active');
@@ -1616,6 +1717,7 @@ function setModule3ActiveSub(pageId) {
 }
 
 function activateFactorPage(pageId = 'factor-selection') {
+  setSidebarSubNavExpanded('factor', true);
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
   const targetPage = document.getElementById(pageId) || document.getElementById('factor-selection');
   targetPage.classList.add('active');
@@ -1639,6 +1741,7 @@ document.querySelectorAll('[data-module3-page]').forEach(el => {
 });
 
 function activateModule2EntryPage() {
+  setSidebarSubNavExpanded('bom', true);
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
   document.getElementById('module2-entry').classList.add('active');
 
@@ -1656,6 +1759,7 @@ function activateModule2EntryPage() {
 }
 
 function activateBomPage(anchorId = '') {
+  setSidebarSubNavExpanded('bom', true);
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
   document.getElementById('bom-expansion').classList.add('active');
 
@@ -2298,10 +2402,25 @@ document.querySelectorAll('[data-dashboard-target]').forEach(card => {
 
 document.querySelectorAll('.nav-item').forEach(btn => {
   btn.onclick = () => {
+    const key = btn.dataset.main;
+    const hasSubNav = !!getSidebarSubNav(key);
+    const isActive = btn.classList.contains('active');
+    const isExpanded = hasSubNav && isSidebarSubNavExpanded(key);
+
+    if (hasSubNav && isActive && isExpanded) {
+      setSidebarSubNavExpanded(key, false, false);
+      return;
+    }
+
+    if (hasSubNav) {
+      setSidebarSubNavExpanded(key, true);
+    } else {
+      collapseAllSidebarSubNavs();
+    }
+
     document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
 
-    const key = btn.dataset.main;
     if (key === 'prep') {
       activatePrepPage('module1-entry');
       return;
