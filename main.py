@@ -191,10 +191,10 @@ def _run_module2a_total_usage_job(
         if output_path.exists():
             shutil.copy2(output_path, MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH)
 
-        summary["module2a_working_hour_rollup_policy"] = "Module 2A creates working_hour_rollup_latest.xlsx for M1 Step2 when Module 1 step1 annual output/classification is available. M1 Step2 requires this file only when Working Hour Source = Include Semi-finished Working Hour."
+        summary["module2a_working_hour_rollup_policy"] = "Module 2A creates working_hour_rollup_latest.xlsx for Module 1B when Module 1A annual output/classification is available. Module 1B requires this file only when Working Hour Source = Include Semi-finished Working Hour."
         summary["working_hour_rollup_required_by_step2"] = False
         summary["working_hour_rollup_status"] = "skipped"
-        summary["working_hour_rollup_message"] = "未找到 Module 1 step1 年度產品產量與分類結果，因此僅產出標準BOM表總用量；M1 Step2 若選擇 Direct Working Hour 不需要此檔。"
+        summary["working_hour_rollup_message"] = "未找到 Module 1A 年度產品產量與分類結果，因此僅產出標準BOM表總用量；Module 1B 若選擇 Direct Working Hour 不需要此檔。"
 
         resolved_step1_path = Path(step1_source_path) if step1_source_path else _find_latest_module1_step1_output()
         if resolved_step1_path and resolved_step1_path.exists():
@@ -202,7 +202,7 @@ def _run_module2a_total_usage_job(
                 working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{job_id}.xlsx"
 
                 # Memory fix: do not export a large BOM Structure workbook in M2A.
-                # M1 Step2 only needs the Summary sheet in working_hour_rollup_latest.xlsx,
+                # Module 1B only needs the Summary sheet in working_hour_rollup_latest.xlsx,
                 # so the roll-up is generated directly from Standard BOM with a streaming writer.
                 summary["bom_structure_status"] = "skipped_streaming_rollup"
                 summary["bom_structure_filename"] = ""
@@ -229,7 +229,7 @@ def _run_module2a_total_usage_job(
                     shutil.copy2(working_hour_rollup_output_path, LATEST_WORKING_HOUR_ROLLUP_PATH)
                 summary["working_hour_rollup_status"] = "success"
                 summary["working_hour_rollup_required_by_step2"] = True
-                summary["working_hour_rollup_message"] = "M2A 已以低記憶體串流方式產出 working hour rollup；M1 Step2 選擇包含半品工時時會自動引用。"
+                summary["working_hour_rollup_message"] = "M2A 已以低記憶體串流方式產出 working hour rollup；Module 1B 選擇包含半品工時時會自動引用。"
                 summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
                 summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
                 summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name if LATEST_WORKING_HOUR_ROLLUP_PATH.exists() else ""
@@ -2058,7 +2058,7 @@ async def process(request: Request):
 
 # =========================================================
 # Step 2 · Batch Data Formatting
-# Module 1 step1 annual output/classification + Bulk Template -> Formatted Product Activity Bulk
+# Module 1A annual output/classification + Bulk Template -> Formatted Product Activity Bulk
 # =========================================================
 @app.post("/generate-bulk-file")
 async def generate_bulk_file(
@@ -2074,7 +2074,7 @@ async def generate_bulk_file(
     uploaded_step1_filename = str(getattr(step1_file, "filename", "") or "").strip() if step1_file else ""
     if uploaded_step1_filename:
         if not uploaded_step1_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
-            return JSONResponse({"ok": False, "message": "Step 1 Output 請上傳 Excel 檔案"}, status_code=400)
+            return JSONResponse({"ok": False, "message": "Module 1A Output 請上傳 Excel 檔案"}, status_code=400)
         step1_path = UPLOAD_DIR / f"step1_output_{token}_{Path(uploaded_step1_filename).name}"
         step1_path.write_bytes(await step1_file.read())
         step1_source_mode = "uploaded"
@@ -2084,7 +2084,7 @@ async def generate_bulk_file(
         if step1_path is None or not step1_path.exists():
             return JSONResponse({
                 "ok": False,
-                "message": "尚未找到 Module 1 step1 年度產品產量與分類結果。請先完成 Module 1 Step 1。",
+                "message": "尚未找到 Module 1A 年度產品產量與分類結果。請先完成 Module 1A。",
             }, status_code=400)
 
     template_path = UPLOAD_DIR / f"bulk_template_{token}_{Path(template_file.filename).name}"
@@ -2186,7 +2186,7 @@ def download_product_series_master(rule_set: str = DEFAULT_RULE_SET):
 
 
 def _find_latest_module1_step1_output() -> Path | None:
-    """Return the most recent Module 1 Step 1 output file for Module 2 roll-up."""
+    """Return the most recent Module 1A output file for Module 2 roll-up."""
     candidates: list[Path] = []
     seen: set[Path] = set()
     for pattern in ["年度產品產量與分類結果_v6_*.xlsx", "年度產品產量與分類結果*.xlsx"]:
@@ -2207,7 +2207,7 @@ def module2_step1_output_source():
     if not step1_path:
         return {
             "ok": False,
-            "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。",
+            "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。",
         }
     stat = step1_path.stat()
     return {
@@ -2216,7 +2216,7 @@ def module2_step1_output_source():
         "size_bytes": stat.st_size,
         "modified_at": _cmp_mtime_iso(step1_path),
         "download_url": f"/download/{step1_path.name}",
-        **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+        **_source_meta_for_path(step1_path, "Module 1A"),
     }
 
 
@@ -2249,9 +2249,9 @@ def _source_info_for_existing_path(path: Path | None, label: str, missing_messag
 
 @app.get("/module1/step2/source-info")
 def module1_step2_source_info():
-    """Source status for M1 Step2 auto-fetch.
+    """Source status for Module 1B auto-fetch.
 
-    Step2 always needs Module 1 step1 annual output/classification. Module 2A working_hour_rollup is
+    Module 1B always needs Module 1A annual output/classification. Module 2A working_hour_rollup is
     required only when users select Include Semi-finished Working Hour.
     """
     step1_path = _find_latest_module1_step1_output()
@@ -2263,8 +2263,8 @@ def module1_step2_source_info():
         "ready_include_semi": bool(step1_path and step1_path.exists() and rollup_path and rollup_path.exists()),
         "module1_step1": _source_info_for_existing_path(
             step1_path,
-            "Module 1 step1 年度產品產量與分類結果",
-            "尚未找到 Module 1 step1 年度產品產量與分類結果。請先完成 Module 1 Step 1。",
+            "Module 1A 年度產品產量與分類結果",
+            "尚未找到 Module 1A 年度產品產量與分類結果。請先完成 Module 1A。",
         ),
         "module2a_standard_bom_total_usage": _source_info_for_existing_path(
             total_usage_path,
@@ -2274,9 +2274,9 @@ def module1_step2_source_info():
         "module2a_working_hour_rollup": _source_info_for_existing_path(
             rollup_path,
             "Module 2A working_hour_rollup",
-            "尚未找到 Module 2A working_hour_rollup。M1 Step2 選擇『包含半品工時』時才需要；Direct Working Hour 不需要此檔。",
+            "尚未找到 Module 2A working_hour_rollup。Module 1B 選擇『包含半品工時』時才需要；Direct Working Hour 不需要此檔。",
         ),
-        "rule": "M1 Step2 always references Module 1 step1 annual output/classification; Module 2A working_hour_rollup is required only when Working Hour Source = Include Semi-finished Working Hour.",
+        "rule": "Module 1B always references Module 1A annual output/classification; Module 2A working_hour_rollup is required only when Working Hour Source = Include Semi-finished Working Hour.",
     }
 
 def _find_latest_module2c_supplier_mapped_raw_material_bulk_zip() -> Path | None:
@@ -2636,7 +2636,7 @@ async def module2a_standard_bom_total_usage_job(request: Request):
 
     job_id = uuid.uuid4().hex[:10]
 
-    # MODULE 2A uses the latest Module 1 Step 1 output only as source metadata.
+    # MODULE 2A uses the latest Module 1A output only as source metadata.
     # It does not read Step 1 rows and does not require users to type version/date.
     step1_source_filename = ""
     step1_source_modified_at = ""
@@ -2731,12 +2731,12 @@ def module2b_source_info():
             "filename": step1_path.name,
             "modified_at": _cmp_mtime_iso(step1_path),
             "download_url": f"/download/{step1_path.name}",
-            **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+            **_source_meta_for_path(step1_path, "Module 1A"),
         }
     else:
         step1_info = {
             "ok": False,
-            "message": "尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。",
+            "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。",
         }
 
     if total_usage_path.exists():
@@ -2777,7 +2777,7 @@ async def module2b_raw_material_bulk_job(request: Request):
 
     step1_path = _find_latest_module1_step1_output()
     if step1_path is None:
-        return JSONResponse({"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"}, status_code=400)
+        return JSONResponse({"ok": False, "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。"}, status_code=400)
     total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
     if not total_usage_path.exists():
         return JSONResponse({"ok": False, "message": "尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。"}, status_code=400)
@@ -2790,7 +2790,7 @@ async def module2b_raw_material_bulk_job(request: Request):
         "filename": step1_path.name,
         "modified_at": _cmp_mtime_iso(step1_path),
         "download_url": f"/download/{step1_path.name}",
-        **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+        **_source_meta_for_path(step1_path, "Module 1A"),
     }
     _set_module2a_job(
         job_id,
@@ -2829,12 +2829,12 @@ def module2c_source_info():
             "filename": step1_path.name,
             "modified_at": _cmp_mtime_iso(step1_path),
             "download_url": f"/download/{step1_path.name}",
-            **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+            **_source_meta_for_path(step1_path, "Module 1A"),
         }
     else:
         step1_info = {
             "ok": False,
-            "message": "尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。",
+            "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。",
         }
 
     if raw_bulk_zip:
@@ -2885,7 +2885,7 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
 
     step1_path = _find_latest_module1_step1_output()
     if step1_path is None:
-        return JSONResponse({"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"}, status_code=400)
+        return JSONResponse({"ok": False, "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。"}, status_code=400)
     raw_bulk_zip = _find_latest_module2b_raw_material_bulk_zip()
     if raw_bulk_zip is None:
         return JSONResponse({"ok": False, "message": "尚未找到 Module 2B Raw Material Bulk ZIP，請先完成 Module 2B。"}, status_code=400)
@@ -2903,7 +2903,7 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
         "filename": step1_path.name,
         "modified_at": _cmp_mtime_iso(step1_path),
         "download_url": f"/download/{step1_path.name}",
-        **_source_meta_for_path(step1_path, "Module 1 Step 1"),
+        **_source_meta_for_path(step1_path, "Module 1A"),
     }
     raw_bulk_source = {
         "filename": raw_bulk_zip.name,
@@ -3037,7 +3037,7 @@ async def process_bom_expansion(request: Request):
         shutil.copy2(template_path, RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH)
     if step1_path is None:
         return JSONResponse(
-            {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"},
+            {"ok": False, "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。"},
             status_code=400,
         )
 

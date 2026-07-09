@@ -43,6 +43,118 @@
         "en": "Rule Management",
         "zh": "規則管理"
     },
+    "moduleEntry": {
+        "en": "Module Menu",
+        "zh": "入口選單"
+    },
+    "module1Title": {
+        "en": "Module 1 · Product Data Preparation",
+        "zh": "模組 1 · 產品資料準備"
+    },
+    "module1Stage1Placeholder": {
+        "en": "Module 1 Entry. Select Module 1A Work Order Processing, Module 1B Batch Data Formatting, or Rule Management to enter the corresponding workspace.",
+        "zh": "模組1入口頁面。請選擇 Module 1A 工單處理、Module 1B 批次資料格式化或規則管理，進入各自專區。"
+    },
+    "module1PageLead": {
+        "en": "Select Module 1A, Module 1B, or Rule Management to enter the corresponding workspace.",
+        "zh": "請選擇 Module 1A、Module 1B 或規則管理，快速進入對應功能區。"
+    },
+    "module1aShortTitle": {
+        "en": "Module 1A",
+        "zh": "Module 1A"
+    },
+    "module1bShortTitle": {
+        "en": "Module 1B",
+        "zh": "Module 1B"
+    },
+    "module1aTitle": {
+        "en": "Module 1A · Work Order Processing",
+        "zh": "Module 1A · 工單處理"
+    },
+    "module1bTitle": {
+        "en": "Module 1B · Batch Data Formatting",
+        "zh": "Module 1B · 批次資料格式化"
+    },
+    "module1aStage1Desc": {
+        "en": "Consolidate SAP production and working-hour work orders, then generate annual product output and classification results.",
+        "zh": "整合 SAP 生產工單與工時工單，產出年度產品產量與分類結果。"
+    },
+    "module1bStage1Desc": {
+        "en": "Use Module 1A annual output and classification results to fill the Product Activity Bulk Template.",
+        "zh": "引用 Module 1A 年度產品產量與分類結果，寫入 Product Activity Bulk Template。"
+    },
+    "module1RuleStage1Desc": {
+        "en": "Maintain product classification, product series, and Rule Master settings used by Module 1A / 1B.",
+        "zh": "維護產品分類、產品系列與 Rule Master，供 Module 1A / 1B 使用。"
+    },
+    "module1IntegrationPolicy": {
+        "en": "Module 1 Integration Policy",
+        "zh": "模組 1 整合原則"
+    },
+    "module1IntegrationPolicyDesc": {
+        "en": "Module 1A handles work order consolidation, annual output roll-up, and product classification. Module 1B converts Module 1A output into the third-party Bulk Template format.",
+        "zh": "Module 1A 負責工單合併、年度產量彙總與產品分類；Module 1B 負責將 Module 1A 輸出轉換為第三方 Bulk Template 格式。"
+    },
+    "backToModule2Menu": {
+        "en": "Back to Module 2 Menu",
+        "zh": "返回模組 2 選單"
+    },
+    "module2Title": {
+        "en": "Module 2 · BOM Expansion",
+        "zh": "模組 2 · BOM 展開"
+    },
+    "module2Stage1Placeholder": {
+        "en": "Module 2 Entry. Select Module 2A, 2B, or 2C to quickly enter the corresponding function area.",
+        "zh": "模組2入口頁面。請選擇 Module 2A、2B 或 2C，快速進入對應功能區。"
+    },
+    "module2PageLead": {
+        "en": "Select Module 2A, Module 2B, or Module 2C to enter the corresponding workspace.",
+        "zh": "請選擇 Module 2A、Module 2B 或 Module 2C，快速進入對應功能區。"
+    },
+    "module2aShortTitle": {
+        "en": "Module 2A",
+        "zh": "Module 2A"
+    },
+    "module2bShortTitle": {
+        "en": "Module 2B",
+        "zh": "Module 2B"
+    },
+    "module2cShortTitle": {
+        "en": "Module 2C",
+        "zh": "Module 2C"
+    },
+    "module2aTitle": {
+        "en": "Module 2A · Standard BOM Total Usage",
+        "zh": "Module 2A · 標準BOM表總用量"
+    },
+    "module2bTitle": {
+        "en": "Module 2B · Raw Material Bulk Writing",
+        "zh": "Module 2B · Raw Material Bulk 寫入"
+    },
+    "module2cTitle": {
+        "en": "Module 2C · Supplier Mapping Bulk",
+        "zh": "Module 2C · Supplier Mapping Bulk"
+    },
+    "module2aStage1Desc": {
+        "en": "Expand standard BOM, aggregate total raw material usage, and generate working_hour_rollup.",
+        "zh": "展開標準 BOM、彙總原物料總用量，並產出 working_hour_rollup。"
+    },
+    "module2bStage1Desc": {
+        "en": "Use Module 2A standard BOM total usage to fill the Raw Material Bulk Template.",
+        "zh": "引用 Module 2A 標準BOM表總用量，寫入 Raw Material Bulk Template。"
+    },
+    "module2cStage1Desc": {
+        "en": "Use Module 2B Raw Material Bulk ZIP, apply supplier data, and output the Module 2C Bulk.",
+        "zh": "引用 Module 2B Raw Material Bulk ZIP，套用供應商資料並產出 Module 2C Bulk。"
+    },
+    "module2IntegrationPolicy": {
+        "en": "Module 2 Integration Policy",
+        "zh": "模組 2 整合原則"
+    },
+    "module2IntegrationPolicyDesc": {
+        "en": "Module 2A first generates standard BOM total usage and working_hour_rollup. Module 2B writes Raw Material Bulk. Module 2C then adds supplier data for Module 3.",
+        "zh": "Module 2A 先產出標準 BOM 總用量與 working_hour_rollup；Module 2B 寫入 Raw Material Bulk；Module 2C 再加入供應商資料，供 Module 3 引用。"
+    },
     "bomExpansion": {
         "en": "BOM Expansion",
         "zh": "BOM 展開"
@@ -200,7 +312,7 @@
     "dashboardLead": {"en": "Integrate manufacturing data, expand BOM structures, select emission factors, and support product carbon footprint workflows.", "zh": "整合製造資料、展開 BOM 結構、選擇碳排放係數，並支援產品碳足跡流程。"},
     "productDataLead": {"en": "Prepare production output and batch data for product carbon footprint workflows.", "zh": "準備產品碳足跡流程所需的生產產出與批次資料。"},
     "ruleManagementLead": {"en": "Maintain Product Data Preparation Rules, including Rule Master and Product Series Master.", "zh": "維護產品資料準備規則，包含 Rule Master 與 Product Series Master。"},
-    "modulePrepNoticeText": {"en": "Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.", "zh": "完成 Step 1 工單處理、Step 2 批次資料格式化與規則管理。"},
+    "modulePrepNoticeText": {"en": "Complete Module 1A Work Order Processing, Module 1B Batch Data Formatting and Rule Management.", "zh": "完成 Module 1A 工單處理、Module 1B 批次資料格式化與規則管理。"},
     "modulePcfNoticeText": {"en": "Reserved module. This area can be extended for product carbon footprint calculation.", "zh": "預留模組。此區可延伸為產品碳足跡計算。"},
     "bomExpansionPageLead": {"en": "Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.", "zh": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。"},
     "pcfCalculation": {
@@ -280,36 +392,36 @@
         "zh": "執行合併與分類"
     },
     "downloadStep1OutputExcel": {
-        "en": "Download Step 1 Output Excel",
-        "zh": "下載 Step 1 輸出 Excel"
+        "en": "Download Module 1A Output Excel",
+        "zh": "下載 Module 1A 輸出 Excel"
     },
     "step1WorkOrderProcessing": {
-        "en": "Step 1 · Work Order Processing",
-        "zh": "步驟 1 · 工單處理"
+        "en": "Module 1A · Work Order Processing",
+        "zh": "Module 1A · 工單處理"
     },
     "uploadSapProductionWorkOrderFiles": {
         "en": "Upload one or multiple SAP production work order files.",
         "zh": "上傳一份或多份 SAP 生產工單檔案。"
     },
     "step1": {
-        "en": "Step 1",
-        "zh": "步驟 1"
+        "en": "Module 1A",
+        "zh": "Module 1A"
     },
     "step2BatchDataFormatting": {
-        "en": "Step 2 · Batch Data Formatting",
-        "zh": "步驟 2 · 批次資料格式化"
+        "en": "Module 1B · Batch Data Formatting",
+        "zh": "Module 1B · 批次資料格式化"
     },
     "convertStep1OutputBulkTemplate": {
-        "en": "Convert Step 1 output and batch file template into a standardized batch file.",
-        "zh": "將 Step 1 輸出與批次範本轉換為標準化批次檔。"
+        "en": "Convert Module 1A output and batch file template into a standardized batch file.",
+        "zh": "將 Module 1A 輸出與批次範本轉換為標準化批次檔。"
     },
     "step2": {
-        "en": "Step 2",
-        "zh": "步驟 2"
+        "en": "Module 1B",
+        "zh": "Module 1B"
     },
     "step1Output": {
-        "en": "Step 1 Output",
-        "zh": "Step 1 輸出"
+        "en": "Module 1A Output",
+        "zh": "Module 1A 輸出"
     },
     "annualOutputClassificationResult": {
         "en": "Annual output & classification result",
@@ -332,8 +444,8 @@
         "zh": "可供後續處理"
     },
     "uploadStep1OutputFile": {
-        "en": "Upload Step 1 Output File",
-        "zh": "上傳 Step 1 輸出檔"
+        "en": "Upload Module 1A Output File",
+        "zh": "上傳 Module 1A 輸出檔"
     },
     "uploadBulkTemplateFile": {
         "en": "Upload Bulk Template File",
@@ -352,8 +464,8 @@
         "zh": "包含半品工時"
     },
     "semiHourHint": {
-        "en": "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.",
-        "zh": "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。"
+        "en": "This option requires Module 2A working_hour_rollup. Please complete Module 2A first.",
+        "zh": "此選項需先完成 Module 2A working_hour_rollup。請先完成 Module 2A。"
     },
     "generateFormattedBulkFile": {
         "en": "Generate Formatted Bulk File",
@@ -368,8 +480,8 @@
         "zh": "下載 Bulk ZIP 檔"
     },
     "step2Hint": {
-        "en": "Step 2 extracts required fields from the Step 1 output and writes them into the bulk template. Activity Data and Products sheets will be populated automatically.",
-        "zh": "Step 2 會從 Step 1 輸出擷取必要欄位並寫入 Bulk 範本。系統會自動填入 Activity Data 與 Products 分頁。"
+        "en": "Module 1B extracts required fields from the Module 1A output and writes them into the bulk template. Activity Data and Products sheets will be populated automatically.",
+        "zh": "Module 1B 會從 Module 1A 輸出擷取必要欄位並寫入 Bulk 範本。系統會自動填入 Activity Data 與 Products 分頁。"
     },
     "executionLog": {
         "en": "Execution Log",
@@ -400,8 +512,8 @@
         "zh": "上傳標準 BOM 檔案"
     },
     "uploadStep1OutputForRollup": {
-        "en": "Upload Annual Product Output & Classification Result",
-        "zh": "上傳年度產品產量與分類結果"
+        "en": "Use Module 1A Annual Product Output & Classification Result",
+        "zh": "引用 Module 1A 年度產品產量與分類結果"
     },
     "downloadWorkingHourRollup": {
         "en": "Download Working Hour Roll-up",
@@ -747,29 +859,29 @@
     "Reporting Year": "報告年度",
     "e.g. 2024; blank = all years": "例如：2024；空白＝全部年度",
     "Run Consolidation & Classification": "執行合併與分類",
-    "Download Step 1 Output Excel": "下載 Step 1 輸出 Excel",
-    "Step 1 · Work Order Processing": "步驟 1 · 工單處理",
+    "Download Module 1A Output Excel": "下載 Module 1A 輸出 Excel",
+    "Module 1A · Work Order Processing": "Module 1A · 工單處理",
     "Upload one or multiple SAP production work order files.": "上傳一份或多份 SAP 生產工單檔案。",
-    "Step 1": "步驟 1",
-    "Step 2 · Batch Data Formatting": "步驟 2 · 批次資料格式化",
-    "Convert Step 1 output and batch file template into a standardized batch file.": "將 Step 1 輸出與批次範本轉換為標準化批次檔。",
-    "Step 2": "步驟 2",
-    "Step 1 Output": "Step 1 輸出",
+    "Module 1A": "Module 1A",
+    "Module 1B · Batch Data Formatting": "Module 1B · 批次資料格式化",
+    "Convert Module 1A output and batch file template into a standardized batch file.": "將 Module 1A 輸出與批次範本轉換為標準化批次檔。",
+    "Module 1B": "Module 1B",
+    "Module 1A Output": "Module 1A 輸出",
     "Annual output & classification result": "年度產量與分類結果",
     "Batch Template": "批次範本",
     "Required batch file format": "必要批次檔格式",
     "Formatted Batch File": "已格式化批次檔",
     "Ready for downstream processing": "可供後續處理",
-    "Upload Step 1 Output File": "上傳 Step 1 輸出檔",
+    "Upload Module 1A Output File": "上傳 Module 1A 輸出檔",
     "Upload Bulk Template File": "上傳 Bulk 範本檔",
     "Working Hour Source": "工時來源",
     "Direct Working Hour": "僅成品工時",
     "Include Semi-finished Working Hour": "包含半品工時",
-    "This option requires the latest BOM Expansion result. Please complete Module 2 → BOM Expansion first.": "此選項需先完成最新的 BOM Expansion。請先完成 Module 2 → BOM Expansion。",
+    "This option requires Module 2A working_hour_rollup. Please complete Module 2A first.": "此選項需先完成 Module 2A working_hour_rollup。請先完成 Module 2A。",
     "Generate Formatted Bulk File": "產生格式化 Bulk 檔",
     "Download Formatted Bulk File": "下載格式化 Bulk 檔",
     "Download Bulk ZIP File": "下載 Bulk ZIP 檔",
-    "Step 2 extracts required fields from the Step 1 output and writes them into the bulk template. Activity Data and Products sheets will be populated automatically.": "Step 2 會從 Step 1 輸出擷取必要欄位並寫入 Bulk 範本。系統會自動填入 Activity Data 與 Products 分頁。",
+    "Module 1B extracts required fields from the Module 1A output and writes them into the bulk template. Activity Data and Products sheets will be populated automatically.": "Module 1B 會從 Module 1A 輸出擷取必要欄位並寫入 Bulk 範本。系統會自動填入 Activity Data 與 Products 分頁。",
     "Execution Log": "執行紀錄",
     "Summary": "摘要",
     "Rules": "規則",
@@ -866,7 +978,7 @@
     "Prepare production output and batch data for product carbon footprint workflows.": "準備產品碳足跡流程所需的生產產出與批次資料。",
     "Maintain Product Data Preparation Rules, including Rule Master and Product Series Master.": "維護 Product Data Preparation Rules，包含 Rule Master 與 Product Series Master。",
     "Expand multi-level BOM structures, aggregate total raw material demand for finished products, and generate Raw Material Bulk files.": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。",
-    "Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.": "完成 Step 1 工單處理、Step 2 批次資料格式化與規則管理。",
+    "Complete Module 1A Work Order Processing, Module 1B Batch Data Formatting and Rule Management.": "完成 Module 1A 工單處理、Module 1B 批次資料格式化與規則管理。",
     "Reserved module. This area can be extended for multi-level BOM explosion.": "預留模組。此區可延伸為多階 BOM 展開。",
     "Reserved module. This area can be extended for emission factor mapping and selection.": "預留模組。此區可延伸為排放係數對應與選擇。",
     "Reserved module. This area can be extended for product carbon footprint calculation.": "預留模組。此區可延伸為產品碳足跡計算。",
@@ -895,8 +1007,8 @@
     "Processing BOM Expansion...": "正在處理 BOM 展開...",
     "BOM Expansion is ready.": "BOM 展開已準備完成。",
     "Batch formatting in progress": "批次格式化處理中",
-    "Reading Step 1 output and validating the bulk template.": "讀取 Step 1 輸出並檢查 Bulk 範本。",
-    "Reading Step 1 output file...": "讀取 Step 1 輸出檔...",
+    "Reading Module 1A output and validating the bulk template.": "讀取 Module 1A 輸出並檢查 Bulk 範本。",
+    "Reading Module 1A output file...": "讀取 Module 1A 輸出檔...",
     "Copying original bulk template...": "複製原始 Bulk 範本...",
     "Writing Input Sheet Activity Data...": "寫入 Input Sheet Activity Data...",
     "Writing Input Sheet Products...": "寫入 Input Sheet Products...",
@@ -976,8 +1088,8 @@
     "Please review the BOM and raw material bulk template.": "請檢查 BOM 與原物料 Bulk 範本。",
 
     "Batch formatting in progress": "批次格式化處理中",
-    "Reading Step 1 output and validating the bulk template.": "讀取 Step 1 輸出並檢查 Bulk 範本。",
-    "Reading Step 1 output file...": "讀取 Step 1 輸出檔...",
+    "Reading Module 1A output and validating the bulk template.": "讀取 Module 1A 輸出並檢查 Bulk 範本。",
+    "Reading Module 1A output file...": "讀取 Module 1A 輸出檔...",
     "Copying original bulk template...": "複製原始 Bulk 範本...",
     "Writing Input Sheet Activity Data...": "寫入 Input Sheet Activity Data...",
     "Writing Input Sheet Products...": "寫入 Input Sheet Products...",
@@ -997,7 +1109,7 @@
     "Stage 2 entry page. Choose CCL Mapping or Factor Library to enter each workspace.": "模組3 入口頁面。請選擇以CCL 係數帶入或查詢Ecoinvent係數資料庫，進入各自專區。",
     "Stage 2: A/B workspaces are available for CCL Mapping and Factor Library implementation.": "A專區為CCLibrary係數資料庫，B專區為Ecoinvent係數資料庫。",
     "This version only creates the A/B workspace entry points and does not call any backend API yet. Module 1 and Module 2 routes, forms, Excel logic, and outputs remain unchanged.": "CCL係數資料庫專區以原物料料號對應，帶入CCL Item和碳係數；Ecoinvent係數資料庫專區主要為查詢功能，未來將導入建議係數功能。",
-    "Upload Step 1 Output File for Working Hour Roll-up": "上傳年度產品產量與分類結果",
+    "Use Module 1A Annual Product Output & Classification Result": "引用 Module 1A 年度產品產量與分類結果",
     "Expand multi-level BOM structures, roll up raw material quantities, and generate raw material bulk files.": "展開多階 BOM 結構、彙總成品需求原物料總數量，並產生原物料 Bulk 檔。"
   });
 

@@ -162,7 +162,15 @@
           <span class="nav-text"><b data-i18n="productDataPreparation">Product Data Preparation</b></span>
         </button>
 
-        <div class="sub-nav">
+        <div class="sub-nav module1-sub-nav">
+          <button class="sub-nav-item" type="button" data-page="product-data" data-anchor="module1a-workorder">
+            <span class="sub-dot"></span>
+            <span data-i18n="module1aShortTitle">Module 1A</span>
+          </button>
+          <button class="sub-nav-item" type="button" data-page="product-data" data-anchor="module1b-batch">
+            <span class="sub-dot"></span>
+            <span data-i18n="module1bShortTitle">Module 1B</span>
+          </button>
           <button class="sub-nav-item" type="button" data-page="rule-management">
             <span class="sub-dot"></span>
             <span data-i18n="ruleManagement">Rule Management</span>
@@ -174,6 +182,21 @@
           <span class="nav-icon">⌘</span>
           <span class="nav-text"><b data-i18n="bomExpansion">BOM Expansion</b></span>
         </button>
+
+        <div class="sub-nav module2-sub-nav">
+          <button class="sub-nav-item" type="button" data-page="bom-expansion" data-anchor="module2a-workspace">
+            <span class="sub-dot"></span>
+            <span data-i18n="module2aShortTitle">Module 2A</span>
+          </button>
+          <button class="sub-nav-item" type="button" data-page="bom-expansion" data-anchor="module2b-workspace">
+            <span class="sub-dot"></span>
+            <span data-i18n="module2bShortTitle">Module 2B</span>
+          </button>
+          <button class="sub-nav-item" type="button" data-page="bom-expansion" data-anchor="module2c-workspace">
+            <span class="sub-dot"></span>
+            <span data-i18n="module2cShortTitle">Module 2C</span>
+          </button>
+        </div>
 
         <button class="nav-item" type="button" data-main="factor">
           <span class="module-index">3</span>
@@ -267,15 +290,65 @@
         </section>
       </section>
 
-      <section id="product-data" class="page-section">
-        <section class="workspace">
+      <section id="module1-entry" class="page-section">
+        <section class="workspace module3-stage1">
           <section class="card primary-card">
             <div class="section-title">
               <div>
-                <h2 data-i18n="step1WorkOrderProcessing">Step 1 · Work Order Processing</h2>
+                <h2 data-i18n="module1Title">模組 1 · 產品資料準備</h2>
+                <p data-i18n="module1Stage1Placeholder">模組1入口頁面。請選擇 Module 1A 工單處理、Module 1B 批次資料格式化或規則管理，進入各自專區。</p>
+              </div>
+              <span class="step-chip" data-i18n="moduleEntry">入口選單</span>
+            </div>
+
+            <div class="module3-placeholder-grid" role="list" aria-label="Module 1 function areas">
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module1-page="product-data" data-anchor="module1a-workorder" role="listitem">
+                <span class="module3-placeholder-icon">A</span>
+                <div>
+                  <h3 data-i18n="module1aTitle">Module 1A · Work Order Processing</h3>
+                  <p data-i18n="module1aStage1Desc">整合 SAP 生產工單與工時工單，產出年度產品產量與分類結果。</p>
+                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
+                </div>
+              </button>
+
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module1-page="product-data" data-anchor="module1b-batch" role="listitem">
+                <span class="module3-placeholder-icon">B</span>
+                <div>
+                  <h3 data-i18n="module1bTitle">Module 1B · Batch Data Formatting</h3>
+                  <p data-i18n="module1bStage1Desc">引用 Module 1A 年度產品產量與分類結果，寫入 Product Activity Bulk Template。</p>
+                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
+                </div>
+              </button>
+
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module1-page="rule-management" role="listitem">
+                <span class="module3-placeholder-icon">C</span>
+                <div>
+                  <h3 data-i18n="ruleManagement">Rule Management</h3>
+                  <p data-i18n="module1RuleStage1Desc">維護產品分類、產品系列與 Rule Master，供 Module 1A / 1B 使用。</p>
+                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
+                </div>
+              </button>
+            </div>
+          </section>
+
+          <section class="card insight-card module3-policy-card">
+            <h2 data-i18n="module1IntegrationPolicy">模組 1 整合原則</h2>
+            <p data-i18n="module1IntegrationPolicyDesc">Module 1A 負責工單合併、年度產量彙總與產品分類；Module 1B 負責將 Module 1A 輸出轉換為第三方 Bulk Template 格式。</p>
+          </section>
+        </section>
+      </section>
+
+      <section id="product-data" class="page-section">
+        <section class="workspace">
+          <section class="card primary-card">
+            <button class="btn-secondary module-return-btn" type="button" data-module1-page="module1-entry" data-i18n="backToModule1Menu">返回模組 1 選單</button>
+
+            <div id="module1a-workorder" class="section-title">
+              <div>
+                <h2 data-i18n="step1WorkOrderProcessing">Module 1A · Work Order Processing</h2>
                 <p data-i18n="uploadSapProductionWorkOrderFiles">Upload one or multiple SAP production work order files.</p>
               </div>
-              <span class="step-chip" data-i18n="step1">Step 1</span>
+              <span class="step-chip" data-i18n="step1">Module 1A</span>
             </div>
 
             <form id="form" class="form-panel">
@@ -322,21 +395,21 @@
               </div>
             </div>
 
-            <a id="download" class="download disabled" href="#"><span data-i18n="downloadStep1OutputExcel">Download Step 1 Output Excel</span></a>
+            <a id="download" class="download disabled" href="#"><span data-i18n="downloadStep1OutputExcel">Download Module 1A Output Excel</span></a>
 
             <div class="divider"></div>
 
-            <div class="section-title">
+            <div id="module1b-batch" class="section-title">
               <div>
-                <h2 data-i18n="step2BatchDataFormatting">Step 2 · Batch Data Formatting</h2>
-                <p data-i18n="convertStep1OutputBulkTemplate">Convert Step 1 output and batch file template into a standardized batch file.</p>
+                <h2 data-i18n="step2BatchDataFormatting">Module 1B · Batch Data Formatting</h2>
+                <p data-i18n="convertStep1OutputBulkTemplate">Convert Module 1A output and batch file template into a standardized batch file.</p>
               </div>
-              <span class="step-chip" data-i18n="step2">Step 2</span>
+              <span class="step-chip" data-i18n="step2">Module 1B</span>
             </div>
 
             <div class="placeholder-flow">
               <div class="flow-card">
-                <b data-i18n="step1Output">Step 1 Output</b>
+                <b data-i18n="step1Output">Module 1A Output</b>
                 <span data-i18n="annualOutputClassificationResult">Annual output & classification result</span>
               </div>
               <div class="flow-arrow">+</div>
@@ -352,8 +425,8 @@
             </div>
 
             <div class="module3-source-card" id="bulkStep1SourceCard">
-              <b>引用Module 1 step1 年度產品產量與分類結果</b>
-              <p id="bulkStep1SourceText">來源：Module 1 step1 年度產品產量與分類結果檢查中...</p>
+              <b>引用Module 1A 年度產品產量與分類結果</b>
+              <p id="bulkStep1SourceText">來源：Module 1A 年度產品產量與分類結果檢查中...</p>
             </div>
             <div class="module3-source-card" id="bulkM2aRollupSourceCard">
               <b>引用Module 2A working_hour_rollup</b>
@@ -384,7 +457,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="bulkStatusTitle">Ready for batch formatting</b>
-                  <p id="bulkStatusText">系統會自動引用 Module 1 step1 年度產品產量與分類結果；若選擇包含半品工時，會引用 Module 2A working_hour_rollup。請上傳 Bulk Template 以產出格式化檔案。</p>
+                  <p id="bulkStatusText">系統會自動引用 Module 1A 年度產品產量與分類結果；若選擇包含半品工時，會引用 Module 2A working_hour_rollup。請上傳 Bulk Template 以產出格式化檔案。</p>
                 </div>
                 <span id="bulkStatusTime" class="status-time">Idle</span>
               </div>
@@ -396,7 +469,7 @@
             <a id="bulkDownload" class="download disabled" href="#"><span data-i18n="downloadFormattedBulkFile">Download Formatted Bulk File</span></a>
 
             <p class="hint" data-i18n="step2Hint">
-              Step 2 extracts required fields from the Step 1 output and writes them into the bulk template.
+              Module 1B extracts required fields from the Module 1A output and writes them into the bulk template.
               Activity Data and Products sheets will be populated automatically.
             </p>
           </section>
@@ -594,10 +667,60 @@
       </section>
 
 
+      <section id="module2-entry" class="page-section">
+        <section class="workspace module3-stage1">
+          <section class="card primary-card">
+            <div class="section-title">
+              <div>
+                <h2 data-i18n="module2Title">模組 2 · BOM 展開</h2>
+                <p data-i18n="module2Stage1Placeholder">模組2入口頁面。請選擇 Module 2A、2B 或 2C，快速進入對應功能區。</p>
+              </div>
+              <span class="step-chip" data-i18n="moduleEntry">入口選單</span>
+            </div>
+
+            <div class="module3-placeholder-grid" role="list" aria-label="Module 2 function areas">
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module2-page="bom-expansion" data-anchor="module2a-workspace" role="listitem">
+                <span class="module3-placeholder-icon">A</span>
+                <div>
+                  <h3 data-i18n="module2aTitle">Module 2A · 標準BOM表總用量</h3>
+                  <p data-i18n="module2aStage1Desc">展開標準 BOM、彙總原物料總用量，並產出 working_hour_rollup。</p>
+                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
+                </div>
+              </button>
+
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module2-page="bom-expansion" data-anchor="module2b-workspace" role="listitem">
+                <span class="module3-placeholder-icon">B</span>
+                <div>
+                  <h3 data-i18n="module2bTitle">Module 2B · Raw Material Bulk 寫入</h3>
+                  <p data-i18n="module2bStage1Desc">引用 Module 2A 標準BOM表總用量，寫入 Raw Material Bulk Template。</p>
+                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
+                </div>
+              </button>
+
+              <button class="module3-placeholder-card module3-entry-card" type="button" data-module2-page="bom-expansion" data-anchor="module2c-workspace" role="listitem">
+                <span class="module3-placeholder-icon">C</span>
+                <div>
+                  <h3 data-i18n="module2cTitle">Module 2C · Supplier Mapping Bulk</h3>
+                  <p data-i18n="module2cStage1Desc">引用 Module 2B Raw Material Bulk ZIP，套用供應商資料並產出 Module 2C Bulk。</p>
+                  <span class="module3-entry-action" data-i18n="enterWorkspace">進入專區</span>
+                </div>
+              </button>
+            </div>
+          </section>
+
+          <section class="card insight-card module3-policy-card">
+            <h2 data-i18n="module2IntegrationPolicy">模組 2 整合原則</h2>
+            <p data-i18n="module2IntegrationPolicyDesc">Module 2A 先產出標準 BOM 總用量與 working_hour_rollup；Module 2B 寫入 Raw Material Bulk；Module 2C 再加入供應商資料，供 Module 3 引用。</p>
+          </section>
+        </section>
+      </section>
+
       <section id="bom-expansion" class="page-section">
         <section class="workspace">
           <section class="card primary-card">
-            <div class="module2a-panel">
+            <button class="btn-secondary module-return-btn" type="button" data-module2-page="module2-entry" data-i18n="backToModule2Menu">返回模組 2 選單</button>
+
+            <div id="module2a-workspace" class="module2a-panel">
               <div class="module2a-header">
                 <div>
                   <p class="section-eyebrow">MODULE 2A</p>
@@ -611,8 +734,8 @@
                 <input id="module2aBomFiles" name="module2a_bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
 
                 <div id="module2aStep1Source" class="module3-source-card">
-                  <b>引用 Module 1 Step 1 最新產出資訊</b>
-                  <p id="module2aStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+                  <b>引用 Module 1A 年度產品產量與分類結果</b>
+                  <p id="module2aStep1SourceText">來源：Module 1A 年度產品產量與分類結果檢查中...</p>
                 </div>
 
                 <button type="submit" class="btn-secondary">
@@ -640,18 +763,18 @@
               <pre id="module2aLog" class="rule-log">MODULE 2A is ready.</pre>
             </div>
 
-            <div class="module2a-panel module2b-panel">
+            <div id="module2b-workspace" class="module2a-panel module2b-panel">
               <div class="module2a-header">
                 <div>
                   <p class="section-eyebrow">MODULE 2B</p>
                   <h2>寫入 Raw Material Bulk</h2>
-                  <p class="form-hint">第二段自動引用 MODULE 2A 產出的標準BOM表總用量與 Module 1 Step 1 最新產出，並依既有規則寫入 Raw Material Bulk Template。</p>
+                  <p class="form-hint">第二段自動引用 MODULE 2A 產出的標準BOM表總用量與 Module 1A 年度產品產量與分類結果，並依既有規則寫入 Raw Material Bulk Template。</p>
                 </div>
               </div>
 
               <div class="module3-source-card">
-                <b>引用 Module 1 Step 1 最新產出資訊</b>
-                <p id="module2bStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+                <b>引用 Module 1A 年度產品產量與分類結果</b>
+                <p id="module2bStep1SourceText">來源：Module 1A 年度產品產量與分類結果檢查中...</p>
               </div>
 
               <div class="module3-source-card">
@@ -687,7 +810,7 @@
               <pre id="module2bLog" class="rule-log">MODULE 2B is ready.</pre>
             </div>
 
-            <div class="module2a-panel module2b-panel module2c-panel">
+            <div id="module2c-workspace" class="module2a-panel module2b-panel module2c-panel">
               <div class="module2a-header">
                 <div>
                   <p class="section-eyebrow">MODULE 2C</p>
@@ -697,8 +820,8 @@
               </div>
 
               <div class="module3-source-card">
-                <b>引用 Module 1 Step 1 最新產出資訊</b>
-                <p id="module2cStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+                <b>引用 Module 1A 年度產品產量與分類結果</b>
+                <p id="module2cStep1SourceText">來源：Module 1A 年度產品產量與分類結果檢查中...</p>
               </div>
 
               <div class="module3-source-card">
@@ -735,7 +858,7 @@
               <pre id="module2cLog" class="rule-log">MODULE 2C is ready.</pre>
             </div>
 
-            <div class="module2-legacy-panel">
+            <div id="module2-legacy-workspace" class="module2-legacy-panel">
               <details>
                 <summary>進階 / 原 Raw Material Bulk 一次式輸出流程（保留原功能）</summary>
 
@@ -747,8 +870,8 @@
               <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
 
               <div id="bomStep1Source" class="module3-source-card">
-                <b data-i18n="uploadStep1OutputForRollup">Upload Annual Product Output & Classification Result</b>
-                <p id="bomStep1SourceText">來源：Module 1 Step 1 最新產出檔案檢查中...</p>
+                <b data-i18n="uploadStep1OutputForRollup">引用 Module 1A 年度產品產量與分類結果</b>
+                <p id="bomStep1SourceText">來源：Module 1A 年度產品產量與分類結果檢查中...</p>
               </div>
 
               <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
@@ -1335,7 +1458,7 @@ const moduleMessages = {
     titleKey: 'productDataPreparation',
     title: '1. Product Data Preparation',
     textKey: 'modulePrepNoticeText',
-    text: 'Complete Step 1 Work Order Processing, Step 2 Batch Data Formatting and Rule Management.'
+    text: 'Complete Module 1A Work Order Processing, Module 1B Batch Data Formatting and Rule Management.'
   },
   bom: {
     titleKey: 'bomExpansion',
@@ -1364,11 +1487,23 @@ const pageMessages = {
     leadKey: "dashboardLead",
     lead: "Integrate manufacturing data, expand BOM structures, select emission factors, and support product carbon footprint workflows."
   },
+  "module1-entry": {
+    titleKey: "productDataPreparation",
+    title: "Product Data Preparation",
+    leadKey: "module1PageLead",
+    lead: "Select Module 1A, Module 1B, or Rule Management to enter the corresponding workspace."
+  },
   "product-data": {
     titleKey: "productDataPreparation",
     title: "Product Data Preparation",
     leadKey: "productDataLead",
     lead: "Prepare production output and batch data for product carbon footprint workflows."
+  },
+  "module2-entry": {
+    titleKey: "bomExpansion",
+    title: "BOM Expansion",
+    leadKey: "module2PageLead",
+    lead: "Select Module 2A, Module 2B, or Module 2C to enter the corresponding workspace."
   },
   "rule-management": {
     titleKey: "ruleManagement",
@@ -1400,43 +1535,76 @@ homeLogo.onkeydown = (e) => {
   if (e.key === 'Enter' || e.key === ' ') activateDashboard();
 };
 
-function activatePrepPage(pageId) {
-  document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
-  document.getElementById(pageId).classList.add('active');
+function scrollContentToAnchor(anchorId) {
+  const content = document.querySelector('.content');
+  if (!content) return;
+  if (anchorId) {
+    const target = document.getElementById(anchorId);
+    if (target) {
+      setTimeout(() => content.scrollTo({top: Math.max(0, target.offsetTop - 110), behavior: 'smooth'}), 40);
+      return;
+    }
+  }
+  content.scrollTo({top: 0, behavior: 'smooth'});
+}
 
+function setActiveSubItem(pageId, anchorId = '') {
   document.querySelectorAll('.sub-nav-item').forEach(b => b.classList.remove('active'));
-  const activeSubItem = document.querySelector(`[data-page="${pageId}"]`);
+  let selector = `[data-page="${pageId}"]`;
+  if (anchorId) selector += `[data-anchor="${anchorId}"]`;
+  let activeSubItem = document.querySelector(selector);
+  if (!activeSubItem && !anchorId) activeSubItem = document.querySelector(`[data-page="${pageId}"]`);
   if (activeSubItem) activeSubItem.classList.add('active');
+}
+
+function activatePrepPage(pageId = 'module1-entry', anchorId = '') {
+  document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+  const targetPage = document.getElementById(pageId) || document.getElementById('module1-entry');
+  targetPage.classList.add('active');
+
+  setActiveSubItem(pageId, anchorId);
 
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   document.querySelector('[data-main="prep"]').classList.add('active');
 
+  const message = pageMessages[pageId] || pageMessages['module1-entry'];
   moduleNotice.classList.add('hidden');
-  setDynamicI18n(pageTitle, pageMessages[pageId].titleKey, pageMessages[pageId].title);
-  setDynamicI18n(pageLead, pageMessages[pageId].leadKey, pageMessages[pageId].lead);
-  pageLead.style.display = pageMessages[pageId].lead ? 'block' : 'none';
+  setDynamicI18n(pageTitle, message.titleKey, message.title);
+  setDynamicI18n(pageLead, message.leadKey, message.lead);
+  pageLead.style.display = message.lead ? 'block' : 'none';
   cmpApplyI18n();
   if (pageId === 'product-data' && typeof window.cmpRefreshBulkStep2Sources === 'function') {
     window.cmpRefreshBulkStep2Sources();
   }
-  document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
+  scrollContentToAnchor(anchorId);
 }
 
 document.querySelectorAll('.sub-nav-item').forEach(btn => {
   btn.onclick = () => {
     const pageId = btn.dataset.page;
+    const anchorId = btn.dataset.anchor || '';
     if (pageId && pageId.startsWith('module3-')) {
       activateFactorPage(pageId);
       return;
     }
-    activatePrepPage(pageId);
+    if (pageId === 'bom-expansion') {
+      activateBomPage(anchorId);
+      return;
+    }
+    activatePrepPage(pageId || 'module1-entry', anchorId);
   };
 });
 
 
 document.querySelectorAll('[data-prep-page]').forEach(btn => {
   btn.onclick = () => {
-    activatePrepPage(btn.dataset.prepPage || 'product-data');
+    activatePrepPage(btn.dataset.prepPage || 'product-data', btn.dataset.anchor || '');
+  };
+});
+
+document.querySelectorAll('[data-module1-page]').forEach(btn => {
+  btn.onclick = () => {
+    activatePrepPage(btn.dataset.module1Page || 'module1-entry', btn.dataset.anchor || '');
   };
 });
 
@@ -1470,11 +1638,28 @@ document.querySelectorAll('[data-module3-page]').forEach(el => {
   el.onclick = () => activateFactorPage(el.dataset.module3Page);
 });
 
-function activateBomPage() {
+function activateModule2EntryPage() {
+  document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+  document.getElementById('module2-entry').classList.add('active');
+
+  setActiveSubItem('module2-entry');
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-main="bom"]').classList.add('active');
+
+  const message = pageMessages['module2-entry'];
+  moduleNotice.classList.add('hidden');
+  setDynamicI18n(pageTitle, message.titleKey, message.title);
+  setDynamicI18n(pageLead, message.leadKey, message.lead);
+  pageLead.style.display = 'block';
+  cmpApplyI18n();
+  scrollContentToAnchor('');
+}
+
+function activateBomPage(anchorId = '') {
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
   document.getElementById('bom-expansion').classList.add('active');
 
-  document.querySelectorAll('.sub-nav-item').forEach(b => b.classList.remove('active'));
+  setActiveSubItem('bom-expansion', anchorId);
   document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
   document.querySelector('[data-main="bom"]').classList.add('active');
 
@@ -1484,8 +1669,19 @@ function activateBomPage() {
   pageLead.style.display = 'block';
   cmpApplyI18n();
   refreshBomStep1Source();
-  document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
+  scrollContentToAnchor(anchorId);
 }
+
+document.querySelectorAll('[data-module2-page]').forEach(btn => {
+  btn.onclick = () => {
+    const pageId = btn.dataset.module2Page || 'module2-entry';
+    if (pageId === 'module2-entry') {
+      activateModule2EntryPage();
+      return;
+    }
+    activateBomPage(btn.dataset.anchor || '');
+  };
+});
 
 function setBomProcessingState(mode, title, text, timeText, progress) {
   bomProcessingStatus.classList.remove('idle', 'running', 'success', 'error');
@@ -1504,14 +1700,14 @@ async function refreshBomStep1Source() {
   try {
     const res = await fetch('/module2/step1-output-source', { cache: 'no-store' });
     const data = await readJsonOrThrow(res);
-    const filename = data.filename || 'Module 1 Step 1 output';
-    const sourceText = `來源：Module 1 Step 1 最新產出｜檔案：${filename}${cmpSourceMetaText(data)}`;
+    const filename = data.filename || 'Module 1A output';
+    const sourceText = `來源：Module 1A 年度產品產量與分類結果｜檔案：${filename}${cmpSourceMetaText(data)}`;
     if (bomStep1SourceText) bomStep1SourceText.textContent = sourceText;
     if (module2aStep1SourceText) module2aStep1SourceText.textContent = sourceText;
     if (module2bStep1SourceText) module2bStep1SourceText.textContent = sourceText;
     if (module2cStep1SourceText) module2cStep1SourceText.textContent = sourceText;
   } catch (err) {
-    const message = err.message || '尚未找到 Module 1 Step 1 產出檔，請先完成 Module 1 → Step 1。';
+    const message = err.message || '尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。';
     if (bomStep1SourceText) bomStep1SourceText.textContent = message;
     if (module2aStep1SourceText) module2aStep1SourceText.textContent = message;
     if (module2bStep1SourceText) module2bStep1SourceText.textContent = message;
@@ -2083,11 +2279,11 @@ document.querySelectorAll('[data-dashboard-target]').forEach(card => {
   card.onclick = () => {
     const target = card.dataset.dashboardTarget;
     if (target === 'prep') {
-      activatePrepPage('product-data');
+      activatePrepPage('module1-entry');
       return;
     }
     if (target === 'bom') {
-      activateBomPage();
+      activateModule2EntryPage();
       return;
     }
     if (target === 'factor') {
@@ -2107,11 +2303,11 @@ document.querySelectorAll('.nav-item').forEach(btn => {
 
     const key = btn.dataset.main;
     if (key === 'prep') {
-      activatePrepPage('product-data');
+      activatePrepPage('module1-entry');
       return;
     }
     if (key === 'bom') {
-      activateBomPage();
+      activateModule2EntryPage();
       return;
     }
     if (key === 'factor') {
@@ -2293,7 +2489,7 @@ function startBulkEstimatedProgress() {
   setBulkProcessingState(
     'running',
     cmpT('batchFormattingInProgress', 'Batch formatting in progress'),
-    cmpT('readingStep1ValidatingBulk', 'Reading Step 1 output and validating the bulk template.'),
+    cmpT('readingStep1ValidatingBulk', 'Reading Module 1A output and validating the bulk template.'),
     cmpRemainingText(estimatedSeconds),
     8
   );
@@ -2307,7 +2503,7 @@ function startBulkEstimatedProgress() {
     bulkProgressBar.style.width = `${progress}%`;
 
     const stages = [
-      cmpT('stageReadingStep1Output', 'Reading Step 1 output file...'),
+      cmpT('stageReadingStep1Output', 'Reading Module 1A output file...'),
       cmpT('stageCopyingBulkTemplate', 'Copying original bulk template...'),
       cmpT('stageWritingActivityData', 'Writing Input Sheet Activity Data...'),
       cmpT('stageWritingProducts', 'Writing Input Sheet Products...'),
@@ -2358,8 +2554,8 @@ async function refreshBulkStep2Sources() {
     const rollup = data.module2a_working_hour_rollup || {};
     if (bulkStep1SourceText) {
       bulkStep1SourceText.textContent = step1.ok === false
-        ? (step1.message || '尚未找到 Module 1 step1 年度產品產量與分類結果。')
-        : `來源：Module 1 step1 年度產品產量與分類結果｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}${step1.modified_at ? `｜${cmpBuildTimeText(step1.modified_at)}` : ''}`;
+        ? (step1.message || '尚未找到 Module 1A 年度產品產量與分類結果。')
+        : `來源：Module 1A 年度產品產量與分類結果｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}${step1.modified_at ? `｜${cmpBuildTimeText(step1.modified_at)}` : ''}`;
     }
     if (bulkM2aRollupSourceText) {
       if (bulkStep2UsesSemiHours()) {
@@ -2373,7 +2569,7 @@ async function refreshBulkStep2Sources() {
       }
     }
   } catch (err) {
-    if (bulkStep1SourceText) bulkStep1SourceText.textContent = '無法更新 Module 1 step1 年度產品產量與分類結果引用狀態，請重新整理或查看後端 log。';
+    if (bulkStep1SourceText) bulkStep1SourceText.textContent = '無法更新 Module 1A 年度產品產量與分類結果引用狀態，請重新整理或查看後端 log。';
     if (bulkM2aRollupSourceText) bulkM2aRollupSourceText.textContent = '無法更新 Module 2A working_hour_rollup 狀態，請重新整理或查看後端 log。';
   }
 }
@@ -2406,7 +2602,7 @@ bulkForm.addEventListener('submit', async (e) => {
   if (workingHourSource === 'include_semi') {
     bulkStatusText.textContent = 'Checking latest Module 2A working_hour_rollup for semi-finished working hours.';
   } else {
-    bulkStatusText.textContent = 'Checking latest Module 1 step1 年度產品產量與分類結果. Step1 output is auto-fetched; only Bulk Template upload is required.';
+    bulkStatusText.textContent = 'Checking latest Module 1A 年度產品產量與分類結果. Module 1A output is auto-fetched; only Bulk Template upload is required.';
   }
 
   try {
@@ -2664,8 +2860,8 @@ ruleForm.onsubmit = async (e) => {
       const totalUsage = data.module2a_total_usage || {};
       if (module2bStep1SourceText) {
         module2bStep1SourceText.textContent = step1.ok === false
-          ? (step1.message || '尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。')
-          : `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
+          ? (step1.message || '尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。')
+          : `來源：Module 1A 年度產品產量與分類結果｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
       }
       if (module2bTotalUsageSourceText) {
         module2bTotalUsageSourceText.textContent = totalUsage.ok === false
@@ -2673,7 +2869,7 @@ ruleForm.onsubmit = async (e) => {
           : `來源：Module 2A 標準BOM表總用量｜檔案：${totalUsage.filename || ''}${totalUsage.modified_at ? `｜${cmpBuildTimeText(totalUsage.modified_at)}` : ''}`;
       }
     } catch (err) {
-      if (module2bStep1SourceText) module2bStep1SourceText.textContent = '無法更新 Module 1 Step 1 最新產出資訊，請重新整理頁面或查看後端 log。';
+      if (module2bStep1SourceText) module2bStep1SourceText.textContent = '無法更新 Module 1A 年度產品產量與分類結果引用狀態，請重新整理頁面或查看後端 log。';
       if (module2bTotalUsageSourceText) module2bTotalUsageSourceText.textContent = '無法更新 Module 2A 標準BOM表總用量來源，請重新整理頁面或查看後端 log。';
     }
   }
@@ -2812,8 +3008,8 @@ ruleForm.onsubmit = async (e) => {
       const rawBulk = data.module2b_raw_bulk || {};
       if (module2cStep1SourceText) {
         module2cStep1SourceText.textContent = step1.ok === false
-          ? (step1.message || '尚未找到 Module 1 Step 1 最新產出，請先完成 Module 1 → Step 1。')
-          : `來源：Module 1 Step 1 最新產出｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
+          ? (step1.message || '尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。')
+          : `來源：Module 1A 年度產品產量與分類結果｜檔案：${step1.filename || ''}${cmpSourceMetaText(step1)}`;
       }
       if (module2cRawBulkSourceText) {
         module2cRawBulkSourceText.textContent = rawBulk.ok === false
@@ -2821,7 +3017,7 @@ ruleForm.onsubmit = async (e) => {
           : `來源：Module 2B Raw Material Bulk ZIP｜檔案：${rawBulk.filename || ''}${rawBulk.modified_at ? `｜${cmpBuildTimeText(rawBulk.modified_at)}` : ''}`;
       }
     } catch (err) {
-      if (module2cStep1SourceText) module2cStep1SourceText.textContent = '無法更新 Module 1 Step 1 最新產出資訊，請重新整理頁面或查看後端 log。';
+      if (module2cStep1SourceText) module2cStep1SourceText.textContent = '無法更新 Module 1A 年度產品產量與分類結果引用狀態，請重新整理頁面或查看後端 log。';
       if (module2cRawBulkSourceText) module2cRawBulkSourceText.textContent = '無法更新 Module 2B Raw Material Bulk ZIP 來源，請重新整理頁面或查看後端 log。';
     }
   }
