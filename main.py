@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
-from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_standard_bom_total_usage_file, generate_raw_material_bulk_from_standard_total_usage_zip, generate_supplier_mapped_raw_material_bulk_from_zip
+from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_working_hour_rollup_file_from_standard_bom, generate_standard_bom_total_usage_file, generate_raw_material_bulk_from_standard_total_usage_zip, generate_supplier_mapped_raw_material_bulk_from_zip
 from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, apply_ccl_factors_to_raw_material_bulk_package, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -199,44 +199,37 @@ def _run_module2a_total_usage_job(
         resolved_step1_path = Path(step1_source_path) if step1_source_path else _find_latest_module1_step1_output()
         if resolved_step1_path and resolved_step1_path.exists():
             try:
-                bom_structure_output_path = OUTPUT_DIR / f"bom_structure_{job_id}.xlsx"
                 working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{job_id}.xlsx"
 
+                # Memory fix: do not export a large BOM Structure workbook in M2A.
+                # M1 Step2 only needs the Summary sheet in working_hour_rollup_latest.xlsx,
+                # so the roll-up is generated directly from Standard BOM with a streaming writer.
+                summary["bom_structure_status"] = "skipped_streaming_rollup"
+                summary["bom_structure_filename"] = ""
+                summary["bom_structure_download_url"] = ""
+                summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name if LATEST_BOM_STRUCTURE_PATH.exists() else ""
+                summary["bom_structure_latest_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}" if LATEST_BOM_STRUCTURE_PATH.exists() else ""
+                summary["bom_structure_rows"] = 0
+                summary["bom_structure_message"] = "M2A 已改為直接串流產出 Working Hour Roll-up，不再輸出大型 BOM Structure Excel，避免記憶體 crash。"
+
                 progress_callback(
-                    "Exporting BOM Structure for working-hour roll-up",
-                    processed=int(summary.get("standard_bom_total_usage_rows", 0) or 0),
+                    "Generating Working Hour Roll-up (streaming)",
+                    processed=0,
                     total=int(summary.get("standard_bom_total_usage_rows", 0) or 0),
                     progress=88,
                 )
-                bom_structure_summary = export_bom_structure_file(
-                    bom_path=bom_paths,
-                    output_path=bom_structure_output_path,
-                    mapping=None,
-                )
-                if bom_structure_output_path.exists():
-                    shutil.copy2(bom_structure_output_path, LATEST_BOM_STRUCTURE_PATH)
-                summary["bom_structure_filename"] = bom_structure_output_path.name
-                summary["bom_structure_download_url"] = f"/download/{bom_structure_output_path.name}"
-                summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name if LATEST_BOM_STRUCTURE_PATH.exists() else ""
-                summary["bom_structure_latest_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}" if LATEST_BOM_STRUCTURE_PATH.exists() else ""
-                summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0) or 0)
-
-                progress_callback(
-                    "Generating Working Hour Roll-up",
-                    processed=0,
-                    total=0,
-                    progress=94,
-                )
-                rollup_summary = generate_working_hour_rollup_file(
+                rollup_summary = generate_working_hour_rollup_file_from_standard_bom(
                     step1_output_path=resolved_step1_path,
-                    bom_structure_path=bom_structure_output_path,
+                    bom_path=bom_paths,
                     output_path=working_hour_rollup_output_path,
+                    mapping=None,
+                    progress_callback=progress_callback,
                 )
                 if working_hour_rollup_output_path.exists():
                     shutil.copy2(working_hour_rollup_output_path, LATEST_WORKING_HOUR_ROLLUP_PATH)
                 summary["working_hour_rollup_status"] = "success"
                 summary["working_hour_rollup_required_by_step2"] = True
-                summary["working_hour_rollup_message"] = "M2A 已同步產出 working hour rollup；M1 Step2 選擇包含半品工時時會自動引用。"
+                summary["working_hour_rollup_message"] = "M2A 已以低記憶體串流方式產出 working hour rollup；M1 Step2 選擇包含半品工時時會自動引用。"
                 summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
                 summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
                 summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name if LATEST_WORKING_HOUR_ROLLUP_PATH.exists() else ""

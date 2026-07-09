@@ -1557,6 +1557,272 @@ def generate_working_hour_rollup_file(
         "total_hours": float(summary_df["Total Annual Working Hour"].sum()) if not summary_df.empty else 0.0,
     }
 
+
+
+def generate_working_hour_rollup_file_from_standard_bom(
+    step1_output_path: str | Path,
+    bom_path: str | Path | list[str | Path] | tuple[str | Path, ...],
+    output_path: str | Path,
+    mapping: dict[str, str | None] | None = None,
+    progress_callback=None,
+) -> Dict[str, Any]:
+    """Generate M1 Step2 working-hour roll-up directly from Standard BOM.
+
+    This replaces the previous M2A intermediate path:
+      Standard BOM -> huge BOM Structure workbook -> read huge workbook -> roll-up.
+
+    The old path created an openpyxl workbook containing hundreds of thousands of
+    BOM Structure rows and could exceed Render memory.  This function keeps the
+    Standard BOM graph in memory, streams the audit workbook with write_only=True,
+    and only creates the Summary sheet required by M1 Step2 plus lightweight
+    supporting sheets.
+    """
+    step1_output_path = Path(step1_output_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if progress_callback:
+        progress_callback(step="Reading Step1 output for working-hour roll-up", processed=0, total=0, progress=88)
+
+    step1_df = pd.read_excel(step1_output_path, sheet_name=STEP1_SOURCE_SHEET_NAME, dtype=object)
+
+    material_col = _find_step1_column(step1_df, ["Material Number"])
+    qty_col = _find_step1_column(step1_df, ["年度生產量", "Annual Quantity", "Delivered quantity"])
+    hour_col = _find_step1_optional_column(step1_df, ["年度總工時", "Total working hours", "Selected Hours", "Total Hours", "Working Hours"])
+    if not hour_col:
+        raise ValueError("Step1 Output 找不到年度總工時欄位，無法產生 working_hour_rollup.xlsx")
+
+    plant_col = _find_step1_optional_column(step1_df, ["Plant"])
+    site_col = _find_step1_optional_column(step1_df, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
+    type_col = _find_step1_optional_column(step1_df, ["產品類型", "Product Type"])
+    wip_col = _find_step1_optional_column(step1_df, ["Is_WIP", "Is WIP", "WIP"])
+
+    work = step1_df.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_annual_qty"] = work[qty_col].apply(_safe_number)
+    work["_direct_hour"] = work[hour_col].apply(_safe_number)
+    work["_plant"] = work[plant_col].apply(_safe_text) if plant_col else ""
+    work["_production_site"] = work[site_col].apply(_safe_text) if site_col else ""
+    work["_product_type"] = work[type_col].apply(_safe_text) if type_col else ""
+    work["_is_wip"] = work[wip_col].apply(_safe_text) if wip_col else ""
+    work = work[work["_material_key"] != ""].copy()
+
+    summary_base = work.groupby(
+        ["_material_key", "_plant", "_production_site", "_product_type", "_is_wip"],
+        dropna=False,
+        as_index=False,
+    ).agg({"_annual_qty": "sum", "_direct_hour": "sum"})
+
+    material_totals = work.groupby(["_material_key"], dropna=False, as_index=False).agg({"_annual_qty": "sum", "_direct_hour": "sum"})
+    qty_by_material: dict[str, float] = {}
+    direct_by_material: dict[str, float] = {}
+    hour_per_pc_by_material: dict[str, float] = {}
+    for _, r in material_totals.iterrows():
+        material = str(r["_material_key"] or "").strip()
+        qty = float(r["_annual_qty"] or 0.0)
+        hours = float(r["_direct_hour"] or 0.0)
+        if material:
+            qty_by_material[material] = qty
+            direct_by_material[material] = hours
+            hour_per_pc_by_material[material] = hours / qty if qty else 0.0
+
+    target_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for _, r in summary_base.iterrows():
+        target = str(r["_material_key"] or "").strip()
+        if not target:
+            continue
+        target_groups[target].append({
+            "plant": _safe_text(r["_plant"]),
+            "site": _safe_text(r["_production_site"]),
+            "product_type": _safe_text(r["_product_type"]),
+            "is_wip": _safe_text(r["_is_wip"]),
+            "annual_qty": float(r["_annual_qty"] or 0.0),
+            "direct_hour": float(r["_direct_hour"] or 0.0),
+        })
+
+    if progress_callback:
+        progress_callback(step="Reading Standard BOM for working-hour roll-up", processed=0, total=0, progress=89)
+    bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
+    if bom_df.empty:
+        raise ValueError("Standard BOM is empty. Please complete Module 2A with valid BOM files.")
+
+    wb = Workbook(write_only=True)
+    summary_ws = wb.create_sheet("Summary")
+    detail_ws = wb.create_sheet("Roll-up Detail")
+    semi_ws = wb.create_sheet("Semi Hour per PC")
+    metadata_ws = wb.create_sheet("Metadata")
+
+    summary_header = [
+        "Material Number", "Plant", "Production Site", "Product Type", "Is_WIP",
+        "Annual Qty", "Direct Annual Working Hour", "Semi Annual Working Hour", "Total Annual Working Hour",
+        "Direct Hour per PC", "Semi Hour per PC", "Total Hour per PC",
+    ]
+    detail_header = [
+        "Target Product", "Plant", "Production Site", "Target Annual Qty", "Parent Material", "Semi Material",
+        "BOM Accumulated Qty", "Semi Direct Hour per PC", "Semi Hour Contribution per PC",
+        "Semi Annual Working Hour Contribution", "Level",
+    ]
+    semi_header = ["Semi Material", "Semi Annual Qty", "Semi Direct Annual Working Hour", "Semi Direct Hour per PC"]
+    summary_ws.append(summary_header)
+    detail_ws.append(detail_header)
+    semi_ws.append(semi_header)
+    metadata_ws.append(["Key", "Value"])
+    metadata_ws.append(["generator", "generate_working_hour_rollup_file_from_standard_bom"])
+    metadata_ws.append(["source_rule", "M2A streams Working Hour Roll-up directly from Standard BOM; no large BOM Structure workbook is exported."])
+    metadata_ws.append(["step1_source", step1_output_path.name])
+    metadata_ws.append(["bom_files", int(used_columns.get("bom_files", 1)) if isinstance(used_columns, dict) else 1])
+    metadata_ws.append(["bom_rows_after_dedup", int(used_columns.get("bom_rows_after_dedup", len(bom_df))) if isinstance(used_columns, dict) else int(len(bom_df))])
+
+    semi_by_key: dict[tuple[str, str, str], float] = {}
+    semi_materials: set[str] = set()
+    detail_rows = 0
+    cycle_count = 0
+    products_seen: set[str] = set()
+    max_level = 0
+    scoped_count = 0
+
+    if "_bom_material" not in bom_df.columns:
+        bom_df["_bom_material"] = ""
+    bom_df["_bom_material"] = bom_df["_bom_material"].apply(_safe_text)
+    scoped_groups = list(bom_df.groupby("_bom_material", dropna=False)) if bom_df["_bom_material"].astype(str).str.strip().any() else [("", bom_df)]
+    total_scopes = max(len(scoped_groups), 1)
+
+    for material_value, scoped_df in scoped_groups:
+        scoped_count += 1
+        material = _safe_text(material_value)
+        parent_set = set(scoped_df["_parent"].dropna().astype(str))
+        component_set = set(scoped_df["_component"].dropna().astype(str))
+        scoped_semi_set = parent_set.intersection(component_set)
+        for semi in scoped_semi_set:
+            semi_key = _normalize_material_key(semi)
+            if semi_key:
+                semi_materials.add(semi_key)
+
+        if material and material in parent_set:
+            roots = [material]
+        else:
+            roots = sorted(parent_set - component_set) or sorted(parent_set)
+
+        children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for parent, component, qty in scoped_df[["_parent", "_component", "_qty"]].itertuples(index=False, name=None):
+            if not parent or not component:
+                continue
+            children[parent].append({
+                "component": component,
+                "qty": float(qty or 0.0),
+            })
+
+        for root in roots:
+            target_product = material or root
+            target_key = _normalize_material_key(target_product)
+            if target_key not in target_groups:
+                continue
+            products_seen.add(target_key)
+            stack: list[tuple[str, float, int, tuple[str, ...]]] = [(root, 1.0, 0, (root,))]
+            while stack:
+                current_parent, accumulated_qty, level, path = stack.pop()
+                for child in children.get(current_parent, []):
+                    component = child["component"]
+                    if component in path:
+                        cycle_count += 1
+                        continue
+                    next_qty = accumulated_qty * float(child.get("qty") or 0.0)
+                    next_level = level + 1
+                    if next_level > max_level:
+                        max_level = next_level
+                    is_semi = component in scoped_semi_set
+                    if is_semi:
+                        semi_key = _normalize_material_key(component)
+                        semi_materials.add(semi_key)
+                        semi_hr_pc = float(hour_per_pc_by_material.get(semi_key, 0.0) or 0.0)
+                        for tg in target_groups.get(target_key, []):
+                            plant = _safe_text(tg.get("plant"))
+                            site = _safe_text(tg.get("site"))
+                            target_qty = float(tg.get("annual_qty") or 0.0)
+                            contrib_pc = next_qty * semi_hr_pc
+                            contrib_annual = target_qty * contrib_pc
+                            if contrib_annual:
+                                key = (target_key, plant, site)
+                                semi_by_key[key] = semi_by_key.get(key, 0.0) + contrib_annual
+                            detail_ws.append([
+                                target_key, plant, site, target_qty, current_parent, semi_key,
+                                next_qty, semi_hr_pc, contrib_pc, contrib_annual, next_level,
+                            ])
+                            detail_rows += 1
+                        stack.append((component, next_qty, next_level, path + (component,)))
+
+        if progress_callback and (scoped_count % 25 == 0 or scoped_count == total_scopes):
+            progress = 89 + int((scoped_count / total_scopes) * 7)
+            progress_callback(
+                step="Generating Working Hour Roll-up (streaming)",
+                processed=int(detail_rows),
+                total=int(len(summary_base)),
+                progress=min(96, progress),
+            )
+
+    summary_rows_count = 0
+    total_direct = 0.0
+    total_semi = 0.0
+    summary_sorted = summary_base.sort_values(["_plant", "_production_site", "_material_key"]).reset_index(drop=True)
+    for _, r in summary_sorted.iterrows():
+        material = str(r["_material_key"] or "").strip()
+        plant = _safe_text(r["_plant"])
+        site = _safe_text(r["_production_site"])
+        qty = float(r["_annual_qty"] or 0.0)
+        direct = float(r["_direct_hour"] or 0.0)
+        semi = float(semi_by_key.get((material, plant, site), 0.0) or 0.0)
+        total = direct + semi
+        total_direct += direct
+        total_semi += semi
+        summary_ws.append([
+            material,
+            plant,
+            site,
+            _safe_text(r["_product_type"]),
+            _safe_text(r["_is_wip"]),
+            qty,
+            direct,
+            semi,
+            total,
+            direct / qty if qty else 0.0,
+            semi / qty if qty else 0.0,
+            total / qty if qty else 0.0,
+        ])
+        summary_rows_count += 1
+
+    for semi in sorted(semi_materials):
+        semi_qty = float(qty_by_material.get(semi, 0.0) or 0.0)
+        semi_direct = float(direct_by_material.get(semi, 0.0) or 0.0)
+        semi_ws.append([semi, semi_qty, semi_direct, semi_direct / semi_qty if semi_qty else 0.0])
+
+    metadata_ws.append(["summary_rows", summary_rows_count])
+    metadata_ws.append(["detail_rows", detail_rows])
+    metadata_ws.append(["semi_materials", len(semi_materials)])
+    metadata_ws.append(["products_matched_to_bom", len(products_seen)])
+    metadata_ws.append(["max_level", max_level])
+    metadata_ws.append(["cycles_skipped", cycle_count])
+    metadata_ws.append(["created_at", datetime.now().isoformat(timespec="seconds")])
+
+    if progress_callback:
+        progress_callback(step="Saving Working Hour Roll-up", processed=summary_rows_count, total=summary_rows_count, progress=97)
+    wb.save(output_path)
+
+    return {
+        "output_filename": output_path.name,
+        "summary_rows": int(summary_rows_count),
+        "detail_rows": int(detail_rows),
+        "semi_materials": int(len(semi_materials)),
+        "products": int(len(products_seen)),
+        "max_level": int(max_level),
+        "cycles_skipped": int(cycle_count),
+        "total_direct_hours": float(total_direct),
+        "total_semi_hours": float(total_semi),
+        "total_hours": float(total_direct + total_semi),
+        "used_columns": used_columns,
+        "streaming_working_hour_rollup": True,
+        "bom_structure_exported": False,
+    }
+
 # =========================================================
 # Module 2 Supplier Master + Supplier Bulk Export
 # Clean implementation based on official baseline.
