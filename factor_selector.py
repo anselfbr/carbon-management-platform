@@ -5,19 +5,21 @@ import shutil
 import tempfile
 import zipfile
 import time
+import xml.etree.ElementTree as ET
+import math
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
 import pandas as pd
 from openpyxl import load_workbook, Workbook
-from bom_formatter import _rewrite_xlsx_sheets_preserve_package
 
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_FULL_TEMPLATE_PRESERVE_LIGHTWEIGHT_20260708"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LIGHT_INTERMEDIATE_FINAL_TEMPLATE_V1_20260708"
 
 
 def _norm(value: Any) -> str:
@@ -216,19 +218,576 @@ def _copy_non_activity_sheet_streaming(src_ws, dst_wb: Workbook) -> int:
     return rows
 
 
+
+
+# ---------------------------------------------------------------------------
+# Module 3 final export: keep M2B/M2C/M3 as lightweight intermediate files,
+# then apply the original Raw Material Bulk Template only at the final output.
+# This avoids carrying full Excel template structures through every large-data
+# step while still producing a third-party-uploadable workbook at M3.
+# ---------------------------------------------------------------------------
+_XML_INVALID_TEXT_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+_ACTIVITY_FINAL_FACTOR_COLUMNS: list[tuple[str, list[str], str]] = [
+    ("factor_name", ["Factor Name", "factor_name", "CCL Item", "係數名稱"], "Factor Name"),
+    ("emission_factor", ["Emission Factor", "emission_factor", "Carbon Factor", "碳係數"], "Emission Factor"),
+    ("factor_source", ["Factor Source", "factor_source", "Emission Factor Source", "係數來源"], "Factor Source"),
+    ("factor_comment", ["Factor Comment", "factor_comment", "Emission Factor Comment", "係數備註"], "Factor Comment"),
+    ("country_area", ["Country/Area", "Country Area", "country_area", "Country", "Area", "國家地區"], "Country/Area"),
+    ("enabled_date", ["Enabled Date", "activation_date", "Effective Date", "啟用日期"], "Enabled Date"),
+    ("data_quality", ["Data Quality", "data_quality", "資料品質"], "Data Quality"),
+]
+
+_ACTIVITY_SOURCE_ALIASES: dict[str, list[str]] = {
+    "raw_name": ["Raw Material Name", "raw_material_name"],
+    "raw_code": ["Raw Material Code", "raw_material_code", "Material"],
+    "doc_start": ["Doc. Start Date", "doc_start_date", "Document Start Date"],
+    "doc_end": ["Doc. End Date", "doc_end_date", "Document End Date"],
+    "document_type": ["Document Type", "document_type"],
+    "document_number": ["Document Number", "document_number"],
+    "usage": ["Usage", "Activity Data", "activity_data", "usage"],
+    "unit": ["Activity Data Unit", "activity_data_unit", "Unit"],
+    "net_weight": ["Net weight", "Net Weight", "net_weight"],
+    "gross_weight": ["Gross weight", "Gross Weight", "gross_weight"],
+    "weight_unit": ["Weight Unit (optional)", "Weight Unit", "weight_unit"],
+    "data_source": ["Data Source", "data_source"],
+    "data_source_other": ["Data Source Other", "Data Source other", "data_source_other"],
+    "supplier_name": ["Supplier Name (optional)", "Supplier Name", "supplier_name", "supplier_name_resolved"],
+    "transport_origin": ["Transportation Origin", "transportation_origin"],
+    "transport_destination": ["Transportation Destination", "transportation_destination"],
+    "target_product": ["Product Name", "allocated_target_product_service", "Target Product", "target_product"],
+    "comment": ["Comment", "comment"],
+    "material_group": ["Material Group", "Material group", "material_group"],
+}
+
+_RAW_SOURCE_ALIASES: dict[str, list[str]] = {
+    "raw_name": ["Raw Material Name", "raw_material_name"],
+    "raw_code": ["Raw Material Code", "raw_material_code"],
+    "description": ["Raw Material Description (Optional)", "Raw Material Description", "raw_material_description", "description"],
+}
+
+
+def _xml_clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    if isinstance(value, datetime):
+        text = value.strftime("%Y/%m/%d")
+    elif isinstance(value, date):
+        text = value.strftime("%Y/%m/%d")
+    else:
+        text = str(value)
+    return _XML_INVALID_TEXT_RE.sub("", text)
+
+
+def _xlsx_col_letter(col_idx: int) -> str:
+    result = ""
+    value = int(col_idx)
+    while value > 0:
+        value, rem = divmod(value - 1, 26)
+        result = chr(65 + rem) + result
+    return result or "A"
+
+
+def _xlsx_cell_ref(row_idx: int, col_idx: int) -> str:
+    return f"{_xlsx_col_letter(col_idx)}{int(row_idx)}"
+
+
+def _manual_cell_xml(row_idx: int, col_idx: int, value: Any) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, str) and value == "":
+        return b""
+    ref = _xlsx_cell_ref(row_idx, col_idx)
+    if isinstance(value, bool):
+        return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'.encode("utf-8")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            number = float(value)
+            if math.isfinite(number):
+                if number.is_integer():
+                    raw = str(int(number))
+                else:
+                    raw = repr(number)
+                return f'<c r="{ref}"><v>{raw}</v></c>'.encode("utf-8")
+        except Exception:
+            pass
+    text = _xml_clean_text(value)
+    if text == "":
+        return b""
+    escaped = (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    return f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{escaped}</t></is></c>'.encode("utf-8")
+
+
+def _manual_row_xml(row_idx: int, values: list[Any], width: int | None = None) -> bytes:
+    width = int(width or len(values) or 1)
+    cells = []
+    for col_idx in range(1, width + 1):
+        value = values[col_idx - 1] if col_idx <= len(values) else None
+        cell = _manual_cell_xml(row_idx, col_idx, value)
+        if cell:
+            cells.append(cell)
+    return b'<row r="%d">%s</row>' % (int(row_idx), b"".join(cells))
+
+
+def _max_header_width(header_rows: list[list[Any]]) -> int:
+    return max((len(r) for r in header_rows), default=0)
+
+
+def _pad_header_rows(header_rows: list[list[Any]], width: int) -> list[list[Any]]:
+    out = [list(r) for r in header_rows]
+    while len(out) < DATA_START_ROW - 1:
+        out.append([])
+    for row in out:
+        if len(row) < width:
+            row.extend([None] * (width - len(row)))
+    return out
+
+
+def _header_labels(header_rows: list[list[Any]], col_idx: int) -> list[str]:
+    labels = []
+    for row in header_rows:
+        if col_idx - 1 < len(row):
+            text = _text(row[col_idx - 1])
+            if text:
+                labels.append(text)
+    return labels
+
+
+def _find_col_in_header_values(header_rows: list[list[Any]], aliases: list[str], required: bool = False) -> int | None:
+    alias_keys = {_norm(a) for a in aliases if _text(a)}
+    width = _max_header_width(header_rows)
+    for col_idx in range(1, width + 1):
+        for label in _header_labels(header_rows, col_idx):
+            if _norm(label) in alias_keys:
+                return col_idx
+    if required:
+        raise ValueError(f"找不到欄位：{', '.join(aliases)}")
+    return None
+
+
+def _ensure_header_column(header_rows: list[list[Any]], aliases: list[str], preferred_header: str, group_header: str = "Factor") -> int:
+    existing = _find_col_in_header_values(header_rows, aliases, required=False)
+    if existing:
+        return existing
+    width = _max_header_width(header_rows) + 1
+    while len(header_rows) < 2:
+        header_rows.append([])
+    for row in header_rows:
+        if len(row) < width:
+            row.extend([None] * (width - len(row)))
+    header_rows[0][width - 1] = group_header
+    header_rows[1][width - 1] = preferred_header
+    return width
+
+
+def _row_value(values: tuple[Any, ...] | list[Any], col_idx: int | None) -> Any:
+    if not col_idx:
+        return None
+    idx = int(col_idx) - 1
+    return values[idx] if 0 <= idx < len(values) else None
+
+
+def _copy_matching_value_to_target(target_row: list[Any], target_col: int | None, source_values: tuple[Any, ...], source_cols: dict[str, int | None], key: str) -> None:
+    if not target_col:
+        return
+    src_col = source_cols.get(key)
+    if src_col:
+        while len(target_row) < target_col:
+            target_row.append(None)
+        target_row[target_col - 1] = _row_value(source_values, src_col)
+
+
+def _sheet_paths_by_name_from_xlsx(path: str | Path) -> dict[str, str]:
+    ns_main = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    ns_rel = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    ns_pkg_rel = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    with zipfile.ZipFile(path) as zf:
+        workbook_root = ET.fromstring(zf.read("xl/workbook.xml"))
+        rel_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+        rels = {}
+        for rel in rel_root.findall(f"{ns_pkg_rel}Relationship"):
+            rid = rel.attrib.get("Id")
+            target = rel.attrib.get("Target", "")
+            if rid:
+                if target.startswith("/xl/"):
+                    rels[rid] = target.lstrip("/")
+                elif target.startswith("xl/"):
+                    rels[rid] = target
+                else:
+                    rels[rid] = "xl/" + target.lstrip("/")
+        sheet_paths: dict[str, str] = {}
+        sheets_el = workbook_root.find(f"{ns_main}sheets")
+        if sheets_el is not None:
+            for sheet in sheets_el.findall(f"{ns_main}sheet"):
+                name = sheet.attrib.get("name", "")
+                rid = sheet.attrib.get(f"{ns_rel}id")
+                if name and rid in rels:
+                    sheet_paths[name] = rels[rid]
+        return sheet_paths
+
+
+def _split_sheet_xml(sheet_xml: bytes) -> tuple[bytes, bytes, bytes, bytes]:
+    m = re.search(rb"<sheetData\b[^>]*>", sheet_xml)
+    if not m:
+        raise ValueError("Template worksheet XML 缺少 sheetData。")
+    end_m = re.search(rb"</sheetData>", sheet_xml)
+    if not end_m:
+        # Handle self-closing sheetData, uncommon but valid.
+        self_m = re.search(rb"<sheetData\b[^>]*/>", sheet_xml)
+        if not self_m:
+            raise ValueError("Template worksheet XML 缺少 /sheetData。")
+        prefix = sheet_xml[: self_m.start()] + b"<sheetData>"
+        inside = b""
+        suffix = b"</sheetData>" + sheet_xml[self_m.end():]
+        return prefix, inside, suffix, sheet_xml
+    prefix = sheet_xml[: m.end()]
+    inside = sheet_xml[m.end(): end_m.start()]
+    suffix = sheet_xml[end_m.start():]
+    return prefix, inside, suffix, sheet_xml
+
+
+def _extract_raw_header_row(inside_sheetdata: bytes, row_idx: int) -> bytes | None:
+    pattern = rb"<row\b(?=[^>]*\br=['\"]?" + str(int(row_idx)).encode() + rb"['\"]?)[^>]*>.*?</row>"
+    m = re.search(pattern, inside_sheetdata, flags=re.DOTALL)
+    return m.group(0) if m else None
+
+
+def _append_header_cells(row_xml: bytes | None, row_idx: int, start_col: int, values: list[Any], final_width: int) -> bytes:
+    if row_xml is None:
+        row_xml = f'<row r="{int(row_idx)}"></row>'.encode("utf-8")
+    row_xml = re.sub(rb'spans="[^"]*"', f'spans="1:{int(final_width)}"'.encode("utf-8"), row_xml)
+    if not values:
+        return row_xml
+    if row_xml.rstrip().endswith(b"/>"):
+        row_xml = row_xml.rstrip()[:-2] + b"></row>"
+    insert_at = row_xml.rfind(b"</row>")
+    if insert_at < 0:
+        return _manual_row_xml(row_idx, [None] * (start_col - 1) + values, final_width)
+    extra = b"".join(_manual_cell_xml(row_idx, start_col + offset, value) for offset, value in enumerate(values))
+    return row_xml[:insert_at] + extra + row_xml[insert_at:]
+
+
+def _update_dimension_in_prefix(prefix: bytes, max_row: int, max_col: int) -> bytes:
+    ref = f'A1:{_xlsx_col_letter(max(1, int(max_col)))}{max(1, int(max_row))}'.encode("utf-8")
+    if re.search(rb"<dimension\b[^>]*/>", prefix):
+        return re.sub(rb"<dimension\b[^>]*/>", b'<dimension ref="' + ref + b'"/>', prefix, count=1)
+    return prefix
+
+
+def _remove_calc_chain_content_types(data: bytes) -> bytes:
+    return re.sub(rb'<Override\b[^>]*PartName="/xl/calcChain\.xml"[^>]*/>', b"", data)
+
+
+def _remove_calc_chain_rels(data: bytes) -> bytes:
+    return re.sub(rb'<Relationship\b[^>]*(?:calcChain|calcchain)[^>]*/>', b"", data)
+
+
+def _spool_sheet_rows_xml(rows_iter, temp_path: Path, start_row: int, width: int, progress_callback=None, progress_base: int = 0, progress_span: int = 0, progress_step: str = "") -> tuple[int, int]:
+    count = 0
+    max_width = int(width or 1)
+    start_time = time.perf_counter()
+    with temp_path.open("wb") as fh:
+        for count, values in enumerate(rows_iter, start=1):
+            row_idx = start_row + count - 1
+            row_values = list(values or [])
+            if len(row_values) > max_width:
+                max_width = len(row_values)
+            fh.write(_manual_row_xml(row_idx, row_values, max_width))
+            if progress_callback and progress_span and (count == 1 or count % 5000 == 0):
+                elapsed = max(0.001, time.perf_counter() - start_time)
+                rate = count / elapsed
+                remaining = int(max(1, 30 if rate <= 0 else (100000 - count) / rate))
+                _emit_progress(progress_callback, min(95, progress_base + min(progress_span, int(progress_span * min(1, count / max(count, 1))))), progress_step, remaining, count, None)
+    return count, max_width
+
+
+def _write_sheet_part_from_template(zout: zipfile.ZipFile, arcname: str, template_xml: bytes, header_rows: list[list[Any]], data_xml_path: Path, data_count: int, final_width: int) -> None:
+    prefix, inside, suffix, _ = _split_sheet_xml(template_xml)
+    prefix = _update_dimension_in_prefix(prefix, DATA_START_ROW - 1 + int(data_count), int(final_width))
+    original_width = 0
+    # Header cells beyond the original raw template are appended without touching existing header XML.
+    raw_row_1 = _extract_raw_header_row(inside, 1)
+    raw_row_2 = _extract_raw_header_row(inside, 2)
+    original_width = 0
+    for row_xml in (raw_row_1, raw_row_2):
+        if row_xml:
+            refs = re.findall(rb'<c\b[^>]*\br="([A-Z]+)\d+"', row_xml)
+            for ref in refs:
+                value = 0
+                for ch in ref.decode("ascii"):
+                    value = value * 26 + (ord(ch) - ord("A") + 1)
+                original_width = max(original_width, value)
+    if original_width <= 0:
+        original_width = min(_max_header_width(header_rows), final_width)
+    header_rows = _pad_header_rows(header_rows, final_width)
+    append_start = original_width + 1
+    row1_append = header_rows[0][append_start - 1: final_width] if final_width >= append_start else []
+    row2_append = header_rows[1][append_start - 1: final_width] if len(header_rows) > 1 and final_width >= append_start else []
+    row1_xml = _append_header_cells(raw_row_1, 1, append_start, row1_append, final_width)
+    row2_xml = _append_header_cells(raw_row_2, 2, append_start, row2_append, final_width)
+    with zout.open(arcname, "w") as out:
+        out.write(prefix)
+        out.write(row1_xml)
+        out.write(row2_xml)
+        if data_xml_path.exists():
+            with data_xml_path.open("rb") as src:
+                shutil.copyfileobj(src, out, length=1024 * 1024)
+        out.write(suffix)
+
+
+def _write_template_applied_workbook(
+    template_path: str | Path,
+    output_path: str | Path,
+    activity_header_rows: list[list[Any]],
+    activity_rows_iter,
+    raw_header_rows: list[list[Any]],
+    raw_rows_iter,
+    activity_width: int,
+    raw_width: int,
+) -> dict[str, int]:
+    template_path = Path(template_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    sheet_paths = _sheet_paths_by_name_from_xlsx(template_path)
+    activity_sheet_path = sheet_paths.get(ACTIVITY_SHEET_NAME)
+    raw_sheet_path = sheet_paths.get("Input Sheet Raw Material") or sheet_paths.get("Raw Material")
+    if not activity_sheet_path or not raw_sheet_path:
+        raise ValueError("Raw Material Bulk Template 缺少 Input Sheet Activity Data 或 Input Sheet Raw Material 分頁。")
+
+    with tempfile.TemporaryDirectory(prefix="cmp_m3_template_apply_") as tmp:
+        tmpdir = Path(tmp)
+        activity_xml_tmp = tmpdir / "activity_rows.xml"
+        raw_xml_tmp = tmpdir / "raw_rows.xml"
+        activity_count, activity_actual_width = _spool_sheet_rows_xml(activity_rows_iter, activity_xml_tmp, DATA_START_ROW, activity_width)
+        raw_count, raw_actual_width = _spool_sheet_rows_xml(raw_rows_iter, raw_xml_tmp, DATA_START_ROW, raw_width)
+        final_activity_width = max(int(activity_width), int(activity_actual_width))
+        final_raw_width = max(int(raw_width), int(raw_actual_width))
+
+        with zipfile.ZipFile(template_path, "r") as zin, zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
+            for item in zin.infolist():
+                name = item.filename
+                if item.is_dir():
+                    zout.writestr(item, b"")
+                    continue
+                if name == "xl/calcChain.xml":
+                    continue
+                if name in {activity_sheet_path, raw_sheet_path}:
+                    continue
+                data = zin.read(name)
+                if name == "[Content_Types].xml":
+                    data = _remove_calc_chain_content_types(data)
+                elif name == "xl/_rels/workbook.xml.rels":
+                    data = _remove_calc_chain_rels(data)
+                zout.writestr(item, data)
+            activity_template_xml = zin.read(activity_sheet_path)
+            raw_template_xml = zin.read(raw_sheet_path)
+            _write_sheet_part_from_template(zout, activity_sheet_path, activity_template_xml, activity_header_rows, activity_xml_tmp, activity_count, final_activity_width)
+            _write_sheet_part_from_template(zout, raw_sheet_path, raw_template_xml, raw_header_rows, raw_xml_tmp, raw_count, final_raw_width)
+    return {"activity_rows": int(activity_count), "raw_material_rows": int(raw_count)}
+
+
+def _build_source_col_map(header_rows: list[list[Any]], aliases: dict[str, list[str]]) -> dict[str, int | None]:
+    return {key: _find_col_in_header_values(header_rows, names, required=False) for key, names in aliases.items()}
+
+
+def _build_exact_source_lookup(header_rows: list[list[Any]]) -> dict[str, int]:
+    lookup: dict[str, int] = {}
+    width = _max_header_width(header_rows)
+    for col_idx in range(1, width + 1):
+        for label in _header_labels(header_rows, col_idx):
+            key = _norm(label)
+            if key and key not in lookup:
+                lookup[key] = col_idx
+    return lookup
+
+
+def _apply_ccl_factors_to_raw_material_bulk_final_template(
+    raw_material_bulk_path: str | Path,
+    ccl_mapping_path: str | Path,
+    output_path: str | Path,
+    raw_material_template_path: str | Path,
+    progress_callback: Callable[..., None] | None = None,
+    ccl_map: Dict[str, Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    perf_start = time.perf_counter()
+    if ccl_map is None:
+        ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
+
+    raw_material_bulk_path = Path(raw_material_bulk_path)
+    raw_material_template_path = Path(raw_material_template_path)
+    output_path = Path(output_path)
+    if not raw_material_template_path.exists():
+        raise FileNotFoundError(f"找不到 M3 最終套版用 Raw Material Bulk Template：{raw_material_template_path}")
+
+    _emit_progress(progress_callback, 34, "讀取 M3 輕量中繼檔與最終 Bulk Template", 60, 0, None)
+    src_wb = load_workbook(raw_material_bulk_path, read_only=True, data_only=False)
+    tpl_wb = load_workbook(raw_material_template_path, read_only=True, data_only=False)
+    try:
+        if ACTIVITY_SHEET_NAME not in src_wb.sheetnames:
+            raise ValueError(f"M3 輕量中繼檔找不到分頁：{ACTIVITY_SHEET_NAME}")
+        if ACTIVITY_SHEET_NAME not in tpl_wb.sheetnames:
+            raise ValueError(f"Raw Material Bulk Template 找不到分頁：{ACTIVITY_SHEET_NAME}")
+        raw_sheet_name = "Input Sheet Raw Material" if "Input Sheet Raw Material" in tpl_wb.sheetnames else ("Raw Material" if "Raw Material" in tpl_wb.sheetnames else None)
+        if raw_sheet_name is None:
+            raise ValueError("Raw Material Bulk Template 找不到 Raw Material 分頁。")
+        src_activity_ws = src_wb[ACTIVITY_SHEET_NAME]
+        src_raw_ws = src_wb[raw_sheet_name] if raw_sheet_name in src_wb.sheetnames else (src_wb[src_wb.sheetnames[1]] if len(src_wb.sheetnames) > 1 else None)
+        tpl_activity_ws = tpl_wb[ACTIVITY_SHEET_NAME]
+        tpl_raw_ws = tpl_wb[raw_sheet_name]
+
+        source_activity_headers = _first_header_rows(src_activity_ws, DATA_START_ROW - 1)
+        source_raw_headers = _first_header_rows(src_raw_ws, DATA_START_ROW - 1) if src_raw_ws is not None else [[], []]
+        target_activity_headers = _first_header_rows(tpl_activity_ws, DATA_START_ROW - 1)
+        target_raw_headers = _first_header_rows(tpl_raw_ws, DATA_START_ROW - 1)
+
+        # Add M3 factor columns only if the third-party template does not already contain them.
+        factor_cols: dict[str, int] = {}
+        for key, aliases, preferred in _ACTIVITY_FINAL_FACTOR_COLUMNS:
+            factor_cols[key] = _ensure_header_column(target_activity_headers, aliases, preferred, "Factor")
+
+        activity_width = _max_header_width(target_activity_headers)
+        raw_width = _max_header_width(target_raw_headers)
+        target_activity_cols = {key: _find_col_in_header_values(target_activity_headers, aliases, required=False) for key, aliases in _ACTIVITY_SOURCE_ALIASES.items()}
+        target_raw_cols = {key: _find_col_in_header_values(target_raw_headers, aliases, required=False) for key, aliases in _RAW_SOURCE_ALIASES.items()}
+        source_activity_cols = _build_source_col_map(source_activity_headers, _ACTIVITY_SOURCE_ALIASES)
+        source_raw_cols = _build_source_col_map(source_raw_headers, _RAW_SOURCE_ALIASES)
+        source_exact = _build_exact_source_lookup(source_activity_headers)
+        raw_exact = _build_exact_source_lookup(source_raw_headers)
+
+        matched = 0
+        unmatched = 0
+        written_rows = 0
+        material_rows = 0
+        start = time.perf_counter()
+        total_activity_rows = max(0, int(src_activity_ws.max_row or 0) - DATA_START_ROW + 1)
+
+        def activity_rows():
+            nonlocal matched, unmatched, written_rows, material_rows
+            for idx, values in enumerate(src_activity_ws.iter_rows(min_row=DATA_START_ROW, values_only=True), start=1):
+                material = _text(_row_value(values, source_activity_cols.get("raw_code")) or _row_value(values, source_activity_cols.get("raw_name")))
+                if not material:
+                    continue
+                material_rows += 1
+                out = [None] * activity_width
+                # First copy columns with identical labels where possible.
+                for tgt_col in range(1, activity_width + 1):
+                    copied = False
+                    for label in _header_labels(target_activity_headers, tgt_col):
+                        src_col = source_exact.get(_norm(label))
+                        if src_col:
+                            out[tgt_col - 1] = _row_value(values, src_col)
+                            copied = True
+                            break
+                    if copied:
+                        continue
+                for key, tgt_col in target_activity_cols.items():
+                    _copy_matching_value_to_target(out, tgt_col, values, source_activity_cols, key)
+                if target_activity_cols.get("document_type") and not out[target_activity_cols["document_type"] - 1]:
+                    out[target_activity_cols["document_type"] - 1] = "Invoice"
+                if target_activity_cols.get("data_source") and not out[target_activity_cols["data_source"] - 1]:
+                    out[target_activity_cols["data_source"] - 1] = "SAP"
+                if target_activity_cols.get("unit") and not out[target_activity_cols["unit"] - 1]:
+                    out[target_activity_cols["unit"] - 1] = _row_value(values, source_activity_cols.get("unit")) or "PC"
+                item = ccl_map.get(_normalize_material_key(material))
+                if item:
+                    out[factor_cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
+                    out[factor_cols["emission_factor"] - 1] = item.get("emission_factor")
+                    out[factor_cols["factor_source"] - 1] = "Ecoinvent"
+                    out[factor_cols["factor_comment"] - 1] = "CCLibrary"
+                    out[factor_cols["country_area"] - 1] = "GLO"
+                    start_date = _row_value(values, source_activity_cols.get("doc_start"))
+                    out[factor_cols["enabled_date"] - 1] = start_date or out[target_activity_cols["doc_start"] - 1] if target_activity_cols.get("doc_start") else start_date
+                    out[factor_cols["data_quality"] - 1] = "SECONDARY"
+                    matched += 1
+                else:
+                    unmatched += 1
+                written_rows += 1
+                if progress_callback and (written_rows == 1 or written_rows % 5000 == 0):
+                    elapsed = max(0.001, time.perf_counter() - start)
+                    rate = written_rows / elapsed
+                    remaining = int(max(1, (total_activity_rows - written_rows) / rate + 25)) if rate > 0 and total_activity_rows else 60
+                    progress = 40 + int(min(45, written_rows / max(1, total_activity_rows) * 45))
+                    _emit_progress(progress_callback, progress, "M3 係數對應並寫入最終第三方 Bulk Template", remaining, written_rows, total_activity_rows)
+                yield out
+
+        def raw_rows():
+            if src_raw_ws is None:
+                return
+            for values in src_raw_ws.iter_rows(min_row=DATA_START_ROW, values_only=True):
+                raw_name = _text(_row_value(values, source_raw_cols.get("raw_name")) or _row_value(values, source_raw_cols.get("raw_code")))
+                if not raw_name:
+                    continue
+                out = [None] * raw_width
+                for tgt_col in range(1, raw_width + 1):
+                    for label in _header_labels(target_raw_headers, tgt_col):
+                        src_col = raw_exact.get(_norm(label))
+                        if src_col:
+                            out[tgt_col - 1] = _row_value(values, src_col)
+                            break
+                for key, tgt_col in target_raw_cols.items():
+                    src_col = source_raw_cols.get(key)
+                    if tgt_col and src_col:
+                        out[tgt_col - 1] = _row_value(values, src_col)
+                yield out
+
+        _emit_progress(progress_callback, 86, "套用原始 Raw Material Bulk Template 表頭與分頁", 35, written_rows, total_activity_rows)
+        written_summary = _write_template_applied_workbook(
+            raw_material_template_path,
+            output_path,
+            target_activity_headers,
+            activity_rows(),
+            target_raw_headers,
+            raw_rows(),
+            activity_width,
+            raw_width,
+        )
+    finally:
+        try:
+            src_wb.close()
+        finally:
+            tpl_wb.close()
+
+    total_time = time.perf_counter() - perf_start
+    _emit_progress(progress_callback, 100, "CCL 係數對應完成，已輸出可上傳第三方平台 Bulk", 0, written_rows, max(total_activity_rows, written_rows))
+    return {
+        "output_filename": output_path.name,
+        "download_url": f"/download/{output_path.name}",
+        "ccl_mapping_rows": len(ccl_map),
+        "matched_rows": int(matched),
+        "unmatched_rows": int(unmatched),
+        "written_rows": int(written_rows),
+        "total_rows": int(material_rows),
+        "activity_rows": int(written_summary.get("activity_rows", written_rows)),
+        "raw_material_rows": int(written_summary.get("raw_material_rows", 0)),
+        "performance_seconds": {"total": round(total_time, 3)},
+        "factor_selector_version": FACTOR_SELECTOR_VERSION,
+        "large_dataset_mode": True,
+        "template_strategy": "M2B/M2C/M3 lightweight intermediates; final M3 applies original Raw Material Bulk Template via streaming OpenXML package writer",
+        "final_template_filename": raw_material_template_path.name,
+    }
+
 def apply_ccl_factors_to_raw_material_bulk(
     raw_material_bulk_path: str | Path,
     ccl_mapping_path: str | Path,
     output_path: str | Path,
     progress_callback: Callable[..., None] | None = None,
     ccl_map: Dict[str, Dict[str, Any]] | None = None,
+    raw_material_template_path: str | Path | None = None,
 ) -> Dict[str, Any]:
-    """Fill Module 3 CCL factor fields while preserving the full Raw Material Bulk template.
+    """Fill Module 3 CCL factor fields into a Module 2 raw-material bulk workbook.
 
-    This full-lightweight mode copies the XLSX package and replaces only Sheet1
-    data rows by streaming OpenXML. Sheet2, Sheet3, Sheet4, workbook relationships,
-    styles, dropdowns, validations, formulas, hidden sheets and sheet order are
-    retained byte-for-byte wherever not targeted.
+    Large Dataset Mode avoids copying/loading the full workbook template in normal
+    openpyxl mode. It reads the input workbook in read-only mode and writes a new
+    workbook in write-only mode, preserving the formal sheet names and required
+    raw-material bulk columns while appending missing factor columns when M2B/M2C
+    produced a lightweight bulk file.
     """
     perf_start = time.perf_counter()
     perf: dict[str, float] = {}
@@ -236,120 +795,110 @@ def apply_ccl_factors_to_raw_material_bulk(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if raw_material_template_path:
+        return _apply_ccl_factors_to_raw_material_bulk_final_template(
+            raw_material_bulk_path=raw_material_bulk_path,
+            ccl_mapping_path=ccl_mapping_path,
+            output_path=output_path,
+            raw_material_template_path=raw_material_template_path,
+            progress_callback=progress_callback,
+            ccl_map=ccl_map,
+        )
+
     t0 = time.perf_counter()
     if ccl_map is None:
         ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
     perf["read_ccl_and_build_dict"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    _emit_progress(progress_callback, 34, "以全模板保留低記憶體模式開啟 raw material bulk", 60, 0, None)
-    wb_meta = load_workbook(raw_material_bulk_path, read_only=True, data_only=False)
-    try:
-        if ACTIVITY_SHEET_NAME not in wb_meta.sheetnames:
-            raise ValueError(f"找不到分頁：{ACTIVITY_SHEET_NAME}")
-        ws_meta = wb_meta[ACTIVITY_SHEET_NAME]
-        total_activity_rows = max(0, int(ws_meta.max_row or 0) - DATA_START_ROW + 1)
-        header_rows = _first_header_rows(ws_meta, DATA_START_ROW - 1)
-        original_width = max((len(r) for r in header_rows), default=0)
-        headers_modified = False
+    _emit_progress(progress_callback, 34, "以低記憶體模式開啟 raw material bulk", 60, 0, None)
+    src_wb = load_workbook(raw_material_bulk_path, read_only=True, data_only=False)
+    perf["open_readonly_workbook"] = time.perf_counter() - t0
+    if ACTIVITY_SHEET_NAME not in src_wb.sheetnames:
+        src_wb.close()
+        raise ValueError(f"找不到分頁：{ACTIVITY_SHEET_NAME}")
 
-        def ensure_output_col(aliases: list[str], key_header: str, label_header: str) -> int:
-            nonlocal headers_modified
-            col = _find_col_from_header_rows(header_rows, aliases, required=False)
-            if col:
-                return int(col)
-            new_col = max((len(r) for r in header_rows), default=0) + 1
-            for row in header_rows:
-                if len(row) < new_col:
-                    row.extend([None] * (new_col - len(row)))
-            while len(header_rows) < DATA_START_ROW - 1:
-                header_rows.append([None] * new_col)
-            header_rows[0][new_col - 1] = key_header
-            if len(header_rows) >= 2:
-                header_rows[1][new_col - 1] = label_header
-            headers_modified = True
-            return new_col
+    out_wb = Workbook(write_only=True)
+
+    matched = 0
+    unmatched = 0
+    written_rows = 0
+    non_empty_material_rows = 0
+    copied_other_rows = 0
+    total_activity_rows = 0
+
+    try:
+        src_ws = src_wb[ACTIVITY_SHEET_NAME]
+        total_activity_rows = max(0, int(src_ws.max_row or 0) - DATA_START_ROW + 1)
+        header_rows = _first_header_rows(src_ws, DATA_START_ROW - 1)
 
         cols = {
-            "material": _find_col_from_header_rows(header_rows, ["Raw Material Code", "raw_material_code", "Material", "Raw Material Name", "raw_material_name"]),
-            "doc_start": _find_col_from_header_rows(header_rows, ["Doc. Start Date", "Document Start Date", "doc_start_date"], required=False),
-            "factor_name": ensure_output_col(["Factor Name", "factor_name", "係數名稱", "CCL Item"], "factor_name", "Factor Name"),
-            "emission_factor": ensure_output_col(["Emission Factor", "emission_factor", "碳係數"], "emission_factor", "Emission Factor"),
-            "factor_source": ensure_output_col(["Factor Source", "factor_source", "係數來源"], "factor_source", "Factor Source"),
-            "factor_comment": ensure_output_col(["Factor Comment", "factor_comment", "係數備註"], "factor_comment", "Factor Comment"),
-            "country": ensure_output_col(["Country/Area", "Country / Area", "country_area", "Geography", "地區"], "country_area", "Country/Area"),
-            "enabled_date": ensure_output_col(["Enabled Date", "activation_date", "enabled_date", "生效日期"], "activation_date", "Enabled Date"),
-            "data_quality": ensure_output_col(["Data Quality", "data_quality", "資料品質"], "data_quality", "Data Quality"),
+            "material": _find_col_from_header_rows(header_rows, ["Raw Material Code", "Raw Material Number", "Material", "Material Number", "原物料代碼", "料號"]),
+            "doc_start": _find_col_from_header_rows(header_rows, ["Doc. Start Date", "Document Start Date", "開始日期"], required=False),
+            "factor_name": _ensure_output_col(header_rows, ["Factor Name", "Emission Factor Name", "係數名稱"], "Factor Name"),
+            "emission_factor": _ensure_output_col(header_rows, ["Emission Factor", "Carbon Factor", "碳係數"], "Emission Factor"),
+            "factor_source": _ensure_output_col(header_rows, ["Factor Source", "Emission Factor Source", "係數來源"], "Factor Source"),
+            "factor_comment": _ensure_output_col(header_rows, ["Factor Comment", "Emission Factor Comment", "係數備註"], "Factor Comment"),
+            "country": _ensure_output_col(header_rows, ["Country/Area", "Country Area", "Country", "Area", "國家地區"], "Country/Area"),
+            "enabled_date": _ensure_output_col(header_rows, ["Enabled Date", "Effective Date", "啟用日期"], "Enabled Date"),
+            "data_quality": _ensure_output_col(header_rows, ["Data Quality", "資料品質"], "Data Quality"),
         }
         output_width = max(max(len(r) for r in header_rows), max(c for c in cols.values() if c))
+
+        _emit_progress(progress_callback, 38, "建立正式 Raw Material Bulk 欄位結構", 45, 0, total_activity_rows)
+        out_ws = out_wb.create_sheet(title=ACTIVITY_SHEET_NAME)
+        for hrow in header_rows:
+            out_ws.append(_pad_row(list(hrow), output_width))
+
+        t0 = time.perf_counter()
+        for idx, values in enumerate(src_ws.iter_rows(min_row=DATA_START_ROW, max_row=src_ws.max_row, values_only=True), start=1):
+            row_values = _pad_row(list(values or []), output_width)
+            material = _text(row_values[cols["material"] - 1] if len(row_values) >= cols["material"] else None)
+            if material:
+                non_empty_material_rows += 1
+                item = ccl_map.get(_normalize_material_key(material))
+                if item:
+                    row_values[cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
+                    row_values[cols["emission_factor"] - 1] = item.get("emission_factor")
+                    row_values[cols["factor_source"] - 1] = "Ecoinvent"
+                    row_values[cols["factor_comment"] - 1] = "CCLibrary"
+                    row_values[cols["country"] - 1] = "GLO"
+                    row_values[cols["enabled_date"] - 1] = row_values[cols["doc_start"] - 1] if cols.get("doc_start") else None
+                    row_values[cols["data_quality"] - 1] = "SECONDARY"
+                    matched += 1
+                    written_rows += 1
+                else:
+                    unmatched += 1
+            out_ws.append(row_values)
+            if idx == 1 or idx % 1000 == 0:
+                elapsed = max(0.001, time.perf_counter() - t0)
+                rate = idx / elapsed
+                remaining = int(max(1, (total_activity_rows - idx) / rate + 15)) if rate > 0 and total_activity_rows else 60
+                progress = 40 + int(min(48, idx / max(1, total_activity_rows) * 48))
+                _emit_progress(
+                    progress_callback,
+                    progress,
+                    "比對原物料並串流寫入 CCL 係數欄位",
+                    remaining,
+                    idx,
+                    total_activity_rows,
+                )
+        perf["stream_map_and_write_activity"] = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        _emit_progress(progress_callback, 89, "複製 Raw Material Bulk 其他分頁", 20, total_activity_rows, total_activity_rows)
+        for sheet_name in src_wb.sheetnames:
+            if sheet_name == ACTIVITY_SHEET_NAME:
+                continue
+            copied_other_rows += _copy_non_activity_sheet_streaming(src_wb[sheet_name], out_wb)
+        perf["copy_other_sheets"] = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        _emit_progress(progress_callback, 94, "儲存已填入係數的正式 Bulk 檔", 15, total_activity_rows, total_activity_rows)
+        out_wb.save(output_path)
+        perf["save_writeonly_workbook"] = time.perf_counter() - t0
     finally:
-        wb_meta.close()
-    perf["open_readonly_workbook"] = time.perf_counter() - t0
-
-    counters = {
-        "matched": 0,
-        "unmatched": 0,
-        "written_rows": 0,
-        "non_empty_material_rows": 0,
-        "idx": 0,
-    }
-
-    def activity_rows_factory():
-        wb = load_workbook(raw_material_bulk_path, read_only=True, data_only=False)
-        try:
-            src_ws = wb[ACTIVITY_SHEET_NAME]
-            t_stream = time.perf_counter()
-            for idx, values in enumerate(src_ws.iter_rows(min_row=DATA_START_ROW, max_row=src_ws.max_row, values_only=True), start=1):
-                row_values = _pad_row(list(values or []), output_width)
-                material = _text(row_values[cols["material"] - 1] if len(row_values) >= cols["material"] else None)
-                if material:
-                    counters["non_empty_material_rows"] += 1
-                    item = ccl_map.get(_normalize_material_key(material))
-                    if item:
-                        row_values[cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
-                        row_values[cols["emission_factor"] - 1] = item.get("emission_factor")
-                        row_values[cols["factor_source"] - 1] = "Ecoinvent"
-                        row_values[cols["factor_comment"] - 1] = "CCLibrary"
-                        row_values[cols["country"] - 1] = "GLO"
-                        row_values[cols["enabled_date"] - 1] = row_values[cols["doc_start"] - 1] if cols.get("doc_start") else ""
-                        row_values[cols["data_quality"] - 1] = "SECONDARY"
-                        counters["matched"] += 1
-                        counters["written_rows"] += 1
-                    else:
-                        counters["unmatched"] += 1
-                counters["idx"] = idx
-                if idx == 1 or idx % 1000 == 0:
-                    elapsed = max(0.001, time.perf_counter() - t_stream)
-                    rate = idx / elapsed
-                    remaining = int(max(1, (total_activity_rows - idx) / rate + 15)) if rate > 0 and total_activity_rows else 60
-                    progress = 40 + int(min(48, idx / max(1, total_activity_rows) * 48))
-                    _emit_progress(
-                        progress_callback,
-                        progress,
-                        "比對原物料並串流寫入 CCL 係數欄位",
-                        remaining,
-                        idx,
-                        total_activity_rows,
-                    )
-                yield row_values
-        finally:
-            wb.close()
-
-    t0 = time.perf_counter()
-    _emit_progress(progress_callback, 38, "複製完整 Raw Material Bulk Template 並替換係數資料列", 45, 0, total_activity_rows)
-    counts = _rewrite_xlsx_sheets_preserve_package(
-        raw_material_bulk_path,
-        output_path,
-        {
-            ACTIVITY_SHEET_NAME: {
-                "rows_factory": activity_rows_factory,
-                "width": output_width,
-                "expected_rows": int(total_activity_rows),
-                "header_rows_values": header_rows if headers_modified else None,
-            }
-        },
-    )
-    perf["stream_map_write_preserve_package"] = time.perf_counter() - t0
+        src_wb.close()
 
     total_time = time.perf_counter() - perf_start
     perf["total"] = total_time
@@ -359,18 +908,17 @@ def apply_ccl_factors_to_raw_material_bulk(
         "output_filename": output_path.name,
         "download_url": f"/download/{output_path.name}",
         "ccl_mapping_rows": len(ccl_map),
-        "matched_rows": int(counters["matched"]),
-        "unmatched_rows": int(counters["unmatched"]),
-        "written_rows": int(counters["written_rows"]),
-        "total_rows": int(counters["non_empty_material_rows"]),
-        "activity_rows": int(counts.get(ACTIVITY_SHEET_NAME, total_activity_rows)),
-        "copied_other_sheet_rows": "preserved_byte_for_byte",
+        "matched_rows": matched,
+        "unmatched_rows": unmatched,
+        "written_rows": written_rows,
+        "total_rows": non_empty_material_rows,
+        "activity_rows": total_activity_rows,
+        "copied_other_sheet_rows": copied_other_rows,
         "performance_seconds": {k: round(v, 3) for k, v in perf.items()},
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         "large_dataset_mode": True,
-        "template_strategy": "full-template-preserve OpenXML streaming; Sheet1 data rows replaced only; Sheet2/3/4 preserved",
+        "template_strategy": "write_only workbook; preserve formal sheet names/headers; append missing factor columns; no full-template load",
     }
-
 
 
 def _is_raw_material_bulk_zip_member(filename: str) -> bool:
@@ -400,6 +948,7 @@ def apply_ccl_factors_to_raw_material_bulk_package(
     ccl_mapping_path: str | Path,
     output_path: str | Path,
     progress_callback: Callable[..., None] | None = None,
+    raw_material_template_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """Apply CCL factors to a Module 2 raw-material bulk Excel or ZIP package.
 
@@ -417,6 +966,7 @@ def apply_ccl_factors_to_raw_material_bulk_package(
             ccl_mapping_path,
             output_path,
             progress_callback=progress_callback,
+            raw_material_template_path=raw_material_template_path,
         )
 
     _emit_progress(progress_callback, 2, "讀取 Module 2 ZIP 內原物料 Bulk 檔案", 60, 0, None)
@@ -472,6 +1022,7 @@ def apply_ccl_factors_to_raw_material_bulk_package(
                         filled_file,
                         progress_callback=nested_progress,
                         ccl_map=ccl_map,
+                        raw_material_template_path=raw_material_template_path,
                     )
                     zout.write(filled_file, arcname=filled_name)
                     processed_files.append({
@@ -497,7 +1048,8 @@ def apply_ccl_factors_to_raw_material_bulk_package(
         "raw_material_bulk_file_filter": "include raw_material/activity_data_bulk workbooks; exclude supplier_bulk_create workbooks",
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         "large_dataset_mode": True,
-        "template_strategy": "write_only workbook; formal bulk columns; no full-template load",
+        "template_strategy": "M2B/M2C/M3 lightweight intermediates; final M3 applies original Raw Material Bulk Template via streaming OpenXML package writer" if raw_material_template_path else "write_only workbook; formal bulk columns; no full-template load",
+        "final_template_filename": Path(raw_material_template_path).name if raw_material_template_path else "",
         **totals,
     }
 
@@ -823,7 +1375,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_FULL_TEMPLATE_PRESERVE_LIGHTWEIGHT_20260708"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LIGHT_INTERMEDIATE_FINAL_TEMPLATE_V1_20260708"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 

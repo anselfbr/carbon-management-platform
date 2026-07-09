@@ -369,7 +369,7 @@ def _run_module2c_supplier_mapping_job(
             completed_at=_cmp_now_iso(),
         )
 
-def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path) -> None:
+def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path, raw_template_path: Path | None = None) -> None:
     def report(
         progress: int,
         step: str,
@@ -393,8 +393,8 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
 
     try:
         report(1, "建立 CCL 係數對應工作", 45)
-        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, progress_callback=report)
-        summary["app_version"] = "CMP_MODULE3_LARGE_DATASET_TEMPLATE_V1"
+        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, progress_callback=report, raw_material_template_path=raw_template_path)
+        summary["app_version"] = "CMP_MODULE3_LIGHT_INTERMEDIATE_FINAL_TEMPLATE_V1"
         _set_module3_ccl_job(
             job_id,
             status="success",
@@ -2201,6 +2201,25 @@ def _find_latest_module2_raw_material_bulk() -> Path | None:
     return latest
 
 
+def _find_latest_raw_material_bulk_template() -> Path | None:
+    """Return the latest user-uploaded Raw Material Bulk Template for M3 final export.
+
+    M2B/M2C/M3 now use lightweight intermediate workbooks for large datasets.
+    The final third-party-uploadable template is reapplied only at Module 3,
+    using the original template uploaded at Module 2B / legacy Module 2.
+    """
+    candidates: list[Path] = []
+    for pattern in (
+        "module2b_raw_material_template_*.xlsx",
+        "module2b_raw_material_template_*.xlsm",
+        "raw_material_template_*.xlsx",
+        "raw_material_template_*.xlsm",
+    ):
+        for path in UPLOAD_DIR.glob(pattern):
+            if path.name.startswith("~$"):
+                continue
+            candidates.append(path)
+    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
 
 def _find_latest_module2b_raw_material_bulk_zip() -> Path | None:
@@ -2257,6 +2276,12 @@ async def module3_apply_ccl_factors_job(
             {"ok": False, "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。"},
             status_code=400,
         )
+    raw_template_path = _find_latest_raw_material_bulk_template()
+    if raw_template_path is None:
+        return JSONResponse(
+            {"ok": False, "message": "尚未找到 Raw Material Bulk Template；請先重新執行 Module 2B 並上傳原始 Bulk Template，M3 才能輸出可上傳第三方平台的正式 Bulk。"},
+            status_code=400,
+        )
 
     filename = str(getattr(ccl_mapping_file, "filename", "") or "")
     if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
@@ -2277,7 +2302,7 @@ async def module3_apply_ccl_factors_job(
         remaining_seconds=30,
         created_at=_cmp_now_iso(),
     )
-    MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path)
+    MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path, raw_template_path)
     return {
         "ok": True,
         "job_id": job_id,
@@ -2285,6 +2310,7 @@ async def module3_apply_ccl_factors_job(
         "source_filename": raw_path.name,
         "source_label": _module2_raw_bulk_source_label(raw_path),
         "source_stage": _module2_raw_bulk_source_stage(raw_path),
+        "final_template_filename": raw_template_path.name,
         **_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)),
     }
 
@@ -2309,6 +2335,12 @@ async def module3_apply_ccl_factors(
             {"ok": False, "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。"},
             status_code=400,
         )
+    raw_template_path = _find_latest_raw_material_bulk_template()
+    if raw_template_path is None:
+        return JSONResponse(
+            {"ok": False, "message": "尚未找到 Raw Material Bulk Template；請先重新執行 Module 2B 並上傳原始 Bulk Template，M3 才能輸出可上傳第三方平台的正式 Bulk。"},
+            status_code=400,
+        )
 
     filename = str(getattr(ccl_mapping_file, "filename", "") or "")
     if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
@@ -2319,11 +2351,12 @@ async def module3_apply_ccl_factors(
     ccl_path.write_bytes(await ccl_mapping_file.read())
 
     try:
-        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path)
-        summary["app_version"] = "CMP_MODULE3_DIRECT_MODULE2_BULK_V2_2"
+        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, raw_material_template_path=raw_template_path)
+        summary["app_version"] = "CMP_MODULE3_LIGHT_INTERMEDIATE_FINAL_TEMPLATE_V1"
         summary["source_filename"] = raw_path.name
         summary["source_label"] = _module2_raw_bulk_source_label(raw_path)
         summary["source_stage"] = _module2_raw_bulk_source_stage(raw_path)
+        summary["final_template_filename"] = raw_template_path.name
         summary.update(_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)))
     except Exception as exc:
         traceback.print_exc()
