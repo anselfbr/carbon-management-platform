@@ -32,6 +32,7 @@ MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH = OUTPUT_DIR / "standard_bom_total_usage_l
 MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH = OUTPUT_DIR / "module2b_raw_material_bulk_latest.zip"
 MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH = OUTPUT_DIR / "module2c_supplier_mapped_raw_material_bulk_latest.zip"
+RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH = OUTPUT_DIR / "raw_material_bulk_template_latest.xlsx"
 
 
 RULE_SET_MAP = {
@@ -336,6 +337,10 @@ def _run_module2b_raw_bulk_job(
         if output_path.exists():
             MODULE2_RAW_MATERIAL_BULK_PATH = output_path
             shutil.copy2(output_path, MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH)
+        if template_path.exists():
+            shutil.copy2(template_path, RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH)
+            summary["final_raw_material_template_latest"] = RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.name
+            summary["final_raw_material_template_latest_download_url"] = f"/download/{RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.name}"
         summary["module1_step1_source_filename"] = step1_path.name
         summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
         summary["module1_step1_source"] = step1_source
@@ -472,7 +477,7 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
     try:
         report(1, "建立 CCL 係數對應工作", 45)
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, progress_callback=report, raw_material_template_path=raw_template_path)
-        summary["app_version"] = "CMP_MODULE3_LIGHT_INTERMEDIATE_FINAL_TEMPLATE_V1"
+        summary["app_version"] = "CMP_MODULE3_FINAL_TEMPLATE_STYLE_PRESERVE_V2"
         _set_module3_ccl_job(
             job_id,
             status="success",
@@ -481,6 +486,8 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
             message="CCL 係數對應完成。",
             remaining_seconds=0,
             summary=summary,
+            final_template_filename=raw_template_path.name if raw_template_path else "",
+            final_template_modified_at=_cmp_mtime_iso(raw_template_path) if raw_template_path else "",
             download_url=summary.get("download_url", f"/download/{output_path.name}"),
         )
     except Exception as exc:
@@ -2354,16 +2361,23 @@ def _find_latest_raw_material_bulk_template() -> Path | None:
     using the original template uploaded at Module 2B / legacy Module 2.
     """
     candidates: list[Path] = []
+    if RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.exists():
+        candidates.append(RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH)
     for pattern in (
+        "raw_material_bulk_template_latest.xlsx",
         "module2b_raw_material_template_*.xlsx",
         "module2b_raw_material_template_*.xlsm",
         "raw_material_template_*.xlsx",
         "raw_material_template_*.xlsm",
     ):
-        for path in UPLOAD_DIR.glob(pattern):
-            if path.name.startswith("~$"):
-                continue
-            candidates.append(path)
+        for root in (OUTPUT_DIR, UPLOAD_DIR):
+            for path in root.glob(pattern):
+                if path.name.startswith("~$"):
+                    continue
+                candidates.append(path)
+    # Prefer the explicit latest template when present; it is copied from the latest M2B upload.
+    if RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.exists():
+        return RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
 
@@ -2390,6 +2404,7 @@ def module3_raw_material_bulk_source():
             "message": "尚未找到 Module 2 產出的 raw material activity data bulk，請先完成 Module 2。",
         }
     stat = raw_path.stat()
+    raw_template_path = _find_latest_raw_material_bulk_template()
     source_label = _module2_raw_bulk_source_label(raw_path)
     meta = _source_meta_for_path(raw_path, source_label)
     return {
@@ -2401,6 +2416,9 @@ def module3_raw_material_bulk_source():
         "size_bytes": stat.st_size,
         "modified_at": _cmp_mtime_iso(raw_path),
         "download_url": f"/download/{raw_path.name}",
+        "final_template_filename": raw_template_path.name if raw_template_path else "",
+        "final_template_download_url": f"/download/{raw_template_path.name}" if raw_template_path and raw_template_path.parent == OUTPUT_DIR else "",
+        "final_template_modified_at": _cmp_mtime_iso(raw_template_path) if raw_template_path else "",
         **meta,
     }
 
@@ -2444,6 +2462,8 @@ async def module3_apply_ccl_factors_job(
         message="CCL 係數對應已開始。",
         source_filename=raw_path.name,
         source_meta=_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)),
+        final_template_filename=raw_template_path.name,
+        final_template_modified_at=_cmp_mtime_iso(raw_template_path),
         remaining_seconds=30,
         created_at=_cmp_now_iso(),
     )
@@ -2497,7 +2517,7 @@ async def module3_apply_ccl_factors(
 
     try:
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, raw_material_template_path=raw_template_path)
-        summary["app_version"] = "CMP_MODULE3_LIGHT_INTERMEDIATE_FINAL_TEMPLATE_V1"
+        summary["app_version"] = "CMP_MODULE3_FINAL_TEMPLATE_STYLE_PRESERVE_V2"
         summary["source_filename"] = raw_path.name
         summary["source_label"] = _module2_raw_bulk_source_label(raw_path)
         summary["source_stage"] = _module2_raw_bulk_source_stage(raw_path)
@@ -3015,6 +3035,8 @@ async def process_bom_expansion(request: Request):
     supplier_paths: list[Path] = []
 
     template_path.write_bytes(await template_file.read())
+    if template_path.exists():
+        shutil.copy2(template_path, RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH)
     if step1_path is None:
         return JSONResponse(
             {"ok": False, "message": "尚未找到 Module 1 Step 1 產出的年度產品產量與分類結果，請先完成 Module 1 → Step 1。"},

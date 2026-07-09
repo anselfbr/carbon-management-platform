@@ -361,9 +361,10 @@
             </div>
 
             <form id="bulkForm" class="form-panel">
-              <label data-i18n="uploadStep1OutputFile">Upload Step 1 Output File</label>
-              <input id="step1File" name="step1_file" type="file" accept=".xlsx,.xls,.xlsm" />
-              <p class="hint">可留空；系統會自動抓取最新的 Module 1 Step 1 產出檔。若需要指定版本，才手動上傳。</p>
+              <div class="module3-source-card">
+                <b>Module 1 Step 1 Output</b>
+                <p>此檔案已改為系統自動抓取最新產出，不需再手動上傳。若狀態欄顯示尚未找到，請先完成 M1 Step1。</p>
+              </div>
 
               <label data-i18n="uploadBulkTemplateFile">Upload Bulk Template File</label>
               <input id="bulkTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
@@ -388,7 +389,7 @@
                 <div class="spinner"></div>
                 <div>
                   <b id="bulkStatusTitle">Ready for batch formatting</b>
-                  <p id="bulkStatusText">Upload Step 1 output and bulk template to generate formatted bulk file.</p>
+                  <p id="bulkStatusText">系統會自動引用最新 M1 Step1 產出；請上傳 Bulk Template 以產出格式化檔案。</p>
                 </div>
                 <span id="bulkStatusTime" class="status-time">Idle</span>
               </div>
@@ -1689,7 +1690,9 @@ async function refreshModule3RawBulkSource() {
     const filename = data.filename || 'raw material bulk';
     const typeText = data.source_type === 'zip_package' ? 'ZIP 原物料 Bulk 包' : '原物料 Bulk 檔';
     const sourceLabel = data.source_label || 'Module 2 最新原物料 Bulk';
-    module3RawBulkSourceText.textContent = `來源：${sourceLabel}｜類型：${typeText}｜檔案：${filename}${cmpSourceMetaText(data)}`;
+    const templateTime = data.final_template_modified_at ? `｜Template 時間：${data.final_template_modified_at}` : '';
+    const finalTemplate = data.final_template_filename ? `｜最終套版 Template：${data.final_template_filename}${templateTime}` : '｜尚未找到最終套版 Template';
+    module3RawBulkSourceText.textContent = `來源：${sourceLabel}｜類型：${typeText}｜檔案：${filename}${cmpSourceMetaText(data)}${finalTemplate}`;
   } catch (err) {
     module3RawBulkSourceText.textContent = err.message || '尚未找到 Module 2 產出的 raw material bulk，請先完成 Module 2。';
   }
@@ -1721,7 +1724,7 @@ function startModule3CclPolling(jobId, startTime) {
           unmatched: summary.unmatched_rows ?? 0
         }) + fileCount + (sourceText ? `｜${sourceText}` : '');
         setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), text, cmpT('completed', 'Completed'), 100);
-        if (module3CclLog) module3CclLog.textContent = `Completed.\nJob: ${jobId}\nRows: ${(summary.activity_rows || summary.total_rows || 0).toLocaleString()}\nWritten: ${(summary.written_rows || 0).toLocaleString()}\nUnmatched: ${(summary.unmatched_rows || 0).toLocaleString()}\nDownload: ${summary.output_filename || ''}`;
+        if (module3CclLog) module3CclLog.textContent = `Completed.\nJob: ${jobId}\nRows: ${(summary.activity_rows || summary.total_rows || 0).toLocaleString()}\nWritten: ${(summary.written_rows || 0).toLocaleString()}\nUnmatched: ${(summary.unmatched_rows || 0).toLocaleString()}\nFinal template: ${summary.final_template_filename || job.final_template_filename || ''}\nDownload: ${summary.output_filename || ''}`;
         if (module3CclDownload && job.download_url) {
           module3CclDownload.href = job.download_url;
           module3CclDownload.classList.remove('disabled');
@@ -2408,7 +2411,7 @@ bulkForm.addEventListener('submit', async (e) => {
   if (workingHourSource === 'include_semi') {
     bulkStatusText.textContent = 'Checking latest Module 2A Working Hour Roll-up for semi-finished working hours.';
   } else {
-    bulkStatusText.textContent = 'Checking latest Module 1 Step 1 output. Step 1 upload may be left blank for auto-fetch.';
+    bulkStatusText.textContent = 'Checking latest Module 1 Step 1 output. Step 1 output is auto-fetched; only Bulk Template upload is required.';
   }
 
   try {

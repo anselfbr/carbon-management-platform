@@ -15,11 +15,13 @@ import pandas as pd
 from openpyxl import load_workbook, Workbook
 
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
+ACTIVITY_SHEET_ALIASES = ["Input Sheet Activity Data", "Raw Material Activity Data", "Activity Data"]
+RAW_MATERIAL_SHEET_ALIASES = ["Input Sheet Raw Material", "Raw Material", "Raw Materials"]
 DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LIGHT_INTERMEDIATE_FINAL_TEMPLATE_V1_20260708"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_FINAL_TEMPLATE_STYLE_PRESERVE_V2_20260709"
 
 
 def _norm(value: Any) -> str:
@@ -294,27 +296,31 @@ def _xlsx_cell_ref(row_idx: int, col_idx: int) -> str:
     return f"{_xlsx_col_letter(col_idx)}{int(row_idx)}"
 
 
-def _manual_cell_xml(row_idx: int, col_idx: int, value: Any) -> bytes:
-    if value is None:
-        return b""
-    if isinstance(value, str) and value == "":
-        return b""
+def _manual_cell_xml(row_idx: int, col_idx: int, value: Any, style_id: str | int | None = None, formula_xml: bytes | None = None, emit_empty_style: bool = False) -> bytes:
     ref = _xlsx_cell_ref(row_idx, col_idx)
+    style_attr = b""
+    if style_id is not None and str(style_id).strip() != "":
+        style_attr = f' s="{str(style_id).strip()}"'.encode("utf-8")
+    if value is None or (isinstance(value, str) and value == ""):
+        if formula_xml:
+            return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'>' + formula_xml + b'</c>'
+        if emit_empty_style and style_attr:
+            return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'/>'
+        return b""
     if isinstance(value, bool):
-        return f'<c r="{ref}" t="b"><v>{1 if value else 0}</v></c>'.encode("utf-8")
+        return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + f' t="b"><v>{1 if value else 0}</v></c>'.encode("utf-8")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         try:
             number = float(value)
             if math.isfinite(number):
-                if number.is_integer():
-                    raw = str(int(number))
-                else:
-                    raw = repr(number)
-                return f'<c r="{ref}"><v>{raw}</v></c>'.encode("utf-8")
+                raw = str(int(number)) if number.is_integer() else repr(number)
+                return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'><v>' + raw.encode("utf-8") + b'</v></c>'
         except Exception:
             pass
     text = _xml_clean_text(value)
     if text == "":
+        if emit_empty_style and style_attr:
+            return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'/>'
         return b""
     escaped = (
         text.replace("&", "&amp;")
@@ -322,19 +328,57 @@ def _manual_cell_xml(row_idx: int, col_idx: int, value: Any) -> bytes:
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
-    return f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{escaped}</t></is></c>'.encode("utf-8")
+    return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b' t="inlineStr"><is><t xml:space="preserve">' + escaped.encode("utf-8") + b'</t></is></c>'
 
 
-def _manual_row_xml(row_idx: int, values: list[Any], width: int | None = None) -> bytes:
+def _rewrite_formula_row_refs(formula_xml: bytes | None, source_row: int, target_row: int) -> bytes | None:
+    if not formula_xml or source_row == target_row:
+        return formula_xml
+    # Adjust simple A3 / $A$3 style references in row-level template formulas.
+    src = str(int(source_row)).encode("ascii")
+    dst = str(int(target_row)).encode("ascii")
+    pattern = rb'(?<![A-Za-z0-9_])((?:\$?[A-Z]{1,3})\$?)' + src + rb'(?![0-9])'
+    return re.sub(pattern, rb'\1' + dst, formula_xml)
+
+
+def _manual_row_xml(
+    row_idx: int,
+    values: list[Any],
+    width: int | None = None,
+    style_by_col: dict[int, str] | None = None,
+    formula_by_col: dict[int, bytes] | None = None,
+    template_row_attrs: bytes | None = None,
+    template_formula_row: int = DATA_START_ROW,
+    emit_empty_styles: bool = False,
+) -> bytes:
     width = int(width or len(values) or 1)
+    style_by_col = style_by_col or {}
+    formula_by_col = formula_by_col or {}
     cells = []
     for col_idx in range(1, width + 1):
         value = values[col_idx - 1] if col_idx <= len(values) else None
-        cell = _manual_cell_xml(row_idx, col_idx, value)
+        formula_xml = None
+        if (value is None or (isinstance(value, str) and value == "")) and col_idx in formula_by_col:
+            formula_xml = _rewrite_formula_row_refs(formula_by_col.get(col_idx), template_formula_row, row_idx)
+        cell = _manual_cell_xml(
+            row_idx,
+            col_idx,
+            value,
+            style_id=style_by_col.get(col_idx),
+            formula_xml=formula_xml,
+            emit_empty_style=emit_empty_styles,
+        )
         if cell:
             cells.append(cell)
-    return b'<row r="%d">%s</row>' % (int(row_idx), b"".join(cells))
-
+    attrs = b''
+    if template_row_attrs:
+        attrs = b' ' + template_row_attrs.strip()
+        # Remove r/spans from copied attrs; those are regenerated for the target row.
+        attrs = re.sub(rb'\s+r="[^"]*"', b'', attrs)
+        attrs = re.sub(rb"\s+r='[^']*'", b'', attrs)
+        attrs = re.sub(rb'\s+spans="[^"]*"', b'', attrs)
+        attrs = re.sub(rb"\s+spans='[^']*'", b'', attrs)
+    return b'<row r="%d" spans="1:%d"%s>%s</row>' % (int(row_idx), int(width), attrs, b"".join(cells))
 
 def _max_header_width(header_rows: list[list[Any]]) -> int:
     return max((len(r) for r in header_rows), default=0)
@@ -489,7 +533,21 @@ def _remove_calc_chain_rels(data: bytes) -> bytes:
     return re.sub(rb'<Relationship\b[^>]*(?:calcChain|calcchain)[^>]*/>', b"", data)
 
 
-def _spool_sheet_rows_xml(rows_iter, temp_path: Path, start_row: int, width: int, progress_callback=None, progress_base: int = 0, progress_span: int = 0, progress_step: str = "") -> tuple[int, int]:
+def _spool_sheet_rows_xml(
+    rows_iter,
+    temp_path: Path,
+    start_row: int,
+    width: int,
+    progress_callback=None,
+    progress_base: int = 0,
+    progress_span: int = 0,
+    progress_step: str = "",
+    style_by_col: dict[int, str] | None = None,
+    formula_by_col: dict[int, bytes] | None = None,
+    template_row_attrs: bytes | None = None,
+    template_formula_row: int = DATA_START_ROW,
+    emit_empty_styles: bool = False,
+) -> tuple[int, int]:
     count = 0
     max_width = int(width or 1)
     start_time = time.perf_counter()
@@ -499,7 +557,16 @@ def _spool_sheet_rows_xml(rows_iter, temp_path: Path, start_row: int, width: int
             row_values = list(values or [])
             if len(row_values) > max_width:
                 max_width = len(row_values)
-            fh.write(_manual_row_xml(row_idx, row_values, max_width))
+            fh.write(_manual_row_xml(
+                row_idx,
+                row_values,
+                max_width,
+                style_by_col=style_by_col,
+                formula_by_col=formula_by_col,
+                template_row_attrs=template_row_attrs,
+                template_formula_row=template_formula_row,
+                emit_empty_styles=emit_empty_styles,
+            ))
             if progress_callback and progress_span and (count == 1 or count % 5000 == 0):
                 elapsed = max(0.001, time.perf_counter() - start_time)
                 rate = count / elapsed
@@ -507,12 +574,80 @@ def _spool_sheet_rows_xml(rows_iter, temp_path: Path, start_row: int, width: int
                 _emit_progress(progress_callback, min(95, progress_base + min(progress_span, int(progress_span * min(1, count / max(count, 1))))), progress_step, remaining, count, None)
     return count, max_width
 
+def _first_existing_name(names: Iterable[str], aliases: Iterable[str]) -> str | None:
+    exact = {str(n): str(n) for n in names}
+    for alias in aliases:
+        if alias in exact:
+            return exact[alias]
+    norm_lookup = {_norm(n): str(n) for n in names}
+    for alias in aliases:
+        found = norm_lookup.get(_norm(alias))
+        if found:
+            return found
+    return None
+
+
+def _template_row_format(inside_sheetdata: bytes, row_idx: int, width: int) -> tuple[dict[int, str], dict[int, bytes], bytes | None]:
+    row_xml = _extract_raw_header_row(inside_sheetdata, row_idx)
+    if not row_xml:
+        return {}, {}, None
+    open_m = re.match(rb'<row\b([^>]*)>', row_xml, flags=re.DOTALL)
+    row_attrs = open_m.group(1) if open_m else None
+    style_by_col: dict[int, str] = {}
+    formula_by_col: dict[int, bytes] = {}
+    for cell_m in re.finditer(rb'<c\b([^>]*)>(.*?)</c>|<c\b([^>]*)/>', row_xml, flags=re.DOTALL):
+        attrs = cell_m.group(1) or cell_m.group(3) or b''
+        body = cell_m.group(2) or b''
+        ref_m = re.search(rb'\br="([A-Z]+)\d+"', attrs)
+        if not ref_m:
+            continue
+        col_letters = ref_m.group(1).decode("ascii")
+        col_idx = 0
+        for ch in col_letters:
+            col_idx = col_idx * 26 + (ord(ch) - ord("A") + 1)
+        s_m = re.search(rb'\bs="([^"]*)"', attrs)
+        if s_m:
+            style_by_col[col_idx] = s_m.group(1).decode("utf-8", "ignore")
+        f_m = re.search(rb'(<f\b[^>]*>.*?</f>)', body, flags=re.DOTALL)
+        if f_m:
+            formula_by_col[col_idx] = f_m.group(1)
+    if style_by_col:
+        last_style = style_by_col[max(style_by_col)]
+        for col in range(1, int(width or 1) + 1):
+            style_by_col.setdefault(col, style_by_col.get(col - 1, last_style))
+    return style_by_col, formula_by_col, row_attrs
+
+
+def _extend_data_validation_sqref(data: bytes, max_row: int, max_col: int) -> bytes:
+    max_row = max(DATA_START_ROW, int(max_row or DATA_START_ROW))
+    def repl(match: re.Match[bytes]) -> bytes:
+        raw = match.group(1).decode("utf-8", "ignore")
+        parts = raw.split()
+        out_parts = []
+        for part in parts:
+            m = re.match(r'^(\$?[A-Z]{1,3})\$?3:(\$?[A-Z]{1,3})\$?\d+$', part)
+            if m:
+                end_col = m.group(2).replace('$', '')
+                out_parts.append(f'{m.group(1)}3:{end_col}{max_row}')
+            else:
+                out_parts.append(part)
+        return b'sqref="' + ' '.join(out_parts).encode("utf-8") + b'"'
+    return re.sub(rb'sqref="([^"]+)"', repl, data)
+
+
+def _extend_autofilter_ref(data: bytes, header_row: int, max_col: int) -> bytes:
+    if b'<autoFilter' not in data:
+        return data
+    ref = f'A{int(header_row)}:{_xlsx_col_letter(max(1, int(max_col)))}{int(header_row)}'.encode("utf-8")
+    return re.sub(rb'<autoFilter\b[^>]*/>', b'<autoFilter ref="' + ref + b'"/>', data, count=1)
+
 
 def _write_sheet_part_from_template(zout: zipfile.ZipFile, arcname: str, template_xml: bytes, header_rows: list[list[Any]], data_xml_path: Path, data_count: int, final_width: int) -> None:
     prefix, inside, suffix, _ = _split_sheet_xml(template_xml)
-    prefix = _update_dimension_in_prefix(prefix, DATA_START_ROW - 1 + int(data_count), int(final_width))
-    original_width = 0
-    # Header cells beyond the original raw template are appended without touching existing header XML.
+    max_row = DATA_START_ROW - 1 + int(data_count)
+    prefix = _update_dimension_in_prefix(prefix, max_row, int(final_width))
+    suffix = _extend_data_validation_sqref(suffix, max_row, final_width)
+    suffix = _extend_autofilter_ref(suffix, DATA_START_ROW - 1, final_width)
     raw_row_1 = _extract_raw_header_row(inside, 1)
     raw_row_2 = _extract_raw_header_row(inside, 2)
     original_width = 0
@@ -541,7 +676,6 @@ def _write_sheet_part_from_template(zout: zipfile.ZipFile, arcname: str, templat
                 shutil.copyfileobj(src, out, length=1024 * 1024)
         out.write(suffix)
 
-
 def _write_template_applied_workbook(
     template_path: str | Path,
     output_path: str | Path,
@@ -556,17 +690,44 @@ def _write_template_applied_workbook(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sheet_paths = _sheet_paths_by_name_from_xlsx(template_path)
-    activity_sheet_path = sheet_paths.get(ACTIVITY_SHEET_NAME)
-    raw_sheet_path = sheet_paths.get("Input Sheet Raw Material") or sheet_paths.get("Raw Material")
+    activity_template_name = _first_existing_name(sheet_paths.keys(), ACTIVITY_SHEET_ALIASES)
+    raw_template_name = _first_existing_name(sheet_paths.keys(), RAW_MATERIAL_SHEET_ALIASES)
+    activity_sheet_path = sheet_paths.get(activity_template_name or "")
+    raw_sheet_path = sheet_paths.get(raw_template_name or "")
     if not activity_sheet_path or not raw_sheet_path:
-        raise ValueError("Raw Material Bulk Template 缺少 Input Sheet Activity Data 或 Input Sheet Raw Material 分頁。")
+        raise ValueError("Raw Material Bulk Template 缺少 Activity Data 或 Raw Material 分頁。")
 
     with tempfile.TemporaryDirectory(prefix="cmp_m3_template_apply_") as tmp:
         tmpdir = Path(tmp)
         activity_xml_tmp = tmpdir / "activity_rows.xml"
         raw_xml_tmp = tmpdir / "raw_rows.xml"
-        activity_count, activity_actual_width = _spool_sheet_rows_xml(activity_rows_iter, activity_xml_tmp, DATA_START_ROW, activity_width)
-        raw_count, raw_actual_width = _spool_sheet_rows_xml(raw_rows_iter, raw_xml_tmp, DATA_START_ROW, raw_width)
+        with zipfile.ZipFile(template_path, "r") as zpeek:
+            activity_template_xml_peek = zpeek.read(activity_sheet_path)
+            raw_template_xml_peek = zpeek.read(raw_sheet_path)
+        _, activity_inside, _, _ = _split_sheet_xml(activity_template_xml_peek)
+        _, raw_inside, _, _ = _split_sheet_xml(raw_template_xml_peek)
+        activity_style_by_col, activity_formula_by_col, activity_row_attrs = _template_row_format(activity_inside, DATA_START_ROW, activity_width)
+        raw_style_by_col, raw_formula_by_col, raw_row_attrs = _template_row_format(raw_inside, DATA_START_ROW, raw_width)
+        activity_count, activity_actual_width = _spool_sheet_rows_xml(
+            activity_rows_iter,
+            activity_xml_tmp,
+            DATA_START_ROW,
+            activity_width,
+            style_by_col=activity_style_by_col,
+            formula_by_col=activity_formula_by_col,
+            template_row_attrs=activity_row_attrs,
+            emit_empty_styles=True,
+        )
+        raw_count, raw_actual_width = _spool_sheet_rows_xml(
+            raw_rows_iter,
+            raw_xml_tmp,
+            DATA_START_ROW,
+            raw_width,
+            style_by_col=raw_style_by_col,
+            formula_by_col=raw_formula_by_col,
+            template_row_attrs=raw_row_attrs,
+            emit_empty_styles=True,
+        )
         final_activity_width = max(int(activity_width), int(activity_actual_width))
         final_raw_width = max(int(raw_width), int(raw_actual_width))
 
@@ -630,17 +791,20 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
     src_wb = load_workbook(raw_material_bulk_path, read_only=True, data_only=False)
     tpl_wb = load_workbook(raw_material_template_path, read_only=True, data_only=False)
     try:
-        if ACTIVITY_SHEET_NAME not in src_wb.sheetnames:
-            raise ValueError(f"M3 輕量中繼檔找不到分頁：{ACTIVITY_SHEET_NAME}")
-        if ACTIVITY_SHEET_NAME not in tpl_wb.sheetnames:
-            raise ValueError(f"Raw Material Bulk Template 找不到分頁：{ACTIVITY_SHEET_NAME}")
-        raw_sheet_name = "Input Sheet Raw Material" if "Input Sheet Raw Material" in tpl_wb.sheetnames else ("Raw Material" if "Raw Material" in tpl_wb.sheetnames else None)
-        if raw_sheet_name is None:
+        src_activity_name = _first_existing_name(src_wb.sheetnames, ACTIVITY_SHEET_ALIASES)
+        tpl_activity_name = _first_existing_name(tpl_wb.sheetnames, ACTIVITY_SHEET_ALIASES)
+        tpl_raw_name = _first_existing_name(tpl_wb.sheetnames, RAW_MATERIAL_SHEET_ALIASES)
+        src_raw_name = _first_existing_name(src_wb.sheetnames, RAW_MATERIAL_SHEET_ALIASES)
+        if not src_activity_name:
+            raise ValueError("M3 輕量中繼檔找不到 Activity Data 分頁。")
+        if not tpl_activity_name:
+            raise ValueError("Raw Material Bulk Template 找不到 Activity Data 分頁。")
+        if not tpl_raw_name:
             raise ValueError("Raw Material Bulk Template 找不到 Raw Material 分頁。")
-        src_activity_ws = src_wb[ACTIVITY_SHEET_NAME]
-        src_raw_ws = src_wb[raw_sheet_name] if raw_sheet_name in src_wb.sheetnames else (src_wb[src_wb.sheetnames[1]] if len(src_wb.sheetnames) > 1 else None)
-        tpl_activity_ws = tpl_wb[ACTIVITY_SHEET_NAME]
-        tpl_raw_ws = tpl_wb[raw_sheet_name]
+        src_activity_ws = src_wb[src_activity_name]
+        src_raw_ws = src_wb[src_raw_name] if src_raw_name else (src_wb[src_wb.sheetnames[1]] if len(src_wb.sheetnames) > 1 else None)
+        tpl_activity_ws = tpl_wb[tpl_activity_name]
+        tpl_raw_ws = tpl_wb[tpl_raw_name]
 
         source_activity_headers = _first_header_rows(src_activity_ws, DATA_START_ROW - 1)
         source_raw_headers = _first_header_rows(src_raw_ws, DATA_START_ROW - 1) if src_raw_ws is not None else [[], []]
@@ -769,7 +933,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         "performance_seconds": {"total": round(total_time, 3)},
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         "large_dataset_mode": True,
-        "template_strategy": "M2B/M2C/M3 lightweight intermediates; final M3 applies original Raw Material Bulk Template via streaming OpenXML package writer",
+        "template_strategy": "M2B/M2C lightweight intermediates; final M3 reapplies original Raw Material Bulk Template with row-style/data-validation preservation",
         "final_template_filename": raw_material_template_path.name,
     }
 
@@ -1375,7 +1539,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_LIGHT_INTERMEDIATE_FINAL_TEMPLATE_V1_20260708"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_FINAL_TEMPLATE_STYLE_PRESERVE_V2_20260709"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
