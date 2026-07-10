@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 from openpyxl import Workbook
+from openpyxl.cell import WriteOnlyCell
 from openpyxl.utils import get_column_letter
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -1679,6 +1680,57 @@ def _excel_cell_value(value: Any) -> Any:
     return value
 
 
+def _m1a_excel_number_format(column_name: str, series: Optional[pd.Series] = None) -> Optional[str]:
+    """Return an Excel display format for M1A streaming exports.
+
+    Numeric values are kept as the original Python/Excel numbers; only the cell
+    display format is changed so users see two decimals and Excel does not fall
+    back to scientific notation. Identifier/text columns are intentionally left
+    as text values.
+    """
+    name = str(column_name or "").strip()
+    if not name:
+        return None
+
+    normalized_name = name.lower().replace(" ", "")
+    if name in {"Year", "年度"}:
+        return "0"
+    if name in {"筆數", "工時Order數"} or normalized_name.endswith("count") or normalized_name.endswith("rows"):
+        return "0"
+
+    if series is not None:
+        try:
+            if not pd.api.types.is_numeric_dtype(series):
+                return None
+        except Exception:
+            return None
+
+    numeric_keywords = [
+        "quantity", "qty", "hours", "hour", "hr.act", "foh-others.act",
+        "年度生產量", "年度人員工時", "年度設備工時", "年度總工時",
+        "生產數量占比", "生產工時占比", "工時", "合計", "生產量",
+    ]
+    if any(keyword in normalized_name for keyword in numeric_keywords):
+        return "#,##0.00"
+
+    if series is not None:
+        try:
+            if pd.api.types.is_numeric_dtype(series):
+                return "#,##0.00"
+        except Exception:
+            pass
+
+    return None
+
+
+def _format_stream_cell(ws: Any, value: Any, number_format: Optional[str]) -> Any:
+    if number_format is None or value is None:
+        return value
+    cell = WriteOnlyCell(ws, value=value)
+    cell.number_format = number_format
+    return cell
+
+
 def _stream_dataframe_to_sheet(
     wb: Workbook,
     df: pd.DataFrame,
@@ -1701,6 +1753,10 @@ def _stream_dataframe_to_sheet(
 
     # Match the old auto-width behavior without scanning an already-written worksheet.
     widths = [max(12, len(str(h or "")) + 2) for h in headers]
+    number_formats = [
+        _m1a_excel_number_format(header, df.iloc[:, idx] if idx < len(df.columns) else None)
+        for idx, header in enumerate(headers)
+    ]
     sample_limit = 999
     total_rows = int(len(df))
     denom = max(1, total_rows)
@@ -1708,7 +1764,11 @@ def _stream_dataframe_to_sheet(
 
     for row_index, row in enumerate(df.itertuples(index=False, name=None), start=1):
         values = [_excel_cell_value(v) for v in row]
-        ws.append(values)
+        excel_row = [
+            _format_stream_cell(ws, value, number_formats[idx])
+            for idx, value in enumerate(values)
+        ]
+        ws.append(excel_row)
 
         if row_index <= sample_limit:
             for i, value in enumerate(values):
