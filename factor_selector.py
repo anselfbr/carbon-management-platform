@@ -21,7 +21,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3_20260709"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_HEADER_PRIORITY_V4_20260709"
 
 
 def _norm(value: Any) -> str:
@@ -179,7 +179,12 @@ def _first_header_rows(ws, header_row_count: int = DATA_START_ROW - 1) -> list[l
 
 def _find_col_from_header_rows(header_rows: list[list[Any]], aliases: list[str], required: bool = True) -> int | None:
     alias_keys = {_norm(a) for a in aliases if str(a or "").strip()}
-    for row_idx in list(range(min(len(header_rows), DATA_START_ROW - 1))):
+    # Bulk templates use row 2 as the user-visible header row. Prefer it over
+    # row 1 because row 1 can contain internal/helper keys in hidden columns.
+    row_order = [1, 0] + list(range(2, min(len(header_rows), DATA_START_ROW - 1)))
+    for row_idx in row_order:
+        if row_idx >= len(header_rows):
+            continue
         for col_idx, value in enumerate(header_rows[row_idx], start=1):
             if _norm(value) in alias_keys:
                 return col_idx
@@ -266,6 +271,35 @@ _RAW_SOURCE_ALIASES: dict[str, list[str]] = {
     "raw_name": ["Raw Material Name", "raw_material_name"],
     "raw_code": ["Raw Material Code", "raw_material_code"],
     "description": ["Raw Material Description (Optional)", "Raw Material Description", "raw_material_description", "description"],
+}
+
+
+_ACTIVITY_SOURCE_DEFAULT_COLS: dict[str, int] = {
+    "raw_name": 1,
+    "raw_code": 2,
+    "doc_start": 3,
+    "doc_end": 4,
+    "document_type": 5,
+    "document_number": 6,
+    "usage": 7,
+    "unit": 8,
+    "net_weight": 9,
+    "gross_weight": 10,
+    "weight_unit": 11,
+    "data_source": 12,
+    "data_source_other": 13,
+    "supplier_name": 14,
+    "transport_origin": 15,
+    "transport_destination": 16,
+    "target_product": 17,
+    "comment": 18,
+    "material_group": 19,
+}
+
+_RAW_SOURCE_DEFAULT_COLS: dict[str, int] = {
+    "raw_name": 1,
+    "raw_code": 2,
+    "description": 6,
 }
 
 
@@ -404,16 +438,36 @@ def _header_labels(header_rows: list[list[Any]], col_idx: int) -> list[str]:
     return labels
 
 
-def _find_col_in_header_values(header_rows: list[list[Any]], aliases: list[str], required: bool = False) -> int | None:
+def _visible_bulk_header_row_missing(header_rows: list[list[Any]]) -> bool:
+    if len(header_rows) < 2:
+        return True
+    return sum(1 for value in header_rows[1] if _text(value)) < 3
+
+
+def _find_col_in_header_values(
+    header_rows: list[list[Any]],
+    aliases: list[str],
+    required: bool = False,
+    fallback_col: int | None = None,
+    prefer_fallback_when_row2_missing: bool = False,
+) -> int | None:
     alias_keys = {_norm(a) for a in aliases if _text(a)}
     width = _max_header_width(header_rows)
-    for col_idx in range(1, width + 1):
-        for label in _header_labels(header_rows, col_idx):
-            if _norm(label) in alias_keys:
+    row2_missing = _visible_bulk_header_row_missing(header_rows)
+    if prefer_fallback_when_row2_missing and row2_missing and fallback_col:
+        # Legacy M2B/M2C files omitted row 2 but still contained helper keys in
+        # hidden columns. Prefer official visible columns such as H/K/L/N.
+        return int(fallback_col)
+    row_order = [1, 0] + list(range(2, len(header_rows)))
+    for row_idx in row_order:
+        if row_idx >= len(header_rows):
+            continue
+        for col_idx in range(1, width + 1):
+            if col_idx - 1 < len(header_rows[row_idx]) and _norm(header_rows[row_idx][col_idx - 1]) in alias_keys:
                 return col_idx
     if required:
         raise ValueError(f"找不到欄位：{', '.join(aliases)}")
-    return None
+    return int(fallback_col) if fallback_col else None
 
 
 def _ensure_header_column(header_rows: list[list[Any]], aliases: list[str], preferred_header: str, group_header: str = "Factor") -> int:
@@ -759,8 +813,22 @@ def _write_template_applied_workbook(
     return {"activity_rows": int(activity_count), "raw_material_rows": int(raw_count)}
 
 
-def _build_source_col_map(header_rows: list[list[Any]], aliases: dict[str, list[str]]) -> dict[str, int | None]:
-    return {key: _find_col_in_header_values(header_rows, names, required=False) for key, names in aliases.items()}
+def _build_source_col_map(
+    header_rows: list[list[Any]],
+    aliases: dict[str, list[str]],
+    defaults: dict[str, int] | None = None,
+) -> dict[str, int | None]:
+    defaults = defaults or {}
+    return {
+        key: _find_col_in_header_values(
+            header_rows,
+            names,
+            required=False,
+            fallback_col=defaults.get(key),
+            prefer_fallback_when_row2_missing=bool(defaults),
+        )
+        for key, names in aliases.items()
+    }
 
 
 def _build_exact_source_lookup(header_rows: list[list[Any]]) -> dict[str, int]:
@@ -825,8 +893,8 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         raw_width = _max_header_width(target_raw_headers)
         target_activity_cols = {key: _find_col_in_header_values(target_activity_headers, aliases, required=False) for key, aliases in _ACTIVITY_SOURCE_ALIASES.items()}
         target_raw_cols = {key: _find_col_in_header_values(target_raw_headers, aliases, required=False) for key, aliases in _RAW_SOURCE_ALIASES.items()}
-        source_activity_cols = _build_source_col_map(source_activity_headers, _ACTIVITY_SOURCE_ALIASES)
-        source_raw_cols = _build_source_col_map(source_raw_headers, _RAW_SOURCE_ALIASES)
+        source_activity_cols = _build_source_col_map(source_activity_headers, _ACTIVITY_SOURCE_ALIASES, _ACTIVITY_SOURCE_DEFAULT_COLS)
+        source_raw_cols = _build_source_col_map(source_raw_headers, _RAW_SOURCE_ALIASES, _RAW_SOURCE_DEFAULT_COLS)
         source_exact = _build_exact_source_lookup(source_activity_headers)
         raw_exact = _build_exact_source_lookup(source_raw_headers)
 
@@ -1547,7 +1615,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3_20260709"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_HEADER_PRIORITY_V4_20260709"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 

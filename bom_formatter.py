@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V24_0_WEIGHT_SUPPLIER_DISPLAY"
+BOM_FORMATTER_VERSION = "CMP_V24_1_BULK_TWO_ROW_HEADERS"
 
 
 DEFAULT_MAPPING = {
@@ -3017,13 +3017,142 @@ def _read_standard_bom_total_usage_workbook(
 
 
 
-def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Path) -> tuple[list[str], list[str], dict[str, int], dict[str, int], str]:
-    """Read only Raw Material Bulk template headers for Module 2B Large Dataset Mode.
 
-    Module 2B intentionally keeps the template sheet names, column headers and
-    column mapping, but does not copy workbook styles, dropdowns, validations,
-    formulas or hidden helper sheets. This avoids the memory spike caused by
-    load_workbook(template) + hundreds of thousands of written cell objects.
+_ACTIVITY_VISIBLE_DEFAULT_COLS: dict[str, int] = {
+    "raw_name": 1,
+    "raw_code": 2,
+    "start_date": 3,
+    "end_date": 4,
+    "document_type": 5,
+    "document_number": 6,
+    "usage": 7,
+    "unit": 8,
+    "net_weight": 9,
+    "gross_weight": 10,
+    "weight_unit": 11,
+    "data_source": 12,
+    "data_source_other": 13,
+    "supplier_name": 14,
+    "transport_origin": 15,
+    "transport_destination": 16,
+    "target_product": 17,
+    "comment": 18,
+    "material_group": 19,
+}
+
+_ACTIVITY_VISIBLE_HEADERS: dict[str, str] = {
+    "raw_name": "Raw Material Name",
+    "raw_code": "Raw Material Code",
+    "start_date": "Doc. Start Date",
+    "end_date": "Doc. End Date",
+    "document_type": "Document Type",
+    "document_number": "Document Number (optional)",
+    "usage": "Usage",
+    "unit": "Activity Data Unit",
+    "net_weight": "Net Weight (optional)",
+    "gross_weight": "Gross Weight (optional)",
+    "weight_unit": "Weight Unit (optional)",
+    "data_source": "Data Source",
+    "data_source_other": "Data Source Other",
+    "supplier_name": "Supplier Name (optional)",
+    "transport_origin": "Transportation Origin",
+    "transport_destination": "Transportation Destination",
+    "target_product": "Allocated Target Product/Service",
+    "comment": "Comment (optional)",
+    "material_group": "Material Group",
+}
+
+_RAW_VISIBLE_DEFAULT_COLS: dict[str, int] = {
+    "raw_name": 1,
+    "raw_code": 2,
+    "description": 6,
+}
+
+_RAW_VISIBLE_HEADERS: dict[str, str] = {
+    "raw_name": "Raw Material Name",
+    "raw_code": "Raw Material Code",
+    "description": "Raw Material Description (Optional)",
+}
+
+
+def _read_bulk_header_rows(ws, width: int | None = None) -> list[list[Any]]:
+    """Return the first two Bulk Template header rows, padded to a stable width."""
+    max_col = max(1, int(width or 0), int(getattr(ws, "max_column", 1) or 1))
+    rows: list[list[Any]] = []
+    for row_idx in (1, 2):
+        row = [ws.cell(row_idx, col).value or "" for col in range(1, max_col + 1)]
+        rows.append(row)
+    return rows
+
+
+def _bulk_visible_header_missing(header_rows: list[list[Any]]) -> bool:
+    if len(header_rows) < 2:
+        return True
+    visible_values = [str(v or "").strip() for v in header_rows[1]]
+    return sum(1 for v in visible_values if v) < 3
+
+
+def _bulk_find_col_from_rows(header_rows: list[list[Any]], aliases: list[str], fallback_col: int | None = None) -> int | None:
+    """Find a visible Bulk column by header rows, preferring row 2 labels.
+
+    Legacy M2B/M2C lightweight files accidentally omitted row 2 and still kept
+    internal/helper keys such as activity_data_unit in hidden columns AA:AG.
+    When row 2 is missing, prefer the known visible fallback positions instead
+    of those helper columns so M2C/M3 continue reading H/K/L/N etc. correctly.
+    """
+    alias_keys = {_normalize_template_header(a) for a in aliases if str(a or "").strip()}
+    if not alias_keys:
+        return fallback_col
+    # Prefer user-visible row 2, then internal row 1 only when row 2 exists.
+    row_order = [1, 0] if len(header_rows) >= 2 else [0]
+    visible_missing = _bulk_visible_header_missing(header_rows)
+    for row_idx in row_order:
+        if row_idx >= len(header_rows):
+            continue
+        if visible_missing and row_idx == 0 and fallback_col:
+            # Avoid mapping to hidden helper columns in legacy files with blank row 2.
+            return int(fallback_col)
+        for col_idx, value in enumerate(header_rows[row_idx], start=1):
+            if _normalize_template_header(value) in alias_keys:
+                return int(col_idx)
+    return int(fallback_col) if fallback_col else None
+
+
+def _ensure_bulk_visible_header_row(header_rows: list[list[Any]], cols: dict[str, int | None], labels: dict[str, str]) -> list[list[Any]]:
+    """Ensure row 2 contains the official visible Bulk headers.
+
+    M2B/M2C outputs are intermediate files but M3 must be able to identify the
+    visible template columns.  Row 1 may contain internal keys or hidden helper
+    keys; row 2 is the reliable user-facing header row.
+    """
+    while len(header_rows) < 2:
+        header_rows.append([])
+    width = max(
+        [len(r) for r in header_rows] + [int(c or 0) for c in cols.values()] + [1]
+    )
+    out: list[list[Any]] = []
+    for row in header_rows[:2]:
+        new_row = list(row)
+        if len(new_row) < width:
+            new_row.extend([""] * (width - len(new_row)))
+        else:
+            new_row = new_row[:width]
+        out.append(new_row)
+    for key, label in labels.items():
+        col_idx = cols.get(key)
+        if col_idx and int(col_idx) > 0:
+            out[1][int(col_idx) - 1] = out[1][int(col_idx) - 1] or label
+    return out
+
+
+def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Path) -> tuple[list[list[Any]], list[list[Any]], dict[str, int], dict[str, int], str]:
+    """Read Raw Material Bulk template two-row headers for Module 2B Large Dataset Mode.
+
+    Module 2B intentionally keeps the template sheet names and column layout but
+    does not copy workbook styles/dropdowns/formulas to avoid memory spikes.
+    The intermediate workbook must still keep both template header rows:
+    row 1 = internal keys, row 2 = visible field labels.  M3 relies on row 2 to
+    avoid accidentally reading hidden helper columns such as activity_data_unit.
     """
     wb = load_workbook(raw_material_template_path, read_only=True, data_only=True)
     try:
@@ -3033,41 +3162,40 @@ def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Pat
             raise ValueError(f"找不到 raw material bulk 分頁：{RAW_MATERIAL_SHEET_NAME}")
         activity_ws = wb[ACTIVITY_SHEET_NAME]
         raw_ws = wb[RAW_MATERIAL_SHEET_NAME]
+        activity_header_rows = _read_bulk_header_rows(activity_ws)
+        raw_header_rows = _read_bulk_header_rows(raw_ws)
         activity_cols = {
-            "raw_name": _find_template_column(activity_ws, RAW_MATERIAL_NAME_ALIASES, 1),
-            "raw_code": _find_template_column(activity_ws, RAW_MATERIAL_CODE_ALIASES, 2),
-            "start_date": _find_template_column(activity_ws, DOC_START_DATE_ALIASES, 3),
-            "end_date": _find_template_column(activity_ws, DOC_END_DATE_ALIASES, 4),
-            "document_type": _find_template_column(activity_ws, DOCUMENT_TYPE_ALIASES, 5),
-            "document_number": _find_template_column(activity_ws, DOCUMENT_NUMBER_ALIASES, 6),
-            "usage": _find_template_column(activity_ws, USAGE_ALIASES, 7),
-            "unit": _find_template_column(activity_ws, ACTIVITY_DATA_UNIT_ALIASES, 8),
-            "data_source": _find_template_column(activity_ws, DATA_SOURCE_ALIASES, 12),
-            "data_source_other": _find_template_column(activity_ws, DATA_SOURCE_OTHER_ALIASES, 13),
-            "supplier_name": _find_template_column(activity_ws, SUPPLIER_NAME_ALIASES, 14),
-            "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 15),
-            "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 16),
-            "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
-            "comment": _find_template_column(activity_ws, COMMENT_ALIASES, 18),
-            "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
-            "net_weight": _find_template_optional_column(activity_ws, NET_WEIGHT_ALIASES),
-            "gross_weight": _find_template_optional_column(activity_ws, GROSS_WEIGHT_ALIASES),
-            "weight_unit": _find_template_optional_column(activity_ws, WEIGHT_UNIT_ALIASES),
+            "raw_name": _bulk_find_col_from_rows(activity_header_rows, RAW_MATERIAL_NAME_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["raw_name"]),
+            "raw_code": _bulk_find_col_from_rows(activity_header_rows, RAW_MATERIAL_CODE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["raw_code"]),
+            "start_date": _bulk_find_col_from_rows(activity_header_rows, DOC_START_DATE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["start_date"]),
+            "end_date": _bulk_find_col_from_rows(activity_header_rows, DOC_END_DATE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["end_date"]),
+            "document_type": _bulk_find_col_from_rows(activity_header_rows, DOCUMENT_TYPE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["document_type"]),
+            "document_number": _bulk_find_col_from_rows(activity_header_rows, DOCUMENT_NUMBER_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["document_number"]),
+            "usage": _bulk_find_col_from_rows(activity_header_rows, USAGE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["usage"]),
+            "unit": _bulk_find_col_from_rows(activity_header_rows, ACTIVITY_DATA_UNIT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["unit"]),
+            "data_source": _bulk_find_col_from_rows(activity_header_rows, DATA_SOURCE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["data_source"]),
+            "data_source_other": _bulk_find_col_from_rows(activity_header_rows, DATA_SOURCE_OTHER_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["data_source_other"]),
+            "supplier_name": _bulk_find_col_from_rows(activity_header_rows, SUPPLIER_NAME_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["supplier_name"]),
+            "transport_origin": _bulk_find_col_from_rows(activity_header_rows, TRANSPORT_ORIGIN_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["transport_origin"]),
+            "transport_destination": _bulk_find_col_from_rows(activity_header_rows, TRANSPORT_DESTINATION_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["transport_destination"]),
+            "target_product": _bulk_find_col_from_rows(activity_header_rows, PRODUCT_LINK_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["target_product"]),
+            "comment": _bulk_find_col_from_rows(activity_header_rows, COMMENT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["comment"]),
+            "material_group": _bulk_find_col_from_rows(activity_header_rows, MATERIAL_GROUP_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["material_group"]),
+            "net_weight": _bulk_find_col_from_rows(activity_header_rows, NET_WEIGHT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["net_weight"]),
+            "gross_weight": _bulk_find_col_from_rows(activity_header_rows, GROSS_WEIGHT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["gross_weight"]),
+            "weight_unit": _bulk_find_col_from_rows(activity_header_rows, WEIGHT_UNIT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["weight_unit"]),
         }
         raw_cols = {
-            "raw_name": _find_template_column(raw_ws, RAW_MATERIAL_NAME_ALIASES, 1),
-            "raw_code": _find_template_column(raw_ws, RAW_MATERIAL_CODE_ALIASES, 2),
-            "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
+            "raw_name": _bulk_find_col_from_rows(raw_header_rows, RAW_MATERIAL_NAME_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["raw_name"]),
+            "raw_code": _bulk_find_col_from_rows(raw_header_rows, RAW_MATERIAL_CODE_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["raw_code"]),
+            "description": _bulk_find_col_from_rows(raw_header_rows, RAW_MATERIAL_DESC_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["description"]),
         }
-        activity_max_col = max([c for c in activity_cols.values() if c] + [activity_ws.max_column or 1])
-        raw_max_col = max([c for c in raw_cols.values() if c] + [raw_ws.max_column or 1])
-        activity_headers = [activity_ws.cell(1, c).value or "" for c in range(1, activity_max_col + 1)]
-        raw_headers = [raw_ws.cell(1, c).value or "" for c in range(1, raw_max_col + 1)]
+        activity_header_rows = _ensure_bulk_visible_header_row(activity_header_rows, activity_cols, _ACTIVITY_VISIBLE_HEADERS)
+        raw_header_rows = _ensure_bulk_visible_header_row(raw_header_rows, raw_cols, _RAW_VISIBLE_HEADERS)
         document_type_value = _document_type_for_template(wb)
-        return activity_headers, raw_headers, activity_cols, raw_cols, document_type_value
+        return activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value
     finally:
         wb.close()
-
 
 def _set_row_value(row: list[Any], col_idx: int | None, value: Any) -> None:
     if col_idx:
@@ -3416,7 +3544,9 @@ def _write_raw_material_bulk_from_site_csv_streaming(
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    activity_headers, raw_headers, activity_cols, raw_cols, document_type_value = _template_headers_for_lightweight_bulk(raw_material_template_path)
+    activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value = _template_headers_for_lightweight_bulk(raw_material_template_path)
+    activity_headers = activity_header_rows[0]
+    raw_headers = raw_header_rows[0]
 
     raw_seen: set[str] = set()
     raw_descriptions: dict[str, str] = {}
@@ -3455,10 +3585,14 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
         raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
         date_format = workbook.add_format({"num_format": "yyyy/mm/dd"})
-        for col, value in enumerate(activity_headers):
-            activity_ws.write(0, col, value)
-        for col, value in enumerate(raw_headers):
-            raw_ws.write(0, col, value)
+        for row_idx, header_row in enumerate(activity_header_rows):
+            for col, value in enumerate(header_row):
+                if value not in (None, ""):
+                    activity_ws.write(row_idx, col, value)
+        for row_idx, header_row in enumerate(raw_header_rows):
+            for col, value in enumerate(header_row):
+                if value not in (None, ""):
+                    raw_ws.write(row_idx, col, value)
         excel_row_idx = DATA_START_ROW - 1  # zero-based row 2
         with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
             reader = csv.DictReader(fh)
@@ -3503,10 +3637,10 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         wb = Workbook(write_only=True)
         activity_ws = wb.create_sheet(ACTIVITY_SHEET_NAME)
         raw_ws = wb.create_sheet(RAW_MATERIAL_SHEET_NAME)
-        activity_ws.append(activity_headers)
-        activity_ws.append(["" for _ in activity_headers])
-        raw_ws.append(raw_headers)
-        raw_ws.append(["" for _ in raw_headers])
+        for header_row in activity_header_rows:
+            activity_ws.append(header_row)
+        for header_row in raw_header_rows:
+            raw_ws.append(header_row)
         with open(csv_path, "r", newline="", encoding="utf-8-sig") as fh:
             reader = csv.DictReader(fh)
             for row_data in reader:
@@ -3802,11 +3936,12 @@ def _read_raw_material_descriptions_streaming(path: str | Path) -> dict[str, str
     return descriptions
 
 
-def _activity_layout_from_bulk_workbook(path: str | Path) -> tuple[list[str], list[str], dict[str, int], dict[str, int], str]:
-    """Read headers/column indexes only from a Raw Material Bulk workbook.
+def _activity_layout_from_bulk_workbook(path: str | Path) -> tuple[list[list[Any]], list[list[Any]], dict[str, int], dict[str, int], str]:
+    """Read two-row headers and visible-column indexes from a Raw Material Bulk workbook.
 
-    This implementation avoids ws.max_column because openpyxl read_only worksheets
-    may report None for files produced by streaming writers until rows are read.
+    M2C consumes M2B lightweight workbooks.  Those files must be interpreted by
+    the visible Bulk Template columns, not hidden helper columns.  If an older
+    file is missing row 2, fall back to the official visible positions.
     """
     wb = load_workbook(path, read_only=True, data_only=True)
     try:
@@ -3816,54 +3951,38 @@ def _activity_layout_from_bulk_workbook(path: str | Path) -> tuple[list[str], li
             raise ValueError(f"找不到 raw material bulk 分頁：{RAW_MATERIAL_SHEET_NAME}")
         activity_ws = wb[ACTIVITY_SHEET_NAME]
         raw_ws = wb[RAW_MATERIAL_SHEET_NAME]
-        activity_headers = list(next(activity_ws.iter_rows(min_row=1, max_row=1, values_only=True), ()))
-        raw_headers = list(next(raw_ws.iter_rows(min_row=1, max_row=1, values_only=True), ()))
-        def find(headers: list[Any], aliases: list[str], fallback: int) -> int:
-            keys = {_normalize_template_header(a) for a in aliases}
-            for i, h in enumerate(headers, start=1):
-                if _normalize_template_header(h) in keys:
-                    return i
-            return fallback
-        def find_optional(headers: list[Any], aliases: list[str]) -> int | None:
-            keys = {_normalize_template_header(a) for a in aliases}
-            for i, h in enumerate(headers, start=1):
-                if _normalize_template_header(h) in keys:
-                    return i
-            return None
+        activity_header_rows = _read_bulk_header_rows(activity_ws)
+        raw_header_rows = _read_bulk_header_rows(raw_ws)
         activity_cols = {
-            "raw_name": find(activity_headers, RAW_MATERIAL_NAME_ALIASES, 1),
-            "raw_code": find(activity_headers, RAW_MATERIAL_CODE_ALIASES, 2),
-            "start_date": find(activity_headers, DOC_START_DATE_ALIASES, 3),
-            "end_date": find(activity_headers, DOC_END_DATE_ALIASES, 4),
-            "document_type": find(activity_headers, DOCUMENT_TYPE_ALIASES, 5),
-            "document_number": find(activity_headers, DOCUMENT_NUMBER_ALIASES, 6),
-            "usage": find(activity_headers, USAGE_ALIASES, 7),
-            "unit": find(activity_headers, ACTIVITY_DATA_UNIT_ALIASES, 8),
-            "data_source": find(activity_headers, DATA_SOURCE_ALIASES, 12),
-            "data_source_other": find(activity_headers, DATA_SOURCE_OTHER_ALIASES, 13),
-            "supplier_name": find(activity_headers, SUPPLIER_NAME_ALIASES, 14),
-            "transport_origin": find(activity_headers, TRANSPORT_ORIGIN_ALIASES, 15),
-            "transport_destination": find(activity_headers, TRANSPORT_DESTINATION_ALIASES, 16),
-            "target_product": find(activity_headers, PRODUCT_LINK_ALIASES, 17),
-            "comment": find(activity_headers, COMMENT_ALIASES, 18),
-            "material_group": find(activity_headers, MATERIAL_GROUP_ALIASES, 19),
-            "net_weight": find_optional(activity_headers, NET_WEIGHT_ALIASES),
-            "gross_weight": find_optional(activity_headers, GROSS_WEIGHT_ALIASES),
-            "weight_unit": find_optional(activity_headers, WEIGHT_UNIT_ALIASES),
+            "raw_name": _bulk_find_col_from_rows(activity_header_rows, RAW_MATERIAL_NAME_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["raw_name"]),
+            "raw_code": _bulk_find_col_from_rows(activity_header_rows, RAW_MATERIAL_CODE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["raw_code"]),
+            "start_date": _bulk_find_col_from_rows(activity_header_rows, DOC_START_DATE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["start_date"]),
+            "end_date": _bulk_find_col_from_rows(activity_header_rows, DOC_END_DATE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["end_date"]),
+            "document_type": _bulk_find_col_from_rows(activity_header_rows, DOCUMENT_TYPE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["document_type"]),
+            "document_number": _bulk_find_col_from_rows(activity_header_rows, DOCUMENT_NUMBER_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["document_number"]),
+            "usage": _bulk_find_col_from_rows(activity_header_rows, USAGE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["usage"]),
+            "unit": _bulk_find_col_from_rows(activity_header_rows, ACTIVITY_DATA_UNIT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["unit"]),
+            "data_source": _bulk_find_col_from_rows(activity_header_rows, DATA_SOURCE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["data_source"]),
+            "data_source_other": _bulk_find_col_from_rows(activity_header_rows, DATA_SOURCE_OTHER_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["data_source_other"]),
+            "supplier_name": _bulk_find_col_from_rows(activity_header_rows, SUPPLIER_NAME_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["supplier_name"]),
+            "transport_origin": _bulk_find_col_from_rows(activity_header_rows, TRANSPORT_ORIGIN_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["transport_origin"]),
+            "transport_destination": _bulk_find_col_from_rows(activity_header_rows, TRANSPORT_DESTINATION_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["transport_destination"]),
+            "target_product": _bulk_find_col_from_rows(activity_header_rows, PRODUCT_LINK_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["target_product"]),
+            "comment": _bulk_find_col_from_rows(activity_header_rows, COMMENT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["comment"]),
+            "material_group": _bulk_find_col_from_rows(activity_header_rows, MATERIAL_GROUP_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["material_group"]),
+            "net_weight": _bulk_find_col_from_rows(activity_header_rows, NET_WEIGHT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["net_weight"]),
+            "gross_weight": _bulk_find_col_from_rows(activity_header_rows, GROSS_WEIGHT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["gross_weight"]),
+            "weight_unit": _bulk_find_col_from_rows(activity_header_rows, WEIGHT_UNIT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["weight_unit"]),
         }
         raw_cols = {
-            "raw_name": find(raw_headers, RAW_MATERIAL_NAME_ALIASES, 1),
-            "raw_code": find(raw_headers, RAW_MATERIAL_CODE_ALIASES, 2),
-            "description": find(raw_headers, RAW_MATERIAL_DESC_ALIASES, 6),
+            "raw_name": _bulk_find_col_from_rows(raw_header_rows, RAW_MATERIAL_NAME_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["raw_name"]),
+            "raw_code": _bulk_find_col_from_rows(raw_header_rows, RAW_MATERIAL_CODE_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["raw_code"]),
+            "description": _bulk_find_col_from_rows(raw_header_rows, RAW_MATERIAL_DESC_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["description"]),
         }
-        needed_activity_cols = [c for c in activity_cols.values() if c]
-        needed_raw_cols = [c for c in raw_cols.values() if c]
-        while len(activity_headers) < max(needed_activity_cols + [1]):
-            activity_headers.append("")
-        while len(raw_headers) < max(needed_raw_cols + [1]):
-            raw_headers.append("")
+        activity_header_rows = _ensure_bulk_visible_header_row(activity_header_rows, activity_cols, _ACTIVITY_VISIBLE_HEADERS)
+        raw_header_rows = _ensure_bulk_visible_header_row(raw_header_rows, raw_cols, _RAW_VISIBLE_HEADERS)
         document_type_value = _document_type_for_template(wb)
-        return activity_headers, raw_headers, activity_cols, raw_cols, document_type_value
+        return activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value
     finally:
         wb.close()
 
@@ -3985,7 +4104,9 @@ def _write_supplier_mapped_bulk_streaming(
     source_file = Path(source_file)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    activity_headers, raw_headers, activity_cols, raw_cols, document_type_value = _activity_layout_from_bulk_workbook(source_file)
+    activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value = _activity_layout_from_bulk_workbook(source_file)
+    activity_headers = activity_header_rows[0]
+    raw_headers = raw_header_rows[0]
     # Lightweight M2B files may not contain Dropdown Values; these helpers safely return empty data.
     try:
         wb_meta = load_workbook(source_file, read_only=True, data_only=True)
@@ -4016,10 +4137,14 @@ def _write_supplier_mapped_bulk_streaming(
         activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
         raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
         date_format = workbook.add_format({"num_format": "yyyy/mm/dd"})
-        for col, value in enumerate(activity_headers):
-            activity_ws.write(0, col, value)
-        for col, value in enumerate(raw_headers):
-            raw_ws.write(0, col, value)
+        for row_idx, header_row in enumerate(activity_header_rows):
+            for col, value in enumerate(header_row):
+                if value not in (None, ""):
+                    activity_ws.write(row_idx, col, value)
+        for row_idx, header_row in enumerate(raw_header_rows):
+            for col, value in enumerate(header_row):
+                if value not in (None, ""):
+                    raw_ws.write(row_idx, col, value)
         excel_row_idx = DATA_START_ROW - 1
         for base_row in _iter_activity_rows_streaming(source_file, activity_cols, description_map):
             input_rows += 1
@@ -4077,8 +4202,10 @@ def _write_supplier_mapped_bulk_streaming(
                 del wb_out["Sheet"]
             except Exception:
                 pass
-        activity_ws.append(activity_headers)
-        raw_ws.append(raw_headers)
+        for header_row in activity_header_rows:
+            activity_ws.append(header_row)
+        for header_row in raw_header_rows:
+            raw_ws.append(header_row)
         for base_row in _iter_activity_rows_streaming(source_file, activity_cols, description_map):
             input_rows += 1
             for mapped_row, matched, name_ok, used_tbc in _supplier_rows_for_activity_row(base_row, supplier_map, supplier_options, tbc_supplier_map):
