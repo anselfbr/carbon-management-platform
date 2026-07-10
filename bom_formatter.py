@@ -2243,31 +2243,26 @@ def _apply_supplier_mapping_to_exploded(
             "tbc_fallback_rows": 0,
         }
 
-    tbc_supplier_map = tbc_supplier_map or {}
-
+    # If a raw material does not match any uploaded supplier row, force a deterministic
+    # TBC fallback. Do not look up site-specific TBC rows from Dropdown Values here;
+    # that legacy logic could leave blanks when the template did not contain a site TBC.
     for _, row in work.iterrows():
         original = row.to_dict()
         raw_key = _normalize_material_key(row.get("raw_material"))
         destination = _safe_text(row.get("transport_destination"))
         suppliers = supplier_map.get(raw_key) or []
         if not suppliers:
-            # No material/vendor match: use the same-site TBC supplier from the raw material template.
-            tbc_supplier = _select_tbc_supplier_for_destination(tbc_supplier_map, destination)
-            if tbc_supplier:
-                fallback_row = dict(original)
-                fallback_row["transport_destination"] = destination
-                fallback_row["supplier_name"] = tbc_supplier.get("supplier_name", "")
-                fallback_row["transport_origin"] = tbc_supplier.get("transport_origin", "")
-                fallback_row["supplier_code"] = tbc_supplier.get("supplier_code", "TBC")
-                fallback_row["supplier_master_name"] = tbc_supplier.get("supplier_master_name", "")
-                fallback_row["supplier_country_area"] = tbc_supplier.get("supplier_country_area", "")
-                fallback_row["supplier_address"] = tbc_supplier.get("supplier_address", tbc_supplier.get("transport_origin", ""))
-                supplier_name_matched += 1 if fallback_row.get("supplier_name") else 0
-                supplier_name_missing += 0 if fallback_row.get("supplier_name") else 1
-                tbc_fallback_rows += 1
-                output_rows.append(fallback_row)
-            else:
-                output_rows.append(original)
+            fallback_row = dict(original)
+            fallback_row["transport_destination"] = destination
+            fallback_row["supplier_name"] = "TBC - TBC"
+            fallback_row["transport_origin"] = "TBC"
+            fallback_row["supplier_code"] = "TBC"
+            fallback_row["supplier_master_name"] = "TBC"
+            fallback_row["supplier_country_area"] = ""
+            fallback_row["supplier_address"] = "TBC"
+            supplier_name_matched += 1
+            tbc_fallback_rows += 1
+            output_rows.append(fallback_row)
             continue
         matched_source_rows += 1
         for info in suppliers:
@@ -2432,12 +2427,11 @@ def _write_raw_material_bulk_from_exploded(
 
     document_type_value = _document_type_for_template(wb)
     supplier_options = _extract_supplier_name_options_from_raw_template(wb)
-    tbc_supplier_map = _extract_site_tbc_supplier_map_from_raw_template(wb)
     expanded, supplier_write_summary = _apply_supplier_mapping_to_exploded(
         exploded,
         supplier_map or {},
         supplier_options,
-        tbc_supplier_map=tbc_supplier_map,
+        tbc_supplier_map=None,
     )
 
     _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
@@ -2489,7 +2483,8 @@ def _write_raw_material_bulk_from_exploded(
         "raw_materials": int(expanded["raw_material"].nunique()) if not expanded.empty else 0,
         "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
         "supplier_name_options": int(len(supplier_options)),
-        "site_tbc_supplier_count": int(len(tbc_supplier_map)),
+        "site_tbc_supplier_count": 0,
+        "tbc_fallback_policy": "force_tbc_when_no_supplier_match",
     }
     result.update(supplier_write_summary)
     if return_expanded:
@@ -4062,23 +4057,17 @@ def _supplier_rows_for_activity_row(row: dict[str, Any], supplier_map: dict[str,
     destination = _safe_text(row.get("transport_destination"))
     suppliers = supplier_map.get(raw_key) or []
     if not suppliers:
-        tbc_supplier = _select_tbc_supplier_for_destination(tbc_supplier_map, destination)
+        # Force unmatched raw materials to TBC. This intentionally bypasses
+        # Dropdown Values/site-TBC lookup to avoid mixed TBC and blank results.
         out = dict(row)
-        if tbc_supplier:
-            out["transport_destination"] = destination
-            out["supplier_name"] = tbc_supplier.get("supplier_name", "")
-            out["transport_origin"] = tbc_supplier.get("transport_origin", "")
-            out["supplier_code"] = tbc_supplier.get("supplier_code", "TBC")
-            out["supplier_master_name"] = tbc_supplier.get("supplier_master_name", "")
-            out["supplier_country_area"] = tbc_supplier.get("supplier_country_area", "")
-            out["supplier_address"] = tbc_supplier.get("supplier_address", tbc_supplier.get("transport_origin", ""))
-            yield out, False, bool(out.get("supplier_name")), True
-        else:
-            out.setdefault("supplier_code", "")
-            out.setdefault("supplier_master_name", "")
-            out.setdefault("supplier_country_area", "")
-            out.setdefault("supplier_address", "")
-            yield out, False, bool(out.get("supplier_name")), False
+        out["transport_destination"] = destination
+        out["supplier_name"] = "TBC - TBC"
+        out["transport_origin"] = "TBC"
+        out["supplier_code"] = "TBC"
+        out["supplier_master_name"] = "TBC"
+        out["supplier_country_area"] = ""
+        out["supplier_address"] = "TBC"
+        yield out, False, True, True
         return
     for info in suppliers:
         out = dict(row)
@@ -4137,17 +4126,19 @@ def _write_supplier_mapped_bulk_streaming(
     activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value = _activity_layout_from_bulk_workbook(source_file)
     activity_headers = activity_header_rows[0]
     raw_headers = raw_header_rows[0]
-    # Lightweight M2B files may not contain Dropdown Values; these helpers safely return empty data.
+    # Lightweight M2B files may not contain Dropdown Values; supplier display-name
+    # options are only a fallback for matched vendors missing a display name.
+    # Unmatched materials no longer use template/site-TBC lookup; they are forced
+    # to Supplier Name = "TBC - TBC" and Transportation Origin = "TBC".
     try:
         wb_meta = load_workbook(source_file, read_only=True, data_only=True)
         try:
             supplier_options = _extract_supplier_name_options_from_raw_template(wb_meta)
-            tbc_supplier_map = _extract_site_tbc_supplier_map_from_raw_template(wb_meta)
         finally:
             wb_meta.close()
     except Exception:
         supplier_options = []
-        tbc_supplier_map = {}
+    tbc_supplier_map = {}
     description_map = _read_raw_material_descriptions_streaming(source_file)
 
     input_rows = 0
@@ -4280,6 +4271,8 @@ def _write_supplier_mapped_bulk_streaming(
         "supplier_dropdown_missing_rows": int(supplier_name_missing),
         "tbc_fallback_rows": int(tbc_fallback_rows),
         "supplier_name_options": int(len(supplier_options)),
+        "site_tbc_supplier_count": 0,
+        "tbc_fallback_policy": "force_tbc_when_no_supplier_match",
         "m2c_large_dataset_mode": True,
         "m2c_template_policy": "Headers and sheet names are preserved; styles/dropdowns/validations/formulas are not copied in M2C Large Dataset Mode.",
     }, supplier_unique
