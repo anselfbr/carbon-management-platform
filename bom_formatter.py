@@ -1843,9 +1843,18 @@ SUPPLIER_VENDOR_ALIASES = [
     "Vendor", "Vender", "Vendor Code", "Vendor Number", "Supplier Vendor", "供應商代碼", "供應商編號", "廠商代碼",
 ]
 SUPPLIER_ADDRESS_ALIASES = [
+    # Module 2C supplier mapping rule: Transportation Origin must prefer the
+    # uploaded supplier file's explicit Address column. Keep the historical
+    # supplier-address aliases as fallback for older supplier masters.
+    "Address", "地址",
     "Supplier Address", "Supplier Address 1", "Supplier Address1", "Supplier Address Line1",
     "Supplier Address (English)", "Supplier Address (Local)", "Supplier Addr", "Supplier_Address",
     "供應商地址", "廠商地址",
+]
+SUPPLIER_VENDOR_NAME2_ALIASES = [
+    # Preferred display-name source requested for M2C supplier mapping.
+    "Vendor Name-2", "Vendor Name 2", "Vendor Name_2", "Vendor Name2", "VendorName2",
+    "Vendor Name - 2", "供應商名稱2", "廠商名稱2",
 ]
 SUPPLIER_BULK_NAME_ALIASES = ["Supplier Name", "Supplier Name (optional)", "Supplier Name(optional)", "供應商名稱"]
 SUPPLIER_BULK_CODE_ALIASES = ["Supplier Code", "Supplier Code (optional)", "Vendor", "Vendor Code", "供應商代碼"]
@@ -1907,6 +1916,16 @@ def _find_supplier_col_by_rule(df: pd.DataFrame, kind: str) -> str | None:
                 return col
         return _find_any_dataframe_column(df, SUPPLIER_VENDOR_ALIASES)
     if kind == "vendor_name":
+        # Prefer Vendor Name-2 for Supplier Name (optional):
+        #   <Vendor> + " - " + <Vendor Name-2>
+        # If the new field is not present, keep historical compatibility with
+        # Vendor Name / Supplier Name / Search Term.
+        preferred = _find_any_dataframe_column(df, SUPPLIER_VENDOR_NAME2_ALIASES)
+        if preferred:
+            return preferred
+        for key, col in keyed:
+            if key in {"VENDORNAME2", "VENDORNAME02", "VENDORNAME002"}:
+                return col
         for key, col in keyed:
             if "VENDORNAME" in key or "SUPPLIERNAME" in key or "SEARCHTERM" in key:
                 return col
@@ -1935,11 +1954,22 @@ def _find_supplier_col_by_rule(df: pd.DataFrame, kind: str) -> str | None:
 
 
 def _find_supplier_address_column(df: pd.DataFrame) -> str | None:
+    # Prefer exact Address for Transportation Origin. This is intentionally
+    # before Supplier Address / country-city-street composition because the
+    # supplier file may contain multiple address-like fields.
+    exact_address = _find_any_dataframe_column(df, ["Address", "地址"])
+    if exact_address:
+        return exact_address
     exact = _find_any_dataframe_column(df, SUPPLIER_ADDRESS_ALIASES)
     if exact:
         return exact
     for col in df.columns:
         key = _normalize_template_header(col)
+        raw_key = _supplier_header_key(col)
+        if raw_key == "ADDRESS" or key == "address":
+            return col
+        if "email" in key or "mail" in key:
+            continue
         if "supplier" in key and "address" in key:
             return col
     return None
