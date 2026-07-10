@@ -859,7 +859,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 for key, tgt_col in target_activity_cols.items():
                     _copy_matching_value_to_target(out, tgt_col, values, source_activity_cols, key)
                 if target_activity_cols.get("document_type") and not out[target_activity_cols["document_type"] - 1]:
-                    out[target_activity_cols["document_type"] - 1] = "Invoice"
+                    out[target_activity_cols["document_type"] - 1] = "Bill of Materials (BOM)"
                 if target_activity_cols.get("data_source") and not out[target_activity_cols["data_source"] - 1]:
                     out[target_activity_cols["data_source"] - 1] = "SAP"
                 if target_activity_cols.get("unit") and not out[target_activity_cols["unit"] - 1]:

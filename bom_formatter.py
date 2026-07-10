@@ -388,9 +388,13 @@ def _sheet_has_dropdown_label(wb, dropdown_column_name: str, label: str) -> bool
 
 
 def _document_type_for_template(wb) -> str:
-    """Return the visible Document Type value expected by this template."""
-    preferred_label = "Bill of Materials (BOM)"
-    return preferred_label if _sheet_has_dropdown_label(wb, "Document Type", preferred_label) else "BOM"
+    """Return the visible Document Type value used by downstream templates.
+
+    Module 2B/2C may generate intermediate bulk files before the formal
+    template dropdown sheet is present. Always write the visible label so
+    Module 3 can match the final Raw Material Bulk Template dropdown option.
+    """
+    return "Bill of Materials (BOM)"
 
 def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None) -> tuple[pd.DataFrame, dict[str, str]]:
     df = _read_excel_first_sheet(bom_path)
