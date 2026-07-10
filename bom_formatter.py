@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V24_1_BULK_TWO_ROW_HEADERS"
+BOM_FORMATTER_VERSION = "CMP_V24_2_M2B_ZERO_HOUR_FILTER"
 
 
 DEFAULT_MAPPING = {
@@ -1029,6 +1029,97 @@ def _read_step1_annual_quantity_map(step1_output_path: str | Path) -> tuple[dict
         "annual_quantity_mapped_products": int(len(qty_map)),
         "raw_material_usage_rule": "Final Usage = BOM exploded usage per PC × Module 1 annual finished-product quantity",
     }
+
+def _step1_row_is_wip(product_type: Any = "", is_wip: Any = "") -> bool:
+    """Return whether a Step1 product row should be treated as WIP/semi-finished."""
+    type_text = _safe_text(product_type).strip().upper()
+    wip_text = _safe_text(is_wip).strip().upper()
+    if wip_text in {"1", "Y", "YES", "TRUE", "T", "WIP", "是"}:
+        return True
+    if type_text == "WIP" or "WIP" in type_text or "半品" in type_text:
+        return True
+    return False
+
+
+def _read_step1_m2b_product_eligibility_map(step1_output_path: str | Path) -> tuple[dict[str, bool], dict[str, str], Dict[str, Any]]:
+    """Read Step1 output and return whether each product is allowed into M2B.
+
+    M2B product-entry filter:
+    - WIP / semi-finished products are excluded.
+    - Finished products whose Module 1A 年度總工時 is 0, blank, or non-numeric are excluded.
+
+    The current M2B large-dataset flow is keyed by target product material.  If
+    a material appears more than once, it is kept only when at least one non-WIP
+    Step1 row has 年度總工時 > 0.
+    """
+    step1_output_path = Path(step1_output_path)
+    try:
+        df = pd.read_excel(step1_output_path, sheet_name=STEP1_SOURCE_SHEET_NAME, dtype=object)
+    except Exception:
+        df = pd.read_excel(step1_output_path, sheet_name=0, dtype=object)
+
+    material_col = _find_step1_column(df, ["Material Number", "Material", "Product Material Number"])
+    hour_col = _find_step1_optional_column(df, ["年度總工時", "Total working hours", "Selected Hours", "Total Hours", "Working Hours"])
+    type_col = _find_step1_optional_column(df, ["產品類型", "Product Type"])
+    wip_col = _find_step1_optional_column(df, ["Is_WIP", "Is WIP", "WIP"])
+
+    if not hour_col:
+        return {}, {}, {
+            "m2b_product_filter_applied": False,
+            "m2b_product_filter_reason": "Module 1A 年度產品產量與分類結果找不到年度總工時欄位，未套用成品年度總工時=0排除。",
+            "m2b_product_filter_rule": "Exclude WIP products and finished products whose Module 1A 年度總工時 is 0/blank/non-numeric before Module 2B Raw Material Bulk output.",
+            "m2b_excluded_products": 0,
+        }
+
+    work = df.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_annual_total_hour"] = work[hour_col].apply(_safe_number)
+    work["_product_type"] = work[type_col].apply(_safe_text) if type_col else ""
+    work["_is_wip_text"] = work[wip_col].apply(_safe_text) if wip_col else ""
+    work["_is_wip_bool"] = work.apply(lambda r: _step1_row_is_wip(r.get("_product_type", ""), r.get("_is_wip_text", "")), axis=1)
+    work = work[work["_material_key"] != ""].copy()
+
+    eligibility: dict[str, bool] = {}
+    reasons: dict[str, str] = {}
+    excluded_wip = 0
+    excluded_zero_hour = 0
+    eligible_count = 0
+
+    for material, group in work.groupby("_material_key", dropna=False):
+        key = str(material or "").strip().upper()
+        if not key:
+            continue
+        non_wip = group[~group["_is_wip_bool"].astype(bool)]
+        if non_wip.empty:
+            eligibility[key] = False
+            reasons[key] = "WIP"
+            excluded_wip += 1
+            continue
+        positive_hour = non_wip[pd.to_numeric(non_wip["_annual_total_hour"], errors="coerce").fillna(0.0) > 0.0]
+        if positive_hour.empty:
+            eligibility[key] = False
+            reasons[key] = "年度總工時=0/空白/非數字"
+            excluded_zero_hour += 1
+            continue
+        eligibility[key] = True
+        eligible_count += 1
+
+    excluded_examples = [
+        {"material": material, "reason": reasons.get(material, "")}
+        for material in sorted(reasons.keys())[:50]
+    ]
+    return eligibility, reasons, {
+        "m2b_product_filter_applied": True,
+        "m2b_product_filter_source": "Module 1A Plant_Material年度產量",
+        "m2b_product_filter_rule": "Before Module 2B Raw Material Bulk output, exclude target products that are WIP or whose Module 1A 年度總工時 is 0/blank/non-numeric.",
+        "m2b_products_checked": int(len(eligibility)),
+        "m2b_eligible_products": int(eligible_count),
+        "m2b_excluded_products": int(len(reasons)),
+        "m2b_excluded_wip_products": int(excluded_wip),
+        "m2b_excluded_zero_hour_products": int(excluded_zero_hour),
+        "m2b_excluded_product_examples": excluded_examples,
+    }
+
 
 
 def _apply_annual_quantity_to_exploded_usage(
@@ -3418,6 +3509,7 @@ def _stream_module2b_rows_to_site_csv(
     m = _resolve_mapping(mapping)
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
     site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
+    product_eligibility_map, product_exclusion_reasons, product_filter_summary = _read_step1_m2b_product_eligibility_map(step1_output_path)
 
     spool_dir = output_dir / f"m2b_spool_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
     spool_dir.mkdir(parents=True, exist_ok=True)
@@ -3430,6 +3522,9 @@ def _stream_module2b_rows_to_site_csv(
     missing_annual_rows = 0
     zero_usage_rows_excluded = 0
     zero_annual_usage_rows_excluded = 0
+    m2b_product_filter_rows_excluded = 0
+    m2b_product_filter_excluded_targets: set[str] = set()
+    m2b_product_filter_reason_counts: dict[str, int] = defaultdict(int)
     rows_read = 0
     valid_rows = 0
     source_sheets: list[str] = []
@@ -3490,6 +3585,12 @@ def _stream_module2b_rows_to_site_csv(
                     zero_usage_rows_excluded += 1
                     continue
                 target_key = _normalize_material_key(target_product)
+                if product_eligibility_map and target_key in product_eligibility_map and not product_eligibility_map[target_key]:
+                    m2b_product_filter_rows_excluded += 1
+                    m2b_product_filter_excluded_targets.add(target_key)
+                    reason = product_exclusion_reasons.get(target_key, "excluded_by_m2b_product_filter")
+                    m2b_product_filter_reason_counts[reason] += 1
+                    continue
                 annual_qty = annual_qty_map.get(target_key)
                 if annual_qty is None:
                     annual_qty = 1.0
@@ -3543,11 +3644,16 @@ def _stream_module2b_rows_to_site_csv(
         "annual_finished_product_qty_column_added": False,
         "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
         "zero_annual_usage_rows_excluded": int(zero_annual_usage_rows_excluded),
+        "m2b_product_filter_rows_excluded": int(m2b_product_filter_rows_excluded),
+        "m2b_product_filter_excluded_targets": sorted(m2b_product_filter_excluded_targets)[:50],
+        "m2b_product_filter_excluded_target_count": int(len(m2b_product_filter_excluded_targets)),
+        "m2b_product_filter_reason_counts": dict(m2b_product_filter_reason_counts),
         "m2b_large_dataset_mode": True,
         "m2b_spool_dir": str(spool_dir),
     }
     summary.update(annual_qty_source_summary)
     summary.update(step1_summary)
+    summary.update(product_filter_summary)
     return csv_paths, dict(site_counts), summary
 
 
