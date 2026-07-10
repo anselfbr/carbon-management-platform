@@ -412,6 +412,33 @@
                 </div>
               </button>
             </div>
+
+            <div class="module1-entry-status-grid" aria-label="Module 1 progress status">
+              <div id="module1EntryProgressStatus" class="processing-status idle module1-entry-progress-status">
+                <div class="status-header">
+                  <div class="spinner"></div>
+                  <div>
+                    <b id="module1EntryStatusTitle">MODULE 1 進度檢查中</b>
+                    <p id="module1EntryStatusText">系統正在確認 Module 1A 與 Module 1B 的最新產出狀態。</p>
+                  </div>
+                  <span id="module1EntryStatusTime" class="status-time">Checking</span>
+                </div>
+                <div class="progress-track">
+                  <div id="module1EntryProgressBar" class="progress-bar"></div>
+                </div>
+              </div>
+
+              <div class="module1-entry-source-grid">
+                <div class="module3-source-card" id="module1EntryM1aSourceCard">
+                  <b>Module 1A 年度產品產量與分類結果</b>
+                  <p id="module1EntryM1aSourceText">來源檢查中...</p>
+                </div>
+                <div class="module3-source-card" id="module1EntryM1bSourceCard">
+                  <b>Module 1B Product Activity Bulk</b>
+                  <p id="module1EntryM1bSourceText">來源檢查中...</p>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section class="card insight-card module3-policy-card">
@@ -1305,6 +1332,13 @@ const pageTitle = document.getElementById('pageTitle');
 const pageLead = document.getElementById('pageLead');
 const homeLogo = document.getElementById('homeLogo');
 const homeButton = document.getElementById('homeButton');
+const module1EntryProgressStatus = document.getElementById('module1EntryProgressStatus');
+const module1EntryStatusTitle = document.getElementById('module1EntryStatusTitle');
+const module1EntryStatusText = document.getElementById('module1EntryStatusText');
+const module1EntryStatusTime = document.getElementById('module1EntryStatusTime');
+const module1EntryProgressBar = document.getElementById('module1EntryProgressBar');
+const module1EntryM1aSourceText = document.getElementById('module1EntryM1aSourceText');
+const module1EntryM1bSourceText = document.getElementById('module1EntryM1bSourceText');
 
 const bomForm = document.getElementById('bomForm');
 const bomDownload = document.getElementById('bomDownload');
@@ -1697,6 +1731,47 @@ function setActiveSubItem(pageId, anchorId = '') {
   if (activeSubItem) activeSubItem.classList.add('active');
 }
 
+function setModule1EntryProgressState(mode, title, text, timeText, progress) {
+  if (!module1EntryProgressStatus) return;
+  module1EntryProgressStatus.classList.remove('idle', 'running', 'success', 'error');
+  module1EntryProgressStatus.classList.add(mode || 'idle');
+  if (module1EntryStatusTitle) module1EntryStatusTitle.textContent = title || '';
+  if (module1EntryStatusText) module1EntryStatusText.textContent = text || '';
+  if (module1EntryStatusTime) module1EntryStatusTime.textContent = cmpStatusTimeText(timeText || '', mode || 'idle');
+  if (module1EntryProgressBar) module1EntryProgressBar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
+}
+
+function module1SourceLine(label, data) {
+  if (!data || data.ok === false) return data && data.message ? data.message : `尚未找到 ${label}。`;
+  return `來源：${label}｜檔案：${data.filename || ''}${cmpSourceMetaText(data)}`;
+}
+
+async function refreshModule1EntryStatus() {
+  if (!module1EntryProgressStatus) return;
+  setModule1EntryProgressState('idle', 'MODULE 1 進度檢查中', '正在確認 Module 1A 與 Module 1B 的最新產出。', 'Checking', 5);
+  try {
+    const res = await fetch('/module1/progress-status', { cache: 'no-store' });
+    const data = await readJsonOrThrow(res);
+    const m1a = data.module1a_output || {};
+    const m1b = data.module1b_output || {};
+    const progress = Number(data.progress_percent || 0);
+    const mode = data.ready_module1b ? 'success' : 'idle';
+    setModule1EntryProgressState(
+      mode,
+      data.title || 'MODULE 1 目前進度',
+      data.message || '請依序完成 Module 1A 與 Module 1B。',
+      data.status_label || `${progress}%`,
+      progress
+    );
+    if (module1EntryM1aSourceText) module1EntryM1aSourceText.textContent = module1SourceLine('Module 1A 年度產品產量與分類結果', m1a);
+    if (module1EntryM1bSourceText) module1EntryM1bSourceText.textContent = module1SourceLine('Module 1B Product Activity Bulk', m1b);
+  } catch (err) {
+    setModule1EntryProgressState('error', 'MODULE 1 進度讀取失敗', err.message || '無法更新 Module 1 狀態，請重新整理頁面或查看後端 log。', 'Error', 100);
+    if (module1EntryM1aSourceText) module1EntryM1aSourceText.textContent = '無法更新 Module 1A 產出狀態。';
+    if (module1EntryM1bSourceText) module1EntryM1bSourceText.textContent = '無法更新 Module 1B 產出狀態。';
+  }
+}
+
 function activatePrepPage(pageId = 'module1-entry', anchorId = '') {
   setSidebarSubNavExpanded('prep', true);
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
@@ -1714,6 +1789,9 @@ function activatePrepPage(pageId = 'module1-entry', anchorId = '') {
   setDynamicI18n(pageLead, message.leadKey, message.lead);
   pageLead.style.display = message.lead ? 'block' : 'none';
   cmpApplyI18n();
+  if (pageId === 'module1-entry') {
+    refreshModule1EntryStatus();
+  }
   if (pageId === 'product-data' && typeof window.cmpRefreshBulkStep2Sources === 'function') {
     window.cmpRefreshBulkStep2Sources();
   }
@@ -2616,6 +2694,7 @@ form.onsubmit = async (e) => {
     download.href = data.download_url;
     download.classList.remove('disabled');
     stopEstimatedProgressSuccess();
+    refreshModule1EntryStatus();
   } catch (err) {
     log.textContent = 'Error: ' + err.message;
     stopEstimatedProgressError(err.message);
@@ -2776,6 +2855,7 @@ bulkForm.addEventListener('submit', async (e) => {
       : `<span data-i18n="downloadFormattedBulkFile">${cmpT('downloadFormattedBulkFile', 'Download Formatted Bulk File')}</span>`;
     bulkDownload.classList.remove('disabled');
     stopBulkProgressSuccess(data.summary);
+    refreshModule1EntryStatus();
   } catch (err) {
     stopBulkProgressError(err.message);
   }

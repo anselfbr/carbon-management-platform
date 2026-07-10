@@ -33,6 +33,7 @@ MODULE2_RAW_MATERIAL_BULK_PATH: Optional[Path] = None
 MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH = OUTPUT_DIR / "module2b_raw_material_bulk_latest.zip"
 MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH = OUTPUT_DIR / "module2c_supplier_mapped_raw_material_bulk_latest.zip"
 RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH = OUTPUT_DIR / "raw_material_bulk_template_latest.xlsx"
+MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH = OUTPUT_DIR / "module1b_product_activity_bulk_latest.zip"
 
 
 RULE_SET_MAP = {
@@ -2118,6 +2119,13 @@ async def generate_bulk_file(
         summary["module2a_working_hour_rollup_used"] = bool(working_hour_rollup_path and Path(working_hour_rollup_path).exists())
         summary["module2a_working_hour_rollup_filename"] = Path(working_hour_rollup_path).name if working_hour_rollup_path else ""
         summary["working_hour_source_rule"] = "Module 2A working_hour_rollup is required only when Working Hour Source = Include Semi-finished Working Hour."
+        output_filename = str(summary.get("output_filename") or "").strip()
+        if output_filename:
+            generated_output_path = OUTPUT_DIR / output_filename
+            if generated_output_path.exists() and generated_output_path.suffix.lower() == ".zip":
+                shutil.copy2(generated_output_path, MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH)
+                summary["module1b_product_activity_bulk_latest"] = MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.name
+                summary["module1b_product_activity_bulk_latest_download_url"] = f"/download/{MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.name}"
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -2199,6 +2207,72 @@ def _find_latest_module1_step1_output() -> Path | None:
             if path.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
                 candidates.append(path)
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+
+def _find_latest_module1b_product_activity_bulk() -> Path | None:
+    """Return the latest Module 1B Product Activity Bulk output for progress display."""
+    if MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.exists():
+        return MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH
+    candidates: list[Path] = []
+    for pattern in (
+        "formatted_product_activity_data_bulk_by_production_site_*.zip",
+        "formatted_product_activity_data_bulk_create_*.xlsx",
+    ):
+        for path in OUTPUT_DIR.glob(pattern):
+            if path.name.startswith("~$"):
+                continue
+            if path.suffix.lower() in [".zip", ".xlsx", ".xlsm", ".xls"]:
+                candidates.append(path)
+    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+
+@app.get("/module1/progress-status")
+def module1_progress_status():
+    """Module 1 overview progress for the entry page."""
+    step1_path = _find_latest_module1_step1_output()
+    step2_path = _find_latest_module1b_product_activity_bulk()
+    ready_module1a = bool(step1_path and step1_path.exists())
+    ready_module1b = bool(step2_path and step2_path.exists())
+
+    if ready_module1b:
+        progress_percent = 100
+        title = "MODULE 1 已完成"
+        message = "Module 1A 年度產品產量與分類結果與 Module 1B Product Activity Bulk 都已完成，可進入 Module 2。"
+        status_label = "Completed"
+        next_step = "Module 2A"
+    elif ready_module1a:
+        progress_percent = 50
+        title = "MODULE 1A 已完成，等待 Module 1B"
+        message = "已找到 Module 1A 年度產品產量與分類結果；下一步請執行 Module 1B Batch Data Formatting。"
+        status_label = "50%"
+        next_step = "Module 1B"
+    else:
+        progress_percent = 0
+        title = "MODULE 1 尚未開始"
+        message = "尚未找到 Module 1A 年度產品產量與分類結果；請先執行 Module 1A Work Order Processing。"
+        status_label = "0%"
+        next_step = "Module 1A"
+
+    return {
+        "ok": True,
+        "ready_module1a": ready_module1a,
+        "ready_module1b": ready_module1b,
+        "progress_percent": progress_percent,
+        "title": title,
+        "message": message,
+        "status_label": status_label,
+        "next_step": next_step,
+        "module1a_output": _source_info_for_existing_path(
+            step1_path,
+            "Module 1A 年度產品產量與分類結果",
+            "尚未找到 Module 1A 年度產品產量與分類結果。請先完成 Module 1A。",
+        ),
+        "module1b_output": _source_info_for_existing_path(
+            step2_path,
+            "Module 1B Product Activity Bulk",
+            "尚未找到 Module 1B Product Activity Bulk。請完成 Module 1B Batch Data Formatting。",
+        ),
+    }
 
 
 @app.get("/module2/step1-output-source")

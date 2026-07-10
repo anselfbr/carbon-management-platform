@@ -2746,3 +2746,29 @@ select:focus {
   }
 }
 
+
+/* Module 1 entry progress overview */
+.module1-entry-status-grid {
+  margin-top: 18px;
+}
+
+.module1-entry-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.module1-entry-source-grid .module3-source-card {
+  margin-bottom: 0;
+}
+
+.module1-entry-progress-status {
+  margin-top: 0;
+}
+
+@media (max-width: 980px) {
+  .module1-entry-source-grid {
+    grid-template-columns: 1fr;
+  }
+}
