@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -56,6 +58,10 @@ print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
+MODULE1A_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+MODULE1A_JOBS: Dict[str, Dict[str, Any]] = {}
+MODULE1A_JOB_DIR = OUTPUT_DIR / "module1a_jobs"
+MODULE1A_JOB_DIR.mkdir(parents=True, exist_ok=True)
 MODULE2A_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 MODULE2B_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 MODULE2C_EXECUTOR = ThreadPoolExecutor(max_workers=1)
@@ -93,6 +99,56 @@ def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
     job.update(updates)
     job["updated_at"] = _cmp_now_iso()
 
+
+def _module1a_job_path(job_id: str) -> Path:
+    return MODULE1A_JOB_DIR / f"{job_id}.json"
+
+
+def _json_safe_job_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat(timespec="seconds")
+    if isinstance(value, dict):
+        return {str(k): _json_safe_job_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_job_value(v) for v in value]
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return value
+
+
+def _set_module1a_job(job_id: str, **updates: Any) -> None:
+    job = MODULE1A_JOBS.setdefault(job_id, {})
+    job.update(updates)
+    job["job_id"] = job_id
+    job["last_heartbeat"] = _cmp_now_iso()
+    try:
+        _module1a_job_path(job_id).write_text(
+            json.dumps(_json_safe_job_value(job), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        traceback.print_exc()
+
+
+def _get_module1a_job(job_id: str) -> Dict[str, Any] | None:
+    job = MODULE1A_JOBS.get(job_id)
+    if job:
+        return job
+    path = _module1a_job_path(job_id)
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                MODULE1A_JOBS[job_id] = loaded
+                return loaded
+        except Exception:
+            traceback.print_exc()
+    return None
 
 
 def _module2a_job_path(job_id: str) -> Path:
@@ -900,9 +956,15 @@ def parse_product_series(description: object, masters: Optional[dict] = None) ->
         return "", "Material description 空白"
 
     raw_text = str(description).upper()
-    prefixes = get_series_prefixes(masters)
-    prefix_pattern = "|".join(prefixes)
-    pattern = re.compile(rf"({prefix_pattern})[A-Z0-9]{{3,40}}")
+    pattern = None
+    if isinstance(masters, dict):
+        pattern = masters.get("_series_prefix_pattern")
+    if pattern is None:
+        prefixes = get_series_prefixes(masters)
+        prefix_pattern = "|".join(prefixes)
+        pattern = re.compile(rf"({prefix_pattern})[A-Z0-9]{{3,40}}")
+        if isinstance(masters, dict):
+            masters["_series_prefix_pattern"] = pattern
 
     # 第一階段：保留標點符號作為重要邊界，先分段判斷。
     # 這可以避免 SN5372BL,110K 被抓成 SN5372BL110K。
@@ -1585,19 +1647,121 @@ def attach_labor_hours(out: pd.DataFrame, labor: pd.DataFrame) -> pd.DataFrame:
 
     return out
 
+
+def _safe_job_progress_callback(callback: Any, step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
+    """Report Module 1A progress without allowing UI callbacks to break processing."""
+    if callback is None:
+        return
+    try:
+        callback(
+            step=step,
+            processed=int(processed or 0),
+            total=int(total or 0),
+            progress=int(max(0, min(100, progress or 0))),
+            **extra,
+        )
+    except Exception:
+        traceback.print_exc()
+
+
+def _excel_cell_value(value: Any) -> Any:
+    """Convert pandas/numpy values to values openpyxl can write like pandas.to_excel would."""
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if hasattr(value, "to_pydatetime"):
+        try:
+            return value.to_pydatetime()
+        except Exception:
+            return value
+    return value
+
+
+def _stream_dataframe_to_sheet(
+    wb: Workbook,
+    df: pd.DataFrame,
+    sheet_name: str,
+    progress_callback: Any = None,
+    progress_start: int = 85,
+    progress_end: int = 98,
+) -> None:
+    """Write a DataFrame to Excel with openpyxl write_only mode.
+
+    This keeps the current M1A workbook structure (sheet names, columns and freeze panes)
+    but avoids pandas.to_excel's high memory / slow full-workbook writer path.
+    Column widths follow the previous rule: header plus the first 999 data rows, capped at 45.
+    """
+    ws = wb.create_sheet(title=sheet_name)
+    ws.freeze_panes = "A2"
+
+    headers = [str(c) for c in df.columns]
+    ws.append(headers)
+
+    # Match the old auto-width behavior without scanning an already-written worksheet.
+    widths = [max(12, len(str(h or "")) + 2) for h in headers]
+    sample_limit = 999
+    total_rows = int(len(df))
+    denom = max(1, total_rows)
+    progress_span = max(0, progress_end - progress_start)
+
+    for row_index, row in enumerate(df.itertuples(index=False, name=None), start=1):
+        values = [_excel_cell_value(v) for v in row]
+        ws.append(values)
+
+        if row_index <= sample_limit:
+            for i, value in enumerate(values):
+                widths[i] = max(widths[i], len(str(value or "")) + 2)
+
+        if progress_callback is not None and (row_index == total_rows or row_index % 5000 == 0):
+            progress = progress_start + int(progress_span * row_index / denom)
+            _safe_job_progress_callback(
+                progress_callback,
+                f"寫入 {sheet_name}",
+                processed=row_index,
+                total=total_rows,
+                progress=progress,
+            )
+
+    for idx, width in enumerate(widths, start=1):
+        letter = get_column_letter(idx)
+        ws.column_dimensions[letter].width = min(width, 45)
+
+
+def _export_module1a_workbook_streaming(
+    output_path: Path,
+    out_export: pd.DataFrame,
+    annual_export: pd.DataFrame,
+    type_summary: pd.DataFrame,
+    progress_callback: Any = None,
+) -> None:
+    """Export the same M1A workbook sheets using streaming write mode."""
+    wb = Workbook(write_only=True)
+    _stream_dataframe_to_sheet(wb, out_export, "工單明細_已分類", progress_callback, 82, 92)
+    _stream_dataframe_to_sheet(wb, annual_export, "Plant_Material年度產量", progress_callback, 92, 96)
+    _stream_dataframe_to_sheet(wb, type_summary, "Plant_產品類型年度產量", progress_callback, 96, 98)
+    _safe_job_progress_callback(progress_callback, "儲存 Module 1A Excel", progress=99)
+    wb.save(output_path)
+
 def process_files(
     paths: list[Path],
     year: Optional[int],
     labor_paths: Optional[list[Path]] = None,
     labor_mode: str = "both",
     rule_set: str = DEFAULT_RULE_SET,
+    progress_callback: Any = None,
 ) -> tuple[Path, dict]:
     rule_set = normalize_rule_set(rule_set)
+    _safe_job_progress_callback(progress_callback, "載入 Rule Master", progress=2, total=len(paths or []))
     masters = build_masters(rule_set)
     labor_mode = normalize_labor_mode(labor_mode)
 
+    _safe_job_progress_callback(progress_callback, "讀取生產工單 Excel", progress=6, total=len(paths or []))
     out = load_production_dataframe(paths)
+    _safe_job_progress_callback(progress_callback, "讀取工時工單 Excel", progress=12, processed=len(out), total=len(out))
     labor = load_labor_dataframe(labor_paths or [], labor_mode)
+    _safe_job_progress_callback(progress_callback, "合併工單與工時資料", progress=18, processed=len(out), total=len(out))
     out = attach_labor_hours(out, labor)
 
     # Final safety guard: total working hours must always follow selected working-hour source.
@@ -1615,38 +1779,78 @@ def process_files(
     out["Working Hour Source"] = labor_mode
 
     if year:
+        _safe_job_progress_callback(progress_callback, "篩選申報年度", progress=24, processed=len(out), total=len(out))
         out = out[out["Year"] == int(year)].copy()
 
-    parsed = out["Material description"].apply(lambda desc: parse_product_series(desc, masters))
-    out["Product series"] = parsed.apply(lambda x: x[0])
-    out["解析說明"] = parsed.apply(lambda x: x[1])
+    _safe_job_progress_callback(progress_callback, "解析 Product series（已啟用快取）", progress=30, processed=0, total=len(out))
+    series_cache: dict[str, tuple[str, str]] = {}
+
+    def cached_parse_product_series(desc: object) -> tuple[str, str]:
+        key = "" if pd.isna(desc) else str(desc)
+        cached = series_cache.get(key)
+        if cached is None:
+            cached = parse_product_series(desc, masters)
+            series_cache[key] = cached
+        return cached
+
+    parsed_values = [cached_parse_product_series(desc) for desc in out["Material description"].tolist()]
+    out["Product series"] = [x[0] for x in parsed_values]
+    out["解析說明"] = [x[1] for x in parsed_values]
 
     # Resolve Plant -> Production Site before classification.
     # This makes Rule Master classification plant-aware:
     # - site-specific rules only apply to the same Production Site
     # - blank-site rules remain generic and can be used by both 越南海防廠-IPS and 廣州石碣廠-IPS
-    initial_plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
-    out["_Plant Production Site"] = initial_plant_site_rules.apply(lambda x: x[0])
-    out["_Plant Production Site Rule"] = initial_plant_site_rules.apply(lambda x: x[1])
+    _safe_job_progress_callback(progress_callback, "解析 Plant 對應生產廠區", progress=38, processed=0, total=len(out))
+    plant_site_cache: dict[str, tuple[str, str]] = {}
 
-    classified = out.apply(
-        lambda r: classify(
-            r["Material Number"],
-            r["Material description"],
-            r["Product series"],
-            r["Plant"],
-            masters,
-            r.get("_Plant Production Site", ""),
-        ),
-        axis=1,
-    )
-    out["產品類型"] = classified.apply(lambda x: x.get("產品類型", ""))
-    out["Product Line"] = classified.apply(lambda x: x.get("Product Line", ""))
-    out["Production Site"] = classified.apply(lambda x: x.get("Production Site", ""))
-    out["判斷來源"] = classified.apply(lambda x: x.get("判斷來源", ""))
-    out["規則判定結果"] = classified.apply(lambda x: x.get("規則判定結果", ""))
-    out["命中規則"] = classified.apply(lambda x: x.get("命中規則", ""))
-    out["Is_WIP"] = classified.apply(lambda x: x.get("Is_WIP", "N"))
+    def cached_plant_site(plant: object) -> tuple[str, str]:
+        key = "" if pd.isna(plant) else str(plant)
+        cached = plant_site_cache.get(key)
+        if cached is None:
+            cached = resolve_plant_production_site_from_rule_master(plant, masters)
+            plant_site_cache[key] = cached
+        return cached
+
+    initial_plant_site_values = [cached_plant_site(p) for p in out["Plant"].tolist()]
+    out["_Plant Production Site"] = [x[0] for x in initial_plant_site_values]
+    out["_Plant Production Site Rule"] = [x[1] for x in initial_plant_site_values]
+
+    _safe_job_progress_callback(progress_callback, "套用 Rule Master 與產品分類（已啟用快取）", progress=46, processed=0, total=len(out))
+    classify_cache: dict[tuple[str, str, str, str, str], dict] = {}
+    classified_values: list[dict] = []
+    total_classify_rows = int(len(out))
+    for idx, row in enumerate(out[["Material Number", "Material description", "Product series", "Plant", "_Plant Production Site"]].itertuples(index=False, name=None), start=1):
+        material_number, description, series, plant, current_site = row
+        key = (
+            "" if pd.isna(material_number) else str(material_number),
+            "" if pd.isna(description) else str(description),
+            "" if pd.isna(series) else str(series),
+            "" if pd.isna(plant) else str(plant),
+            "" if pd.isna(current_site) else str(current_site),
+        )
+        cached = classify_cache.get(key)
+        if cached is None:
+            cached = classify(material_number, description, series, plant, masters, current_site)
+            classify_cache[key] = cached
+        classified_values.append(cached)
+        if progress_callback is not None and (idx == total_classify_rows or idx % 10000 == 0):
+            _safe_job_progress_callback(
+                progress_callback,
+                "套用 Rule Master 與產品分類（已啟用快取）",
+                processed=idx,
+                total=total_classify_rows,
+                progress=46 + int(12 * idx / max(1, total_classify_rows)),
+            )
+
+    classified = pd.Series(classified_values, index=out.index)
+    out["產品類型"] = [x.get("產品類型", "") for x in classified_values]
+    out["Product Line"] = [x.get("Product Line", "") for x in classified_values]
+    out["Production Site"] = [x.get("Production Site", "") for x in classified_values]
+    out["判斷來源"] = [x.get("判斷來源", "") for x in classified_values]
+    out["規則判定結果"] = [x.get("規則判定結果", "") for x in classified_values]
+    out["命中規則"] = [x.get("命中規則", "") for x in classified_values]
+    out["Is_WIP"] = [x.get("Is_WIP", "N") for x in classified_values]
     # Generic rule-engine behavior:
     # If Rule Master classifies a row as WIP and does not explicitly provide Product Line,
     # keep Product Line and Product Series blank. This prevents downstream inference from
@@ -1679,24 +1883,47 @@ def process_files(
     missing_line_mask = out["Product Line"].astype(str).str.strip().eq("")
     missing_line_mask = missing_line_mask & ~out["Is_WIP"].astype(str).str.upper().isin(["Y", "YES", "TRUE", "1"])
     if missing_line_mask.any():
-        inferred = out.loc[missing_line_mask].apply(
-            lambda r: infer_product_line_site_from_rules(r["Material description"], r["Product series"], masters),
-            axis=1,
-        )
-        out.loc[missing_line_mask, "Product Line"] = inferred.apply(lambda x: x[0]).to_numpy()
-        out.loc[missing_line_mask, "Production Site"] = inferred.apply(lambda x: x[1]).to_numpy()
+        infer_cache: dict[tuple[str, str], tuple[str, str]] = {}
+        inferred_values: list[tuple[str, str]] = []
+        for description, series in out.loc[missing_line_mask, ["Material description", "Product series"]].itertuples(index=False, name=None):
+            key = (
+                "" if pd.isna(description) else str(description),
+                "" if pd.isna(series) else str(series),
+            )
+            cached = infer_cache.get(key)
+            if cached is None:
+                cached = infer_product_line_site_from_rules(description, series, masters)
+                infer_cache[key] = cached
+            inferred_values.append(cached)
+        out.loc[missing_line_mask, "Product Line"] = [x[0] for x in inferred_values]
+        out.loc[missing_line_mask, "Production Site"] = [x[1] for x in inferred_values]
 
-    out["Production Site"] = out.apply(
-        lambda r: resolve_production_site(r["Product Line"], r["Production Site"]),
-        axis=1,
-    )
+    _safe_job_progress_callback(progress_callback, "完成產品分類與生產廠區判斷", progress=62, processed=len(out), total=len(out))
+    out["Production Site"] = [
+        resolve_production_site(product_line, production_site)
+        for product_line, production_site in out[["Product Line", "Production Site"]].itertuples(index=False, name=None)
+    ]
 
     # Final safety guard:
     # Product Line / Production Site can be inferred from series rules, but Product Type must remain WIP
     # if WIP rules such as 850-/851-/852-/H50-/SFG/ASSY/SCMC match.
-    wip_rule_mask = out.apply(
-        lambda r: is_wip_by_rule_master(r["Material Number"], r["Material description"], r["Product series"], masters),
-        axis=1,
+    wip_cache: dict[tuple[str, str, str], bool] = {}
+
+    def cached_is_wip(material_number: object, description: object, series: object) -> bool:
+        key = (
+            "" if pd.isna(material_number) else str(material_number),
+            "" if pd.isna(description) else str(description),
+            "" if pd.isna(series) else str(series),
+        )
+        cached = wip_cache.get(key)
+        if cached is None:
+            cached = is_wip_by_rule_master(material_number, description, series, masters)
+            wip_cache[key] = cached
+        return cached
+
+    wip_rule_mask = pd.Series(
+        [cached_is_wip(material_number, description, series) for material_number, description, series in out[["Material Number", "Material description", "Product series"]].itertuples(index=False, name=None)],
+        index=out.index,
     )
     if wip_rule_mask.any():
         out.loc[wip_rule_mask, "產品類型"] = "WIP"
@@ -1707,15 +1934,22 @@ def process_files(
     # SG- means non-WIP only. Product Type / Product Line / Production Site still comes from Product Series.
     finished_product_mask = out["Material Number"].apply(is_finished_product_whitelist)
     if finished_product_mask.any():
-        inferred_finished = out.loc[finished_product_mask].apply(
-            lambda r: infer_product_type_line_site_from_series_rules(
-                r["Material description"], r["Product series"], masters
-            ),
-            axis=1,
-        )
-        inferred_product_type = inferred_finished.apply(lambda x: x[0]).to_numpy()
-        inferred_product_line = inferred_finished.apply(lambda x: x[1]).to_numpy()
-        inferred_production_site = inferred_finished.apply(lambda x: x[2]).to_numpy()
+        finished_cache: dict[tuple[str, str], tuple[str, str, str]] = {}
+        inferred_finished_values: list[tuple[str, str, str]] = []
+        for description, series in out.loc[finished_product_mask, ["Material description", "Product series"]].itertuples(index=False, name=None):
+            key = (
+                "" if pd.isna(description) else str(description),
+                "" if pd.isna(series) else str(series),
+            )
+            cached = finished_cache.get(key)
+            if cached is None:
+                cached = infer_product_type_line_site_from_series_rules(description, series, masters)
+                finished_cache[key] = cached
+            inferred_finished_values.append(cached)
+
+        inferred_product_type = [x[0] for x in inferred_finished_values]
+        inferred_product_line = [x[1] for x in inferred_finished_values]
+        inferred_production_site = [x[2] for x in inferred_finished_values]
 
         idx = out.index[finished_product_mask]
         for pos, row_idx in enumerate(idx):
@@ -1727,17 +1961,17 @@ def process_files(
                 out.at[row_idx, "Production Site"] = inferred_production_site[pos]
             out.at[row_idx, "Is_WIP"] = "N"
 
-        out.loc[finished_product_mask, "Production Site"] = out.loc[finished_product_mask].apply(
-            lambda r: resolve_production_site(r["Product Line"], r["Production Site"]),
-            axis=1,
-        )
+        out.loc[finished_product_mask, "Production Site"] = [
+            resolve_production_site(product_line, production_site)
+            for product_line, production_site in out.loc[finished_product_mask, ["Product Line", "Production Site"]].itertuples(index=False, name=None)
+        ]
 
     # Plant Rule Master override:
     # Production Site may be controlled directly by Plant Exact / Plant Prefix rules in rule_master.csv.
     # This only updates Production Site and does not change Product Type / Product Line / WIP status.
-    plant_site_rules = out["Plant"].apply(lambda p: resolve_plant_production_site_from_rule_master(p, masters))
-    plant_sites = plant_site_rules.apply(lambda x: x[0])
-    plant_rule_hits = plant_site_rules.apply(lambda x: x[1])
+    plant_site_values = [cached_plant_site(p) for p in out["Plant"].tolist()]
+    plant_sites = pd.Series([x[0] for x in plant_site_values], index=out.index)
+    plant_rule_hits = pd.Series([x[1] for x in plant_site_values], index=out.index)
 
     plant_site_mask = plant_sites.astype(str).str.strip().ne("")
     if plant_site_mask.any():
@@ -1749,6 +1983,8 @@ def process_files(
         )
 
     out = out.drop(columns=["_Plant Production Site", "_Plant Production Site Rule"], errors="ignore")
+
+    _safe_job_progress_callback(progress_callback, "彙總年度產量與工時", progress=68, processed=len(out), total=len(out))
 
     group_cols = [
         "Year", "Plant", "Production Site", "Product Line", "Material Number", "Material description", "Product series",
@@ -1875,18 +2111,8 @@ def process_files(
         out_export = out_export.drop(columns=["Labor HR.Act"], errors="ignore")
         annual_export = annual_export.drop(columns=["年度人員工時"], errors="ignore")
 
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        out_export.to_excel(writer, index=False, sheet_name="工單明細_已分類")
-        annual_export.to_excel(writer, index=False, sheet_name="Plant_Material年度產量")
-        type_summary.to_excel(writer, index=False, sheet_name="Plant_產品類型年度產量")
-        for sheet in writer.book.worksheets:
-            sheet.freeze_panes = "A2"
-            for col in sheet.columns:
-                max_len = 12
-                letter = col[0].column_letter
-                for cell in col[:1000]:
-                    max_len = max(max_len, len(str(cell.value or "")) + 2)
-                sheet.column_dimensions[letter].width = min(max_len, 45)
+    _safe_job_progress_callback(progress_callback, "寫入 Module 1A Excel（streaming）", progress=82, processed=0, total=len(out_export))
+    _export_module1a_workbook_streaming(output_path, out_export, annual_export, type_summary, progress_callback)
 
     summary = {
         "files": int(len(paths)),
@@ -1974,6 +2200,186 @@ def debug_version():
         "process_endpoint": "manual form compatible",
         "supports": ["files multi-upload", "file single-upload", "Module 2 multi-BOM upload", "blank year", "BU rule library"],
     }
+
+
+def _run_module1a_process_job(
+    job_id: str,
+    saved_paths: list[Path],
+    year_value: Optional[int],
+    saved_labor_paths: list[Path],
+    labor_mode: str,
+    rule_set: str,
+) -> None:
+    started_at = datetime.now(CMP_TIMEZONE)
+
+    def report(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
+        elapsed_seconds = max(1, int((datetime.now(CMP_TIMEZONE) - started_at).total_seconds()))
+        current_progress = max(0, min(100, int(progress or 0)))
+        remaining_seconds = None
+        if 1 <= current_progress < 100:
+            remaining_seconds = int(elapsed_seconds * max(0, 100 - current_progress) / current_progress)
+        _set_module1a_job(
+            job_id,
+            status="running",
+            step=step,
+            progress=current_progress,
+            processed_rows=int(processed or 0),
+            total_rows=int(total or 0),
+            elapsed_seconds=elapsed_seconds,
+            remaining_seconds=remaining_seconds,
+            **extra,
+        )
+
+    try:
+        _set_module1a_job(
+            job_id,
+            status="running",
+            step="準備處理 Module 1A 工單",
+            progress=1,
+            processed_rows=0,
+            total_rows=0,
+            started_at=_cmp_now_iso(),
+        )
+        output_path, summary = process_files(
+            saved_paths,
+            year_value,
+            saved_labor_paths,
+            labor_mode,
+            rule_set,
+            progress_callback=report,
+        )
+        elapsed_seconds = max(1, int((datetime.now(CMP_TIMEZONE) - started_at).total_seconds()))
+        _set_module1a_job(
+            job_id,
+            status="done",
+            step="Module 1A 年度產品產量與分類結果已產出",
+            progress=100,
+            processed_rows=int(summary.get("rows") or 0),
+            total_rows=int(summary.get("rows") or 0),
+            elapsed_seconds=elapsed_seconds,
+            remaining_seconds=0,
+            summary=summary,
+            output_filename=output_path.name,
+            download_url=f"/download/{output_path.name}",
+            completed_at=_cmp_now_iso(),
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        _set_module1a_job(
+            job_id,
+            status="error",
+            step="Module 1A 處理失敗",
+            progress=100,
+            message=str(exc),
+            completed_at=_cmp_now_iso(),
+        )
+
+
+@app.post("/module1a/process-job")
+async def module1a_process_job(request: Request):
+    """Module 1A background processing endpoint with real progress status."""
+    try:
+        form = await request.form()
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": f"無法讀取上傳表單：{exc}"}, status_code=400)
+
+    available_keys = list(form.keys())
+
+    def is_upload_file_like(item) -> bool:
+        return bool(getattr(item, "filename", None)) and hasattr(item, "read")
+
+    upload_files = []
+    labor_uploads = []
+
+    for item in form.getlist("files") + form.getlist("file"):
+        if is_upload_file_like(item):
+            upload_files.append(item)
+
+    for item in form.getlist("labor_files") + form.getlist("labor_file"):
+        if is_upload_file_like(item):
+            labor_uploads.append(item)
+
+    seen_ids = {id(x) for x in upload_files + labor_uploads}
+    for key in available_keys:
+        for item in form.getlist(key):
+            if not is_upload_file_like(item) or id(item) in seen_ids:
+                continue
+            key_lower = str(key).lower()
+            if "labor" in key_lower or "hour" in key_lower or "worktime" in key_lower:
+                labor_uploads.append(item)
+            else:
+                upload_files.append(item)
+            seen_ids.add(id(item))
+
+    if not upload_files:
+        return JSONResponse({"ok": False, "message": "請至少上傳一個 Excel 生產數量工單檔案"}, status_code=400)
+
+    labor_mode = normalize_labor_mode(form.get("labor_mode") or "both")
+    rule_set = normalize_rule_set(form.get("rule_set") or DEFAULT_RULE_SET)
+    year = form.get("year")
+
+    try:
+        year_value: Optional[int] = None
+        if year is not None and str(year).strip() != "":
+            year_value = int(str(year).strip())
+    except Exception:
+        return JSONResponse({"ok": False, "message": "Reporting Year 請輸入有效年份，或留空代表全部年度。"}, status_code=400)
+
+    job_id = uuid.uuid4().hex[:10]
+    saved_paths: list[Path] = []
+    for idx, upload in enumerate(upload_files, start=1):
+        filename = str(getattr(upload, "filename", "") or f"production_order_{idx}.xlsx")
+        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{filename} 不是 Excel 檔案"}, status_code=400)
+        saved = UPLOAD_DIR / f"module1a_workorder_{job_id}_{idx}_{Path(filename).name}"
+        saved.write_bytes(await upload.read())
+        saved_paths.append(saved)
+
+    saved_labor_paths: list[Path] = []
+    for idx, upload in enumerate(labor_uploads, start=1):
+        filename = str(getattr(upload, "filename", "") or f"labor_order_{idx}.xlsx")
+        if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": f"{filename} 不是 Excel 工時檔案"}, status_code=400)
+        saved = UPLOAD_DIR / f"module1a_labor_{job_id}_{idx}_{Path(filename).name}"
+        saved.write_bytes(await upload.read())
+        saved_labor_paths.append(saved)
+
+    _set_module1a_job(
+        job_id,
+        status="queued",
+        step="Module 1A 工作已建立，等待背景處理",
+        progress=0,
+        processed_rows=0,
+        total_rows=0,
+        created_at=_cmp_now_iso(),
+        files=len(saved_paths),
+        labor_files=len(saved_labor_paths),
+        labor_mode=labor_mode,
+        rule_set=rule_set,
+        year=year_value if year_value is not None else "ALL",
+    )
+    MODULE1A_EXECUTOR.submit(
+        _run_module1a_process_job,
+        job_id,
+        saved_paths,
+        year_value,
+        saved_labor_paths,
+        labor_mode,
+        rule_set,
+    )
+    return {"ok": True, "job_id": job_id, "status_url": f"/module1a/process-job/{job_id}"}
+
+
+@app.get("/module1a/process-job/{job_id}")
+def module1a_get_process_job(job_id: str):
+    job = _get_module1a_job(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "message": "找不到 Module 1A job，可能已被清除或服務重啟前未寫入狀態。"}, status_code=404)
+    response = dict(job)
+    response["ok"] = True
+    response["job"] = dict(job)
+    return response
 
 @app.post("/process")
 async def process(request: Request):

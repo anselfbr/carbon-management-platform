@@ -1625,6 +1625,7 @@ if (ruleManagementSet) {
 }
 
 let progressTimer = null;
+let module1aPollTimer = null;
 
 const moduleMessages = {
   prep: {
@@ -2638,22 +2639,116 @@ function stopEstimatedProgressError(message) {
   );
 }
 
+function renderModule1aCompletion(job) {
+  const s = job.summary || {};
+  log.textContent = `Completed.
+Rule Set: ${s.rule_set || 'IPS'}
+Year: ${s.year || job.year || 'ALL'}
+Uploaded files: ${s.files || job.files || 0}
+Labor files: ${s.labor_files || job.labor_files || 0}
+Work order rows: ${s.rows || 0}
+Summary rows: ${s.annual_rows || 0}
+Total output: ${s.total_qty || 0}
+Total hours: ${s.total_hours || 0}
+WIP rows: ${s.wip_rows || 0}`;
+  summary.innerHTML = `
+    <div class="metric"><b>Rule Set</b><span>${s.rule_set || job.rule_set || 'IPS'}</span></div>
+    <div class="metric"><b>Year</b><span>${s.year || job.year || 'ALL'}</span></div>
+    <div class="metric"><b>Uploaded Files</b><span>${s.files || job.files || 0}</span></div>
+    <div class="metric"><b>Labor Files</b><span>${s.labor_files || job.labor_files || 0}</span></div>
+    <div class="metric"><b>Work Order Rows</b><span>${s.rows || 0}</span></div>
+    <div class="metric"><b>Summary Rows</b><span>${s.annual_rows || 0}</span></div>
+    <div class="metric"><b>Total Output</b><span>${Number(s.total_qty || 0).toLocaleString()}</span></div>
+    <div class="metric"><b>Total Hours</b><span>${Number(s.total_hours || 0).toLocaleString()}</span></div>
+    <div class="metric"><b>WIP Rows</b><span>${s.wip_rows || 0}</span></div>`;
+
+  if (job.download_url) {
+    download.href = job.download_url;
+    download.classList.remove('disabled');
+  }
+  setProcessingState(
+    'success',
+    cmpT('processingCompleted', 'Processing completed'),
+    cmpT('classificationReadyDownload', 'Classification result is ready. You can download the Excel output.'),
+    cmpT('completed', 'Completed'),
+    100
+  );
+  refreshModule1EntryStatus();
+}
+
+async function pollModule1AJob(jobId) {
+  try {
+    const res = await fetch(`/module1a/process-job/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.message || 'Module 1A job not found');
+
+    const job = data.job || data;
+    const progress = Number(job.progress || 0);
+    const status = String(job.status || '').toLowerCase();
+    const processed = Number(job.processed_rows || 0);
+    const total = Number(job.total_rows || 0);
+    const rowText = total > 0 ? `${processed.toLocaleString()} / ${total.toLocaleString()} rows` : `${processed.toLocaleString()} rows`;
+    const timeText = job.remaining_seconds != null ? cmpRemainingText(Number(job.remaining_seconds || 0)) : 'Running';
+
+    if (status === 'done') {
+      if (module1aPollTimer) clearInterval(module1aPollTimer);
+      module1aPollTimer = null;
+      renderModule1aCompletion(job);
+      return;
+    }
+
+    if (status === 'error') {
+      if (module1aPollTimer) clearInterval(module1aPollTimer);
+      module1aPollTimer = null;
+      const message = job.message || 'Module 1A processing failed.';
+      log.textContent = 'Error: ' + message;
+      stopEstimatedProgressError(message);
+      return;
+    }
+
+    setProcessingState(
+      'running',
+      'MODULE 1A processing',
+      `${job.step || 'Processing'} · ${rowText}`,
+      timeText,
+      progress
+    );
+    log.textContent = `Processing...
+Stage: ${job.step || 'Processing'}
+Progress: ${progress}%
+Rows: ${rowText}
+Rule Set: ${job.rule_set || 'IPS'}
+Year: ${job.year || 'ALL'}`;
+  } catch (err) {
+    if (module1aPollTimer) clearInterval(module1aPollTimer);
+    module1aPollTimer = null;
+    log.textContent = 'Error: ' + err.message;
+    stopEstimatedProgressError(err.message);
+  }
+}
+
 form.onsubmit = async (e) => {
   e.preventDefault();
   download.classList.add('disabled');
   download.href = '#';
+
+  if (module1aPollTimer) clearInterval(module1aPollTimer);
+  module1aPollTimer = null;
 
   const quantityInput = document.getElementById('files');
   const laborInput = document.getElementById('laborFiles');
   const laborModeInput = document.getElementById('laborMode');
   const yearInput = document.getElementById('year');
 
-  const quantityFileCount = quantityInput ? quantityInput.files.length : 0;
-  const laborFileCount = laborInput ? laborInput.files.length : 0;
-  const fileCount = Math.max(1, quantityFileCount + laborFileCount);
-  startEstimatedProgress(fileCount);
+  setProcessingState(
+    'running',
+    'MODULE 1A uploading',
+    'Uploading files and creating background job. Please keep this page open.',
+    'Uploading',
+    2
+  );
 
-  log.textContent = 'Processing...\nReading Excel files → Merging work orders → Reading labor work orders → Filtering year → Annual output summary → Product Series Engine → Rule Master → Product Series Master → WIP decision → Excel export';
+  log.textContent = 'Uploading files...\nModule 1A will run as a background job and report actual progress from the server.';
 
   const fd = new FormData();
 
@@ -2674,34 +2769,19 @@ form.onsubmit = async (e) => {
   fd.append('year', yearInput ? yearInput.value : '');
 
   try {
-    const res = await fetch('/process', {method: 'POST', body: fd});
+    const res = await fetch('/module1a/process-job', {method: 'POST', body: fd});
     const data = await res.json();
     if (!data.ok) throw new Error(data.message || cmpT('processingFailed', 'Processing failed'));
 
-    const s = data.summary;
-    log.textContent = `Completed.\nRule Set: ${s.rule_set || 'IPS'}\nYear: ${s.year}\nUploaded files: ${s.files}\nLabor files: ${s.labor_files || 0}\nWork order rows: ${s.rows}\nSummary rows: ${s.annual_rows}\nTotal output: ${s.total_qty}\nTotal hours: ${s.total_hours || 0}\nWIP rows: ${s.wip_rows}`;
-    summary.innerHTML = `
-      <div class="metric"><b>Rule Set</b><span>${s.rule_set || 'IPS'}</span></div>
-      <div class="metric"><b>Year</b><span>${s.year}</span></div>
-      <div class="metric"><b>Uploaded Files</b><span>${s.files}</span></div>
-      <div class="metric"><b>Labor Files</b><span>${s.labor_files || 0}</span></div>
-      <div class="metric"><b>Work Order Rows</b><span>${s.rows}</span></div>
-      <div class="metric"><b>Summary Rows</b><span>${s.annual_rows}</span></div>
-      <div class="metric"><b>Total Output</b><span>${s.total_qty.toLocaleString()}</span></div>
-      <div class="metric"><b>Total Hours</b><span>${(s.total_hours || 0).toLocaleString()}</span></div>
-      <div class="metric"><b>WIP Rows</b><span>${s.wip_rows}</span></div>`;
-
-    download.href = data.download_url;
-    download.classList.remove('disabled');
-    stopEstimatedProgressSuccess();
-    refreshModule1EntryStatus();
+    const jobId = data.job_id;
+    setProcessingState('running', 'MODULE 1A queued', 'Background job created. Waiting for server progress.', 'Queued', 3);
+    await pollModule1AJob(jobId);
+    module1aPollTimer = setInterval(() => pollModule1AJob(jobId), 1500);
   } catch (err) {
     log.textContent = 'Error: ' + err.message;
     stopEstimatedProgressError(err.message);
   }
 };
-
-
 
 
 
