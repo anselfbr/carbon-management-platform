@@ -21,7 +21,7 @@ DATA_START_ROW = 3
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_FINAL_TEMPLATE_STYLE_PRESERVE_V2_20260709"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3_20260709"
 
 
 def _norm(value: Any) -> str:
@@ -629,8 +629,13 @@ def _extend_data_validation_sqref(data: bytes, max_row: int, max_col: int) -> by
             if m:
                 end_col = m.group(2).replace('$', '')
                 out_parts.append(f'{m.group(1)}3:{end_col}{max_row}')
-            else:
-                out_parts.append(part)
+                continue
+            single_m = re.match(r'^(\$?[A-Z]{1,3})\$?3$', part)
+            if single_m:
+                col = single_m.group(1).replace('$', '')
+                out_parts.append(f'{single_m.group(1)}3:{col}{max_row}')
+                continue
+            out_parts.append(part)
         return b'sqref="' + ' '.join(out_parts).encode("utf-8") + b'"'
     return re.sub(rb'sqref="([^"]+)"', repl, data)
 
@@ -716,7 +721,7 @@ def _write_template_applied_workbook(
             style_by_col=activity_style_by_col,
             formula_by_col=activity_formula_by_col,
             template_row_attrs=activity_row_attrs,
-            emit_empty_styles=True,
+            emit_empty_styles=False,
         )
         raw_count, raw_actual_width = _spool_sheet_rows_xml(
             raw_rows_iter,
@@ -726,12 +731,12 @@ def _write_template_applied_workbook(
             style_by_col=raw_style_by_col,
             formula_by_col=raw_formula_by_col,
             template_row_attrs=raw_row_attrs,
-            emit_empty_styles=True,
+            emit_empty_styles=False,
         )
         final_activity_width = max(int(activity_width), int(activity_actual_width))
         final_raw_width = max(int(raw_width), int(raw_actual_width))
 
-        with zipfile.ZipFile(template_path, "r") as zin, zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
+        with zipfile.ZipFile(template_path, "r") as zin, zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
             for item in zin.infolist():
                 name = item.filename
                 if item.is_dir():
@@ -933,7 +938,9 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         "performance_seconds": {"total": round(total_time, 3)},
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         "large_dataset_mode": True,
-        "template_strategy": "M2B/M2C lightweight intermediates; final M3 reapplies original Raw Material Bulk Template with row-style/data-validation preservation",
+        "template_strategy": "M2B/M2C lightweight intermediates; final M3 reapplies original Raw Material Bulk Template with compact value-cell styling and data-validation preservation",
+        "compact_template_write": True,
+        "empty_styled_cells_omitted": True,
         "final_template_filename": raw_material_template_path.name,
     }
 
@@ -1160,7 +1167,7 @@ def apply_ccl_factors_to_raw_material_bulk_package(
         with tempfile.TemporaryDirectory(prefix="cmp_module3_zip_") as tmpdir:
             tmpdir_path = Path(tmpdir)
             total_files = len(excel_members)
-            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
+            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
                 for file_idx, info in enumerate(excel_members, start=1):
                     original_name = Path(info.filename).name
                     input_file = tmpdir_path / f"input_{file_idx}_{original_name}"
@@ -1212,7 +1219,8 @@ def apply_ccl_factors_to_raw_material_bulk_package(
         "raw_material_bulk_file_filter": "include raw_material/activity_data_bulk workbooks; exclude supplier_bulk_create workbooks",
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         "large_dataset_mode": True,
-        "template_strategy": "M2B/M2C/M3 lightweight intermediates; final M3 applies original Raw Material Bulk Template via streaming OpenXML package writer" if raw_material_template_path else "write_only workbook; formal bulk columns; no full-template load",
+        "template_strategy": "M2B/M2C/M3 lightweight intermediates; final M3 applies original Raw Material Bulk Template via compact streaming OpenXML package writer" if raw_material_template_path else "write_only workbook; formal bulk columns; no full-template load",
+        "compact_template_write": bool(raw_material_template_path),
         "final_template_filename": Path(raw_material_template_path).name if raw_material_template_path else "",
         **totals,
     }
@@ -1539,7 +1547,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_FINAL_TEMPLATE_STYLE_PRESERVE_V2_20260709"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3_20260709"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 

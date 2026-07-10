@@ -528,7 +528,13 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
     try:
         report(1, "建立 CCL 係數對應工作", 45)
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, progress_callback=report, raw_material_template_path=raw_template_path)
-        summary["app_version"] = "CMP_MODULE3_FINAL_TEMPLATE_STYLE_PRESERVE_V2"
+        summary["app_version"] = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3"
+        if output_path.exists():
+            try:
+                summary["output_file_size_bytes"] = output_path.stat().st_size
+                summary["output_file_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
+            except OSError:
+                pass
         _set_module3_ccl_job(
             job_id,
             status="success",
@@ -3055,7 +3061,13 @@ async def module3_apply_ccl_factors(
 
     try:
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, raw_material_template_path=raw_template_path)
-        summary["app_version"] = "CMP_MODULE3_FINAL_TEMPLATE_STYLE_PRESERVE_V2"
+        summary["app_version"] = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3"
+        if output_path.exists():
+            try:
+                summary["output_file_size_bytes"] = output_path.stat().st_size
+                summary["output_file_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
+            except OSError:
+                pass
         summary["source_filename"] = raw_path.name
         summary["source_label"] = _module2_raw_bulk_source_label(raw_path)
         summary["source_stage"] = _module2_raw_bulk_source_stage(raw_path)
