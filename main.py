@@ -2995,7 +2995,7 @@ async def module3_apply_ccl_factors_job(
         return JSONResponse({"ok": False, "message": "CCL 係數組配表 請上傳 Excel 檔案"}, status_code=400)
 
     ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_mapping_file.filename).name}"
-    output_path = OUTPUT_DIR / (f"module3_ccl_factor_filled_{token}.zip" if raw_path.suffix.lower() == ".zip" else f"module3_ccl_factor_filled_{token}.xlsx")
+    output_path = OUTPUT_DIR / f"module3_ccl_factor_filled_{token}.zip"
     ccl_path.write_bytes(await ccl_mapping_file.read())
 
     _set_module3_ccl_job(
@@ -3056,7 +3056,7 @@ async def module3_apply_ccl_factors(
         return JSONResponse({"ok": False, "message": "CCL 係數組配表 請上傳 Excel 檔案"}, status_code=400)
 
     ccl_path = UPLOAD_DIR / f"module3_ccl_mapping_{token}_{Path(ccl_mapping_file.filename).name}"
-    output_path = OUTPUT_DIR / (f"module3_ccl_factor_filled_{token}.zip" if raw_path.suffix.lower() == ".zip" else f"module3_ccl_factor_filled_{token}.xlsx")
+    output_path = OUTPUT_DIR / f"module3_ccl_factor_filled_{token}.zip"
     ccl_path.write_bytes(await ccl_mapping_file.read())
 
     try:
