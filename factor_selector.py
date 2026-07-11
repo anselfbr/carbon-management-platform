@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AB_AD_FORMULA_PRESERVE_V1_20260711"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AG_FORMULA_PRESERVE_V1_20260711"
 
 
 def _norm(value: Any) -> str:
@@ -505,29 +505,24 @@ def _copy_matching_value_to_target(target_row: list[Any], target_col: int | None
 
 
 
-# M3 final output should keep the third-party template hidden helper formulas
-# for these columns.  The visible columns (E/H/L) are written by the platform,
-# while AA/AB/AD must remain formulas so the template can convert display values
-# into internal upload keys (for example, Bill of Materials (BOM) -> BOM).
-_M3_ACTIVITY_HELPER_FORMULA_KEYS_TO_PRESERVE = {
-    "document_type",
-    "activity_data_unit",
-    "data_source",
-}
-_M3_ACTIVITY_HELPER_FORMULA_FALLBACK_COLS_TO_PRESERVE = {27, 28, 30}  # AA, AB, AD
+# M3 final output should keep the third-party template hidden helper formulas.
+# The visible A~Z columns are written by the platform, while AA~AG are template
+# helper columns.  If the official template has formulas in AA~AG row 3, preserve
+# and extend those formulas instead of copying static values from source files.
+_M3_ACTIVITY_HELPER_FORMULA_COL_RANGE = range(27, 34)  # AA~AG
 
 
 def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activity_headers: list[list[Any]], width: int) -> set[int]:
-    """Return hidden helper columns whose row-3 template formulas must survive.
+    """Return AA~AG helper columns whose row-3 template formulas must survive.
 
-    Previous compact/split output could copy static values into AA/AB/AD from the
-    source workbook.  Once a value exists, _manual_row_xml correctly emits that
-    value and does not emit the template formula.  Clearing these specific cells
-    before XML spooling lets the original formula be extended row-by-row.
+    Compact/split output may receive static values in hidden helper columns from
+    M2B/M2C source workbooks. Once a static value exists, _manual_row_xml emits
+    that value and skips the template formula. Clearing AA~AG cells that have
+    formulas in the official template lets the original formulas be extended
+    row-by-row, matching the behavior of manually pasting data into the template.
     """
     preserve: set[int] = set()
     width = int(width or _max_header_width(target_activity_headers) or 1)
-    row1 = target_activity_headers[0] if target_activity_headers else []
 
     def has_formula(col_idx: int) -> bool:
         try:
@@ -536,19 +531,14 @@ def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activit
             value = None
         return isinstance(value, str) and value.startswith("=")
 
-    for col_idx in range(1, width + 1):
-        label = row1[col_idx - 1] if col_idx - 1 < len(row1) else None
-        if _norm(label) in _M3_ACTIVITY_HELPER_FORMULA_KEYS_TO_PRESERVE and has_formula(col_idx):
-            preserve.add(col_idx)
-
-    for col_idx in _M3_ACTIVITY_HELPER_FORMULA_FALLBACK_COLS_TO_PRESERVE:
+    for col_idx in _M3_ACTIVITY_HELPER_FORMULA_COL_RANGE:
         if col_idx <= width and has_formula(col_idx):
             preserve.add(int(col_idx))
     return preserve
 
 
 def _clear_preserved_formula_cells(row_values: list[Any], formula_cols: set[int]) -> None:
-    """Clear selected helper cells so _manual_row_xml emits template formulas."""
+    """Clear AA~AG helper cells so _manual_row_xml emits template formulas."""
     if not formula_cols:
         return
     for col_idx in formula_cols:
@@ -1835,7 +1825,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AB_AD_FORMULA_PRESERVE_V1_20260711"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AG_FORMULA_PRESERVE_V1_20260711"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
