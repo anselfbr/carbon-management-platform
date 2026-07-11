@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AG_FORMULA_PRESERVE_V1_20260711"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AG_AA_FALLBACK_FORMULA_V1_20260711"
 
 
 def _norm(value: Any) -> str:
@@ -509,7 +509,16 @@ def _copy_matching_value_to_target(target_row: list[Any], target_col: int | None
 # The visible A~Z columns are written by the platform, while AA~AG are template
 # helper columns.  If the official template has formulas in AA~AG row 3, preserve
 # and extend those formulas instead of copying static values from source files.
+# Some template variants have lost the AA3 document_type helper formula during
+# upstream save/export.  In that case we must rebuild AA from the official
+# Document Type dropdown mapping instead of leaving AA blank.
 _M3_ACTIVITY_HELPER_FORMULA_COL_RANGE = range(27, 34)  # AA~AG
+_M3_DOCUMENT_TYPE_HELPER_COL = 27  # AA
+_M3_DOCUMENT_TYPE_HELPER_KEY = "document_type"
+_M3_DOCUMENT_TYPE_HELPER_FORMULA_XML = (
+    b"<f>IF(E3=\"\",\"\",INDEX('Dropdown Values'!$B$2:$B$5,"
+    b"MATCH(E3,'Dropdown Values'!$A$2:$A$5,0)))</f>"
+)
 
 
 def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activity_headers: list[list[Any]], width: int) -> set[int]:
@@ -534,6 +543,21 @@ def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activit
     for col_idx in _M3_ACTIVITY_HELPER_FORMULA_COL_RANGE:
         if col_idx <= width and has_formula(col_idx):
             preserve.add(int(col_idx))
+
+    # If AA3 is missing in the template variant, still preserve/rebuild it when
+    # AA is the document_type helper column.  Without this, the final workbook
+    # keeps AA blank and third-party parsers may fail to read Document Type even
+    # though visible E contains "Bill of Materials (BOM)".
+    aa_idx = _M3_DOCUMENT_TYPE_HELPER_COL
+    if aa_idx <= width:
+        header_key = ""
+        try:
+            if target_activity_headers and len(target_activity_headers[0]) >= aa_idx:
+                header_key = _norm(target_activity_headers[0][aa_idx - 1])
+        except Exception:
+            header_key = ""
+        if header_key == _norm(_M3_DOCUMENT_TYPE_HELPER_KEY):
+            preserve.add(aa_idx)
     return preserve
 
 
@@ -827,6 +851,15 @@ def _write_template_applied_workbook(
         _, activity_inside, _, _ = _split_sheet_xml(activity_template_xml_peek)
         _, raw_inside, _, _ = _split_sheet_xml(raw_template_xml_peek)
         activity_style_by_col, activity_formula_by_col, activity_row_attrs = _template_row_format(activity_inside, DATA_START_ROW, activity_width)
+        # Some production templates may contain AB~AG formulas but have AA3
+        # accidentally blank. Rebuild only the official AA document_type helper
+        # formula so the hidden key resolves from visible E, matching manual
+        # paste behavior in the third-party template.
+        if (
+            activity_width >= _M3_DOCUMENT_TYPE_HELPER_COL
+            and _M3_DOCUMENT_TYPE_HELPER_COL not in activity_formula_by_col
+        ):
+            activity_formula_by_col[_M3_DOCUMENT_TYPE_HELPER_COL] = _M3_DOCUMENT_TYPE_HELPER_FORMULA_XML
         raw_style_by_col, raw_formula_by_col, raw_row_attrs = _template_row_format(raw_inside, DATA_START_ROW, raw_width)
         activity_count, activity_actual_width = _spool_sheet_rows_xml(
             activity_rows_iter,
@@ -1825,7 +1858,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AG_FORMULA_PRESERVE_V1_20260711"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AG_AA_FALLBACK_FORMULA_V1_20260711"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 

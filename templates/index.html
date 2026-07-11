@@ -843,7 +843,8 @@
                 <label for="module2aBomFiles">上傳標準 BOM 檔案</label>
                 <input id="module2aBomFiles" name="module2a_bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
 
-                <div id="module2aStep1Source" class="module3-source-card">
+                <div id="module2aStep1Source" class="module3-source-card source-card-checkable">
+                  <span id="module2aStep1SourceCheck" class="source-card-check" aria-label="已成功取得來源檔案" title="已成功取得來源檔案">✓</span>
                   <b>引用 Module 1A 年度產品產量與分類結果</b>
                   <p id="module2aStep1SourceText">來源：Module 1A 年度產品產量與分類結果檢查中...</p>
                 </div>
@@ -1352,6 +1353,8 @@ const bomProgressBar = document.getElementById('bomProgressBar');
 const bomLog = document.getElementById('bomLog');
 const bomStep1SourceText = document.getElementById('bomStep1SourceText');
 const module2aStep1SourceText = document.getElementById('module2aStep1SourceText');
+const module2aStep1SourceCard = document.getElementById('module2aStep1Source');
+const module2aStep1SourceCheck = document.getElementById('module2aStep1SourceCheck');
 const module2bStep1SourceText = document.getElementById('module2bStep1SourceText');
 const module2bTotalUsageSourceText = document.getElementById('module2bTotalUsageSourceText');
 const module2cStep1SourceText = document.getElementById('module2cStep1SourceText');
@@ -1927,12 +1930,16 @@ async function refreshBomStep1Source() {
     const sourceText = `來源：Module 1A 年度產品產量與分類結果｜檔案：${filename}${cmpSourceMetaText(data)}`;
     if (bomStep1SourceText) bomStep1SourceText.textContent = sourceText;
     if (module2aStep1SourceText) module2aStep1SourceText.textContent = sourceText;
+    if (module2aStep1SourceCard) module2aStep1SourceCard.classList.add('source-ready');
+    if (module2aStep1SourceCheck) module2aStep1SourceCheck.setAttribute('aria-hidden', 'false');
     if (module2bStep1SourceText) module2bStep1SourceText.textContent = sourceText;
     if (module2cStep1SourceText) module2cStep1SourceText.textContent = sourceText;
   } catch (err) {
     const message = err.message || '尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。';
     if (bomStep1SourceText) bomStep1SourceText.textContent = message;
     if (module2aStep1SourceText) module2aStep1SourceText.textContent = message;
+    if (module2aStep1SourceCard) module2aStep1SourceCard.classList.remove('source-ready');
+    if (module2aStep1SourceCheck) module2aStep1SourceCheck.setAttribute('aria-hidden', 'true');
     if (module2bStep1SourceText) module2bStep1SourceText.textContent = message;
     if (module2cStep1SourceText) module2cStep1SourceText.textContent = message;
   }
@@ -3423,6 +3430,70 @@ ruleForm.onsubmit = async (e) => {
   });
 
   refreshModule2cSources();
+})();
+
+
+// Unified source-file success indicators for Module 1 through Module 3A.
+// A green check appears when a source-status line confirms an actual filename.
+(function initCmpSourceReadyIndicators() {
+  const sourceTextIds = [
+    'module1EntryM1aSourceText',
+    'module1EntryM1bSourceText',
+    'bulkStep1SourceText',
+    'bulkM2aRollupSourceText',
+    'module2aStep1SourceText',
+    'module2bStep1SourceText',
+    'module2bTotalUsageSourceText',
+    'module2cStep1SourceText',
+    'module2cRawBulkSourceText',
+    'bomStep1SourceText',
+    'module3RawBulkSourceText',
+  ];
+
+  const failureWords = [
+    '檢查中', '尚未', '未找到', '無法', '失敗', '錯誤',
+    '請先', '才需要', '不需要', 'Checking', 'Not found', 'Error', 'Failed'
+  ];
+
+  function ensureCheck(card) {
+    if (!card) return null;
+    card.classList.add('source-card-checkable');
+    let check = card.querySelector(':scope > .source-card-check');
+    if (!check) {
+      check = document.createElement('span');
+      check.className = 'source-card-check';
+      check.textContent = '✓';
+      check.setAttribute('aria-label', '已成功取得來源檔案');
+      check.setAttribute('title', '已成功取得來源檔案');
+      check.setAttribute('aria-hidden', 'true');
+      card.insertBefore(check, card.firstChild);
+    }
+    return check;
+  }
+
+  function isReadyText(text) {
+    const normalized = String(text || '').trim();
+    if (!normalized || failureWords.some(word => normalized.includes(word))) return false;
+    return normalized.includes('檔案：') || normalized.includes('File:');
+  }
+
+  function update(textNode) {
+    if (!textNode) return;
+    const card = textNode.closest('.module3-source-card');
+    const check = ensureCheck(card);
+    if (!card || !check) return;
+    const ready = isReadyText(textNode.textContent);
+    card.classList.toggle('source-ready', ready);
+    check.setAttribute('aria-hidden', ready ? 'false' : 'true');
+  }
+
+  sourceTextIds.forEach(id => {
+    const textNode = document.getElementById(id);
+    if (!textNode) return;
+    update(textNode);
+    const observer = new MutationObserver(() => update(textNode));
+    observer.observe(textNode, { childList: true, characterData: true, subtree: true });
+  });
 })();
 
 </script>

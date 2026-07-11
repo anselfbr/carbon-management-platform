@@ -2772,3 +2772,39 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Unified M1–M3A source-ready indicator: visually confirms that a referenced source file was found. */
+.source-card-checkable {
+  position: relative;
+  padding-top: 40px;
+}
+.source-card-check {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #16a34a;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 4px 10px rgba(22, 163, 74, 0.24);
+  opacity: 0;
+  transform: scale(0.75);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+.source-card-checkable.source-ready {
+  border-color: rgba(22, 163, 74, 0.42);
+  background: rgba(240, 253, 244, 0.94);
+}
+.source-card-checkable.source-ready .source-card-check {
+  opacity: 1;
+  transform: scale(1);
+}
