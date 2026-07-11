@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SPLIT_UPLOAD_V5_20260709"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AB_AD_FORMULA_PRESERVE_V1_20260711"
 
 
 def _norm(value: Any) -> str:
@@ -504,6 +504,75 @@ def _copy_matching_value_to_target(target_row: list[Any], target_col: int | None
         target_row[target_col - 1] = _row_value(source_values, src_col)
 
 
+
+# M3 final output should keep the third-party template hidden helper formulas
+# for these columns.  The visible columns (E/H/L) are written by the platform,
+# while AA/AB/AD must remain formulas so the template can convert display values
+# into internal upload keys (for example, Bill of Materials (BOM) -> BOM).
+_M3_ACTIVITY_HELPER_FORMULA_KEYS_TO_PRESERVE = {
+    "document_type",
+    "activity_data_unit",
+    "data_source",
+}
+_M3_ACTIVITY_HELPER_FORMULA_FALLBACK_COLS_TO_PRESERVE = {27, 28, 30}  # AA, AB, AD
+
+
+def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activity_headers: list[list[Any]], width: int) -> set[int]:
+    """Return hidden helper columns whose row-3 template formulas must survive.
+
+    Previous compact/split output could copy static values into AA/AB/AD from the
+    source workbook.  Once a value exists, _manual_row_xml correctly emits that
+    value and does not emit the template formula.  Clearing these specific cells
+    before XML spooling lets the original formula be extended row-by-row.
+    """
+    preserve: set[int] = set()
+    width = int(width or _max_header_width(target_activity_headers) or 1)
+    row1 = target_activity_headers[0] if target_activity_headers else []
+
+    def has_formula(col_idx: int) -> bool:
+        try:
+            value = tpl_activity_ws.cell(DATA_START_ROW, int(col_idx)).value
+        except Exception:
+            value = None
+        return isinstance(value, str) and value.startswith("=")
+
+    for col_idx in range(1, width + 1):
+        label = row1[col_idx - 1] if col_idx - 1 < len(row1) else None
+        if _norm(label) in _M3_ACTIVITY_HELPER_FORMULA_KEYS_TO_PRESERVE and has_formula(col_idx):
+            preserve.add(col_idx)
+
+    for col_idx in _M3_ACTIVITY_HELPER_FORMULA_FALLBACK_COLS_TO_PRESERVE:
+        if col_idx <= width and has_formula(col_idx):
+            preserve.add(int(col_idx))
+    return preserve
+
+
+def _clear_preserved_formula_cells(row_values: list[Any], formula_cols: set[int]) -> None:
+    """Clear selected helper cells so _manual_row_xml emits template formulas."""
+    if not formula_cols:
+        return
+    for col_idx in formula_cols:
+        if 1 <= int(col_idx) <= len(row_values):
+            row_values[int(col_idx) - 1] = None
+
+
+def _force_full_calc_on_load(data: bytes) -> bytes:
+    """Ask Excel to recalculate preserved formulas when the workbook opens."""
+    calc_attrs = b' calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"'
+    if b"<calcPr" not in data:
+        return data.replace(b"</workbook>", b"<calcPr" + calc_attrs + b"/></workbook>", 1)
+
+    def repl(match: re.Match[bytes]) -> bytes:
+        tag = match.group(0)
+        for attr in (b"calcMode", b"fullCalcOnLoad", b"forceFullCalc"):
+            tag = re.sub(attr + rb'="[^"]*"', b"", tag)
+        if tag.endswith(b"/>"):
+            return tag[:-2].rstrip() + calc_attrs + b"/>"
+        return tag[:-1].rstrip() + calc_attrs + b">"
+
+    return re.sub(rb"<calcPr\b[^>]*/?>", repl, data, count=1)
+
+
 def _sheet_paths_by_name_from_xlsx(path: str | Path) -> dict[str, str]:
     ns_main = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     ns_rel = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
@@ -807,6 +876,8 @@ def _write_template_applied_workbook(
                     data = _remove_calc_chain_content_types(data)
                 elif name == "xl/_rels/workbook.xml.rels":
                     data = _remove_calc_chain_rels(data)
+                elif name == "xl/workbook.xml":
+                    data = _force_full_calc_on_load(data)
                 zout.writestr(item, data)
             activity_template_xml = zin.read(activity_sheet_path)
             raw_template_xml = zin.read(raw_sheet_path)
@@ -909,6 +980,11 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         raw_width = _max_header_width(target_raw_headers)
         target_activity_cols = {key: _find_col_in_header_values(target_activity_headers, aliases, required=False) for key, aliases in _ACTIVITY_SOURCE_ALIASES.items()}
         target_raw_cols = {key: _find_col_in_header_values(target_raw_headers, aliases, required=False) for key, aliases in _RAW_SOURCE_ALIASES.items()}
+        activity_helper_formula_cols_to_preserve = _activity_helper_formula_columns_to_preserve(
+            tpl_activity_ws,
+            target_activity_headers,
+            activity_width,
+        )
         source_activity_cols = _build_source_col_map(source_activity_headers, _ACTIVITY_SOURCE_ALIASES, _ACTIVITY_SOURCE_DEFAULT_COLS)
         source_raw_cols = _build_source_col_map(source_raw_headers, _RAW_SOURCE_ALIASES, _RAW_SOURCE_DEFAULT_COLS)
         source_exact = _build_exact_source_lookup(source_activity_headers)
@@ -1033,6 +1109,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 else:
                     unmatched += 1
 
+                _clear_preserved_formula_cells(out, activity_helper_formula_cols_to_preserve)
                 activity_chunk.append(out)
                 written_rows += 1
                 if normalized_material and normalized_material not in material_keys_seen:
@@ -1758,7 +1835,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SPLIT_UPLOAD_V5_20260709"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AB_AD_FORMULA_PRESERVE_V1_20260711"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
