@@ -3186,6 +3186,7 @@ select:focus {
   border-radius: 0;
   max-height: 180px;
   background: #0f172a;
+  color: #ffffff;
 }
 
 @media (max-width: 1180px) {
