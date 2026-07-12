@@ -63,6 +63,10 @@ MODULE1A_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 MODULE1A_JOBS: Dict[str, Dict[str, Any]] = {}
 MODULE1A_JOB_DIR = OUTPUT_DIR / "module1a_jobs"
 MODULE1A_JOB_DIR.mkdir(parents=True, exist_ok=True)
+MODULE1B_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+MODULE1B_JOBS: Dict[str, Dict[str, Any]] = {}
+MODULE1B_JOB_DIR = OUTPUT_DIR / "module1b_jobs"
+MODULE1B_JOB_DIR.mkdir(parents=True, exist_ok=True)
 MODULE2A_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 MODULE2B_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 MODULE2C_EXECUTOR = ThreadPoolExecutor(max_workers=1)
@@ -146,6 +150,40 @@ def _get_module1a_job(job_id: str) -> Dict[str, Any] | None:
             loaded = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 MODULE1A_JOBS[job_id] = loaded
+                return loaded
+        except Exception:
+            traceback.print_exc()
+    return None
+
+
+def _module1b_job_path(job_id: str) -> Path:
+    return MODULE1B_JOB_DIR / f"{job_id}.json"
+
+
+def _set_module1b_job(job_id: str, **updates: Any) -> None:
+    job = MODULE1B_JOBS.setdefault(job_id, {})
+    job.update(updates)
+    job["job_id"] = job_id
+    job["last_heartbeat"] = _cmp_now_iso()
+    try:
+        _module1b_job_path(job_id).write_text(
+            json.dumps(_json_safe_job_value(job), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        traceback.print_exc()
+
+
+def _get_module1b_job(job_id: str) -> Dict[str, Any] | None:
+    job = MODULE1B_JOBS.get(job_id)
+    if job:
+        return job
+    path = _module1b_job_path(job_id)
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                MODULE1B_JOBS[job_id] = loaded
                 return loaded
         except Exception:
             traceback.print_exc()
@@ -2533,6 +2571,183 @@ async def process(request: Request):
 # Step 2 · Batch Data Formatting
 # Module 1A annual output/classification + Bulk Template -> Formatted Product Activity Bulk
 # =========================================================
+def _run_module1b_bulk_job(
+    job_id: str,
+    step1_path: Path,
+    template_path: Path,
+    working_hour_source: str,
+    bom_structure_path: Path | None,
+    working_hour_rollup_path: Path | None,
+    step1_source_mode: str,
+) -> None:
+    started_at = datetime.now(CMP_TIMEZONE)
+
+    def report(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
+        elapsed_seconds = max(1, int((datetime.now(CMP_TIMEZONE) - started_at).total_seconds()))
+        current_progress = max(0, min(100, int(progress or 0)))
+        remaining_seconds = None
+        if 1 <= current_progress < 100:
+            remaining_seconds = int(elapsed_seconds * max(0, 100 - current_progress) / current_progress)
+        _set_module1b_job(
+            job_id,
+            status="running",
+            step=step,
+            progress=current_progress,
+            processed_rows=int(processed or 0),
+            total_rows=int(total or 0),
+            elapsed_seconds=elapsed_seconds,
+            remaining_seconds=remaining_seconds,
+            **extra,
+        )
+
+    try:
+        _set_module1b_job(
+            job_id,
+            status="running",
+            step="準備產出 Product Activity Bulk",
+            progress=1,
+            processed_rows=0,
+            total_rows=0,
+            started_at=_cmp_now_iso(),
+            source_filename=step1_path.name,
+            template_filename=template_path.name,
+            working_hour_source=working_hour_source,
+        )
+        summary = generate_product_activity_bulk_files_by_site_zip(
+            step1_output_path=step1_path,
+            bulk_template_path=template_path,
+            output_dir=OUTPUT_DIR,
+            token=job_id,
+            working_hour_source=working_hour_source,
+            bom_structure_path=bom_structure_path,
+            working_hour_rollup_path=working_hour_rollup_path,
+            progress_callback=report,
+        )
+        summary["module1_step1_source_mode"] = step1_source_mode
+        summary["module1_step1_source_filename"] = step1_path.name if step1_path else ""
+        summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}" if step1_path else ""
+        summary["module2a_working_hour_rollup_used"] = bool(working_hour_rollup_path and Path(working_hour_rollup_path).exists())
+        summary["module2a_working_hour_rollup_filename"] = Path(working_hour_rollup_path).name if working_hour_rollup_path else ""
+        summary["working_hour_source_rule"] = "Module 2A working_hour_rollup is required only when Working Hour Source = Include Semi-finished Working Hour."
+
+        output_filename = str(summary.get("output_filename") or "").strip()
+        generated_output_path = OUTPUT_DIR / output_filename if output_filename else None
+        if generated_output_path and generated_output_path.exists() and generated_output_path.suffix.lower() == ".zip":
+            shutil.copy2(generated_output_path, MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH)
+            summary["module1b_product_activity_bulk_latest"] = MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.name
+            summary["module1b_product_activity_bulk_latest_download_url"] = f"/download/{MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.name}"
+
+        activity_rows = int(summary.get("activity_rows", 0) or 0)
+        elapsed_seconds = max(1, int((datetime.now(CMP_TIMEZONE) - started_at).total_seconds()))
+        _set_module1b_job(
+            job_id,
+            status="success",
+            step="Product Activity Bulk 已完成",
+            progress=100,
+            processed_rows=activity_rows,
+            total_rows=activity_rows,
+            elapsed_seconds=elapsed_seconds,
+            remaining_seconds=0,
+            completed_at=_cmp_now_iso(),
+            output_filename=output_filename,
+            download_url=summary.get("download_url", f"/download/{output_filename}" if output_filename else ""),
+            summary=summary,
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        _set_module1b_job(
+            job_id,
+            status="error",
+            step="Product Activity Bulk 產出失敗",
+            progress=100,
+            message=str(exc),
+            error=str(exc),
+            completed_at=_cmp_now_iso(),
+        )
+
+
+@app.post("/module1b/generate-bulk-file-job")
+async def module1b_generate_bulk_file_job(request: Request):
+    try:
+        form = await request.form()
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": f"無法讀取上傳表單：{exc}"}, status_code=400)
+
+    template_file = form.get("template_file")
+    step1_file = form.get("step1_file")
+    working_hour_source = str(form.get("working_hour_source") or "direct").strip()
+
+    if not template_file or not getattr(template_file, "filename", None):
+        return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
+    template_filename = str(template_file.filename or "")
+    if not template_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
+
+    job_id = uuid.uuid4().hex[:10]
+    uploaded_step1_filename = str(getattr(step1_file, "filename", "") or "").strip() if step1_file else ""
+    if uploaded_step1_filename:
+        if not uploaded_step1_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+            return JSONResponse({"ok": False, "message": "Module 1A Output 請上傳 Excel 檔案"}, status_code=400)
+        step1_path = UPLOAD_DIR / f"step1_output_{job_id}_{Path(uploaded_step1_filename).name}"
+        step1_path.write_bytes(await step1_file.read())
+        step1_source_mode = "uploaded"
+    else:
+        step1_path = _find_latest_module1_step1_output()
+        step1_source_mode = "latest"
+        if step1_path is None or not step1_path.exists():
+            return JSONResponse({"ok": False, "message": "尚未找到 Module 1A 年度產品產量與分類結果。請先完成 Module 1A。"}, status_code=400)
+
+    template_path = UPLOAD_DIR / f"bulk_template_{job_id}_{Path(template_filename).name}"
+    template_path.write_bytes(await template_file.read())
+
+    bom_structure_path = None
+    working_hour_rollup_path = None
+    if _is_include_semi_working_hour_source(working_hour_source):
+        if not LATEST_WORKING_HOUR_ROLLUP_PATH.exists():
+            return JSONResponse({
+                "ok": False,
+                "message": "選擇『包含半品工時』時需要 Module 2A working_hour_rollup。請先完成 Module 2A；若只使用直接工時，請將 Working Hour Source 改為 Direct Working Hour。",
+            }, status_code=400)
+        working_hour_rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH
+        bom_structure_path = LATEST_BOM_STRUCTURE_PATH if LATEST_BOM_STRUCTURE_PATH.exists() else None
+
+    _set_module1b_job(
+        job_id,
+        status="queued",
+        step="Product Activity Bulk 工作已建立，等待背景處理",
+        progress=0,
+        processed_rows=0,
+        total_rows=0,
+        created_at=_cmp_now_iso(),
+        source_filename=step1_path.name,
+        template_filename=template_path.name,
+        working_hour_source=working_hour_source,
+    )
+    MODULE1B_EXECUTOR.submit(
+        _run_module1b_bulk_job,
+        job_id,
+        step1_path,
+        template_path,
+        working_hour_source,
+        bom_structure_path,
+        working_hour_rollup_path,
+        step1_source_mode,
+    )
+    return {"ok": True, "job_id": job_id, "status_url": f"/module1b/generate-bulk-file-job/{job_id}"}
+
+
+@app.get("/module1b/generate-bulk-file-job/{job_id}")
+def module1b_get_generate_bulk_file_job(job_id: str):
+    job = _get_module1b_job(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "message": "找不到 Module 1B job，可能已被清除或服務重啟前未寫入狀態。"}, status_code=404)
+    response = dict(job)
+    response["ok"] = True
+    response["job"] = dict(job)
+    return response
+
+
 @app.post("/generate-bulk-file")
 async def generate_bulk_file(
     template_file: UploadFile = File(...),

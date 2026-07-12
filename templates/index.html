@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Data Integration Platform (DIP)</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260712-auto-v5" />
+  <link rel="stylesheet" href="/static/style.css?v=20260712-auto-v7" />
 
   <style>
     .rule-import-status {
@@ -3614,8 +3614,33 @@ ruleForm.onsubmit = async (e) => {
   }
   function setState(mode, title, text, progress) {
     statusBox.classList.remove('idle','running','success','error'); statusBox.classList.add(mode);
+    // Runtime status must not be overwritten by the initial i18n wording.
+    statusTitle.removeAttribute('data-i18n');
+    statusText.removeAttribute('data-i18n');
     statusTitle.textContent=title; statusText.textContent=text; statusTime.textContent=`${Math.round(progress)}%`;
     progressBar.style.width=`${Math.max(0,Math.min(100,progress))}%`;
+  }
+  function automationActionLabel(stepText='') {
+    const value=String(stepText||'').toLowerCase();
+    if (/(read|load|import|scan|讀取|載入|匯入|解析)/i.test(value)) return cmpT('automationDataReading','資料讀取');
+    if (/(write|save|export|generate|package|zip|寫入|儲存|產出|輸出|封裝)/i.test(value)) return cmpT('automationDataWriting','資料寫入');
+    if (/(map|match|mapping|對應|比對|匹配)/i.test(value)) return cmpT('automationDataMapping','資料對應');
+    return cmpT('automationDataProcessing','資料處理');
+  }
+  function automationJobDetail(job={}) {
+    const stepText=String(job.step||job.message||cmpT('automationStageRunning','執行中')).trim();
+    const processed=Number(job.processed_rows ?? job.processed ?? 0);
+    const total=Number(job.total_rows ?? job.total ?? 0);
+    const action=automationActionLabel(stepText);
+    let countText='';
+    if (Number.isFinite(total) && total>0) {
+      countText=`${action} ${Math.max(0,processed).toLocaleString()} / ${total.toLocaleString()} ${cmpT('automationRowsUnit','筆')}`;
+    } else if (Number.isFinite(processed) && processed>0) {
+      countText=`${action} ${processed.toLocaleString()} ${cmpT('automationRowsUnit','筆')}`;
+    }
+    const remaining=job.remaining_seconds!=null && Number(job.remaining_seconds)>=0
+      ? cmpRemainingText(Number(job.remaining_seconds)) : '';
+    return [stepText,countText,remaining].filter(Boolean).join('｜');
   }
   function write(message) { lines.push(`[${new Date().toLocaleTimeString()}] ${message}`); log.textContent=lines.join('\n'); log.scrollTop=log.scrollHeight; }
   async function json(res) { const raw=await res.text(); let data={}; try{data=raw?JSON.parse(raw):{}}catch(e){throw new Error(raw||`HTTP ${res.status}`)} if(!res.ok||data.ok===false) throw new Error(data.message||data.error||`HTTP ${res.status}`); return data; }
@@ -3644,10 +3669,11 @@ ruleForm.onsubmit = async (e) => {
     if (!jobId) throw new Error(`${stageName}：未取得工作編號`);
     const job = await poll(statusUrlBuilder(jobId), unwrap, (j) => {
       const inner = Number(j.progress || 0);
-      setState('running', stageName, j.step || j.message || cmpT('automationStageRunning', '執行中'), ((index + inner / 100) / steps.length) * 100);
+      setState('running', stageName, automationJobDetail(j), ((index + inner / 100) / steps.length) * 100);
     });
     renderSteps(-1, index + 1);
-    setState('running', stageName, cmpT('automationStageCompleted', '已完成'), ((index + 1) / steps.length) * 100);
+    const completedDetail=automationJobDetail(job);
+    setState('running', stageName, completedDetail || cmpT('automationStageCompleted', '已完成'), ((index + 1) / steps.length) * 100);
     write(`${stageName}：完成`);
     return job;
   }
@@ -3661,9 +3687,10 @@ ruleForm.onsubmit = async (e) => {
       current=1; fd=new FormData(); appendFiles(fd,'module2a_bom_files','autoBomFiles');
       await runJob(1, steps[1], '/module2a/standard-bom-total-usage-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
 
-      current=2; renderSteps(2,2); setState('running',cmpT(steps[2].key,steps[2].fallback),cmpT('automationGeneratingProductBulk','正在產出產品活動數據 Bulk。'),38); write(`${cmpT(steps[2].key,steps[2].fallback)}：開始`);
-      fd=new FormData(); fd.append('template_file',oneFile('autoProductTemplate')); fd.append('working_hour_source',document.getElementById('autoWorkingHourSource').value);
-      const m1b=await json(await fetch('/generate-bulk-file',{method:'POST',body:fd})); m1bDownload.href=m1b.download_url||m1b.summary?.download_url||m1b.summary?.module1b_product_activity_bulk_latest_download_url||'#'; m1bDownload.classList.toggle('disabled',!m1bDownload.href||m1bDownload.href.endsWith('#')); renderSteps(-1,3); setState('running',cmpT(steps[2].key,steps[2].fallback),cmpT('automationStageCompleted','已完成'),50); write(`${cmpT(steps[2].key,steps[2].fallback)}：完成`);
+      current=2; fd=new FormData(); fd.append('template_file',oneFile('autoProductTemplate')); fd.append('working_hour_source',document.getElementById('autoWorkingHourSource').value);
+      const m1b=await runJob(2, steps[2], '/module1b/generate-bulk-file-job', fd, id => `/module1b/generate-bulk-file-job/${encodeURIComponent(id)}`);
+      m1bDownload.href=m1b.download_url||m1b.summary?.download_url||m1b.summary?.module1b_product_activity_bulk_latest_download_url||'#';
+      m1bDownload.classList.toggle('disabled',!m1bDownload.href||m1bDownload.href.endsWith('#'));
 
       current=3; fd=new FormData(); fd.append('module2b_template_file',oneFile('autoRawTemplate'));
       await runJob(3, steps[3], '/module2b/raw-material-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
@@ -3681,6 +3708,6 @@ ruleForm.onsubmit = async (e) => {
 })();
 
 </script>
-<script src="/static/i18n.js?v=20260712-auto-v5"></script>
+<script src="/static/i18n.js?v=20260712-auto-v7"></script>
 </body>
 </html>

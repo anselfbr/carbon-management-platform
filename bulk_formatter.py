@@ -5,7 +5,7 @@ import tempfile
 import re
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Callable
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -233,6 +233,7 @@ def generate_product_activity_bulk_file(
     working_hour_source: str = "direct",
     bom_structure_path: str | Path | None = None,
     working_hour_rollup_path: str | Path | None = None,
+    progress_callback: Callable[..., None] | None = None,
 ) -> Dict[str, Any]:
     """
     方案 1：直接複製原始 Bulk Template，再只覆蓋指定分頁的指定儲存格內容。
@@ -248,12 +249,25 @@ def generate_product_activity_bulk_file(
     bulk_template_path = Path(bulk_template_path)
     output_path = Path(output_path)
 
+    def report(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            step,
+            processed=int(processed or 0),
+            total=int(total or 0),
+            progress=max(0, min(100, int(progress or 0))),
+            **extra,
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 重要：先完整複製原始 template，再在複製檔上寫入資料
     shutil.copy2(bulk_template_path, output_path)
 
     df = pd.read_excel(step1_output_path, sheet_name=SOURCE_SHEET_NAME, dtype=object)
+    source_total_rows = int(len(df))
+    report("讀取產品活動來源資料", source_total_rows, source_total_rows, 12)
 
     # Production Site is optional in old Step1 outputs.
     # If present, Step2 writes it into Activity Data and can split files by site.
@@ -355,7 +369,10 @@ def generate_product_activity_bulk_file(
     # Material Number / Product Name. Quantity and working hours are summed.
     consolidated_rows: dict[str, Dict[str, Any]] = {}
 
-    for _, row in df.iterrows():
+    for source_index, (_, row) in enumerate(df.iterrows(), start=1):
+        if source_index == source_total_rows or source_index % 1000 == 0:
+            consolidation_progress = 12 + int((source_index / max(1, source_total_rows)) * 28)
+            report("整理產品活動來源資料", source_index, source_total_rows, consolidation_progress)
         raw_product_name = row.get(material_col)
         if pd.isna(raw_product_name) or str(raw_product_name).strip() == "":
             skipped_blank_rows += 1
@@ -414,7 +431,11 @@ def generate_product_activity_bulk_file(
         source_valid_rows += 1
 
     rows_to_write: list[Dict[str, Any]] = []
-    for material_key, item in consolidated_rows.items():
+    consolidated_total = int(len(consolidated_rows))
+    for consolidated_index, (material_key, item) in enumerate(consolidated_rows.items(), start=1):
+        if consolidated_index == consolidated_total or consolidated_index % 1000 == 0:
+            validation_progress = 40 + int((consolidated_index / max(1, consolidated_total)) * 12)
+            report("檢查產品活動資料", consolidated_index, consolidated_total, validation_progress)
         production_site = str(item.get("production_site") or "").strip()
         direct_labor_hours = float(item.get("direct_labor_hours", 0) or 0)
         labor_hours = None
@@ -450,7 +471,11 @@ def generate_product_activity_bulk_file(
             "labor_hours": labor_hours,
         })
 
-    for item in rows_to_write:
+    rows_total = int(len(rows_to_write))
+    for write_index, item in enumerate(rows_to_write, start=1):
+        if write_index == rows_total or write_index % 1000 == 0:
+            write_progress = 52 + int((write_index / max(1, rows_total)) * 38)
+            report("寫入 Product Activity Bulk", write_index, rows_total, write_progress)
         product_name = item["product_name"]
         year = int(item["year"])
         qty = item["qty"]
@@ -488,7 +513,9 @@ def generate_product_activity_bulk_file(
         activity_row += 1
         products_row += 1
 
+    report("儲存 Product Activity Bulk", rows_total, rows_total, 95)
     wb.save(output_path)
+    report("Product Activity Bulk 已完成", rows_total, rows_total, 100)
 
     return {
         "source_rows": int(len(df)),
@@ -616,6 +643,7 @@ def generate_product_activity_bulk_files_by_site_zip(
     working_hour_source: str = "direct",
     bom_structure_path: str | Path | None = None,
     working_hour_rollup_path: str | Path | None = None,
+    progress_callback: Callable[..., None] | None = None,
 ) -> Dict[str, Any]:
     """Generate Bulk files by Production Site and package them into one ZIP."""
     import zipfile
@@ -626,7 +654,21 @@ def generate_product_activity_bulk_files_by_site_zip(
     output_dir.mkdir(parents=True, exist_ok=True)
     token = token or "bulk"
 
+    def report(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(
+            step,
+            processed=int(processed or 0),
+            total=int(total or 0),
+            progress=max(0, min(100, int(progress or 0))),
+            **extra,
+        )
+
+    report("讀取產品活動來源檔", 0, 0, 2)
     df = pd.read_excel(step1_output_path, sheet_name=SOURCE_SHEET_NAME, dtype=object)
+    source_total_rows = int(len(df))
+    report("讀取產品活動來源檔", source_total_rows, source_total_rows, 8)
     production_site_col = _find_optional_column(
         df,
         ["Production Site", "production site", "生產廠區", "廠區", "廠別"],
@@ -639,7 +681,17 @@ def generate_product_activity_bulk_files_by_site_zip(
 
         if production_site_col is None:
             output_path = tmpdir_path / f"formatted_product_activity_data_bulk_create_ALL_{token}.xlsx"
-            summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
+            summary = generate_product_activity_bulk_file(
+                step1_output_path,
+                bulk_template_path,
+                output_path,
+                working_hour_source=working_hour_source,
+                bom_structure_path=bom_structure_path,
+                working_hour_rollup_path=working_hour_rollup_path,
+                progress_callback=lambda step, processed=0, total=0, progress=0, **extra: report(
+                    step, processed, total, 8 + int(progress * 0.82), production_site="ALL", **extra
+                ),
+            )
             generated_files.append({
                 "production_site": "ALL",
                 "filename": output_path.name,
@@ -654,7 +706,8 @@ def generate_product_activity_bulk_files_by_site_zip(
                 sites = ["ALL"]
                 df[production_site_col] = "ALL"
 
-            for site in sites:
+            site_count = max(1, len(sites))
+            for site_index, site in enumerate(sites):
                 site_df = df[df[production_site_col] == site].copy()
                 safe_site = _sanitize_filename(site)
                 temp_step1 = tmpdir_path / f"step1_{safe_site}_{token}.xlsx"
@@ -663,7 +716,19 @@ def generate_product_activity_bulk_files_by_site_zip(
                 with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
                     site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
 
-                summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
+                stage_start = 8 + int((site_index / site_count) * 82)
+                stage_span = 82 / site_count
+                summary = generate_product_activity_bulk_file(
+                    temp_step1,
+                    bulk_template_path,
+                    output_path,
+                    working_hour_source=working_hour_source,
+                    bom_structure_path=bom_structure_path,
+                    working_hour_rollup_path=working_hour_rollup_path,
+                    progress_callback=lambda step, processed=0, total=0, progress=0, _site=site, _start=stage_start, _span=stage_span, **extra: report(
+                        f"{_site}｜{step}", processed, total, int(_start + (progress / 100) * _span), production_site=_site, **extra
+                    ),
+                )
                 generated_files.append({
                     "production_site": site,
                     "filename": output_path.name,
@@ -674,9 +739,11 @@ def generate_product_activity_bulk_files_by_site_zip(
         zip_name = f"formatted_product_activity_data_bulk_by_production_site_{token}.zip"
         zip_path = output_dir / zip_name
 
+        report("封裝 Product Activity Bulk ZIP", 0, len(generated_files), 92)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-            for item in generated_files:
+            for file_index, item in enumerate(generated_files, start=1):
                 z.write(item["path"], item["filename"])
+                report("封裝 Product Activity Bulk ZIP", file_index, len(generated_files), 92 + int((file_index / max(1, len(generated_files))) * 7))
 
     files_summary = [
         {
@@ -689,10 +756,13 @@ def generate_product_activity_bulk_files_by_site_zip(
         for item in generated_files
     ]
 
+    total_activity_rows = sum(item["activity_rows"] for item in files_summary)
+    report("Product Activity Bulk ZIP 已完成", total_activity_rows, total_activity_rows, 100)
+
     return {
         "split_by_production_site": len(generated_files) > 1,
         "production_site_count": len(generated_files),
-        "activity_rows": sum(item["activity_rows"] for item in files_summary),
+        "activity_rows": total_activity_rows,
         "product_rows": sum(item["product_rows"] for item in files_summary),
         "excluded_wip_rows": sum(item["excluded_wip_rows"] for item in files_summary),
         "files": files_summary,
