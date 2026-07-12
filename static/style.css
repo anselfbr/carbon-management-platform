@@ -3195,3 +3195,131 @@ select:focus {
     overflow: visible;
   }
 }
+
+
+/* Module 04 spacious layout v5: prevent form and progress panel from being squeezed */
+#automated-data-consolidation {
+  container-type: inline-size;
+}
+
+#automated-data-consolidation .automation-workspace {
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 24px !important;
+  align-items: start;
+}
+
+#automated-data-consolidation .automation-workspace > .card {
+  min-width: 0;
+  width: 100%;
+}
+
+#automated-data-consolidation .primary-card .section-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 20px;
+}
+
+#automated-data-consolidation .primary-card .section-title > div {
+  min-width: 0;
+}
+
+#automated-data-consolidation .primary-card .section-title h2 {
+  max-width: none;
+  line-height: 1.28;
+}
+
+#automated-data-consolidation .primary-card .section-title p:last-child {
+  max-width: 900px;
+  margin-right: 0;
+}
+
+#automated-data-consolidation .step-chip {
+  flex: 0 0 auto;
+  min-width: max-content;
+  width: auto;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  line-height: 1.25;
+}
+
+#automated-data-consolidation .automation-input-grid {
+  grid-template-columns: repeat(2, minmax(280px, 1fr)) !important;
+  column-gap: 24px !important;
+  row-gap: 18px !important;
+}
+
+#automated-data-consolidation .automation-input-grid > label {
+  min-width: 0;
+}
+
+#automated-data-consolidation .automation-status-card {
+  position: static !important;
+  top: auto;
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 28px;
+}
+
+#automated-data-consolidation .automation-status-heading {
+  align-items: center;
+}
+
+#automated-data-consolidation .automation-status-heading > div {
+  min-width: 0;
+}
+
+#automated-data-consolidation .automation-current-status {
+  margin-top: 18px;
+  padding: 18px 20px;
+}
+
+#automated-data-consolidation .automation-step-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 12px 14px !important;
+  margin-top: 18px;
+}
+
+#automated-data-consolidation .automation-step {
+  min-width: 0;
+  min-height: 64px;
+  padding: 12px 16px;
+}
+
+#automated-data-consolidation .automation-step > b {
+  overflow-wrap: anywhere;
+}
+
+#automated-data-consolidation .automation-log-panel {
+  margin-top: 18px;
+}
+
+@container (max-width: 860px) {
+  #automated-data-consolidation .automation-input-grid,
+  #automated-data-consolidation .automation-step-list {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  #automated-data-consolidation .primary-card .section-title {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #automated-data-consolidation .step-chip {
+    justify-self: start;
+  }
+}
+
+@container (max-width: 560px) {
+  #automated-data-consolidation .automation-status-heading {
+    align-items: flex-start;
+  }
+
+  #automated-data-consolidation .automation-current-status {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #automated-data-consolidation .automation-progress-percent {
+    justify-self: start;
+  }
+}
