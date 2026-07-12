@@ -301,7 +301,7 @@
         <button class="nav-item" type="button" data-main="pcf">
           <span class="module-index">4</span>
           <span class="nav-icon">♻</span>
-          <span class="nav-text"><b data-i18n="pcfCalculation">PCF Calculation</b></span>
+          <span class="nav-text"><b data-i18n="automatedDataConsolidation">Automated Data Consolidation</b></span>
         </button>
       </nav>
 
@@ -365,11 +365,58 @@
           <button class="dashboard-module-card" type="button" data-dashboard-target="pcf">
             <span class="module-number-box module-green"><em data-i18n="module">Module</em><b>04</b></span>
             <span class="module-card-copy">
-              <strong data-i18n="pcfCalculation">PCF Calculation</strong>
+              <strong data-i18n="automatedDataConsolidation">Automated Data Consolidation</strong>
               <i></i>
-              <small><span class="mini-icon">▥</span><span data-i18n="productCarbonFootprint">Product carbon footprint</span></small>
+              <small><span class="mini-icon">▥</span><span data-i18n="oneClickPipelineDesc">One-click M1 to M3A workflow</span></small>
             </span>
           </button>
+        </section>
+      </section>
+
+
+      <section id="automated-data-consolidation" class="page-section">
+        <section class="workspace automation-workspace">
+          <section class="card primary-card">
+            <div class="section-title">
+              <div>
+                <p class="section-eyebrow">MODULE 04</p>
+                <h2 data-i18n="automatedDataConsolidation">全自動化資料彙整</h2>
+                <p data-i18n="automationPageLead">上傳完整資料來源後，一鍵依序執行 M1A、M2A、M1B、M2B、M2C、M3A，最後提供 M1B 與 M3A Bulk 檔。</p>
+              </div>
+              <span class="step-chip" data-i18n="oneClickProcess">一鍵流程</span>
+            </div>
+
+            <form id="automationForm" class="form-panel automation-form" enctype="multipart/form-data">
+              <div class="automation-input-grid">
+                <label><span data-i18n="automationProductionFiles">M1A 生產數量工單</span><input id="autoProductionFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                <label><span data-i18n="automationLaborFiles">M1A 工時工單</span><input id="autoLaborFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple></label>
+                <label><span data-i18n="automationBomFiles">M2A 標準 BOM</span><input id="autoBomFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                <label><span data-i18n="automationProductTemplate">M1B Product Activity Bulk Template</span><input id="autoProductTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                <label><span data-i18n="automationRawTemplate">M2B Raw Material Bulk Template</span><input id="autoRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                <label><span data-i18n="automationSupplierFiles">M2C 供應商資料</span><input id="autoSupplierFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                <label><span data-i18n="automationCclFile">M3A CCL 係數組配表</span><input id="autoCclFile" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                <label><span data-i18n="businessUnitRuleSet">Business Unit Rule Set</span><select id="autoRuleSet"><option value="IPS" selected>IPS</option><option value="AE">AE</option><option value="PC_CE">PC&amp;CE</option></select></label>
+                <label><span data-i18n="laborAllocationSource">Labor Allocation Source</span><select id="autoLaborMode"><option value="both" data-i18n="automationLaborBoth" selected>Labor HR.Act + FOH-Others.Act</option><option value="labor_hr" data-i18n="automationLaborHrOnly">Labor HR.Act Only</option><option value="foh" data-i18n="automationFohOnly">FOH-Others.Act Only</option></select></label>
+                <label><span data-i18n="reportingYear">Reporting Year</span><input id="autoYear" type="number" placeholder="e.g. 2024" data-i18n-placeholder="yearPlaceholder"></label>
+                <label><span data-i18n="workingHourSource">Working Hour Source</span><select id="autoWorkingHourSource"><option value="direct" data-i18n="directWorkingHour">Direct Working Hour</option><option value="include_semi" data-i18n="includeSemiWorkingHour">Include Semi-finished Working Hour</option></select></label>
+              </div>
+              <button id="automationStartBtn" type="submit" class="btn-primary automation-start-btn"><span data-i18n="startAutomatedConsolidation">開始全自動化資料彙整</span></button>
+            </form>
+          </section>
+
+          <section class="card">
+            <div id="automationStatus" class="processing-status idle">
+              <div><b id="automationStatusTitle" data-i18n="automationReady">全自動化流程已就緒</b><p id="automationStatusText" data-i18n="automationReadyHint">選擇所有必要檔案後即可開始。</p></div>
+              <span id="automationStatusTime">0%</span>
+              <div class="progress-track"><div id="automationProgressBar" class="progress-bar" style="width:0%"></div></div>
+            </div>
+            <div id="automationSteps" class="automation-step-list"></div>
+            <pre id="automationLog" class="log-box">Ready.</pre>
+            <div id="automationDownloads" class="automation-downloads hidden">
+              <a id="automationM1bDownload" class="download disabled" href="#" data-i18n="downloadM1bResult">下載 M1B Product Activity Bulk</a>
+              <a id="automationM3aDownload" class="download disabled" href="#" data-i18n="downloadM3aResult">下載 M3A Raw Material Bulk</a>
+            </div>
+          </section>
         </section>
       </section>
 
@@ -1650,10 +1697,10 @@ const moduleMessages = {
     text: 'Section A provides the CCLibrary emission factor database, while Section B provides the Ecoinvent emission factor database.'
   },
   pcf: {
-    titleKey: 'pcfCalculation',
-    title: '4. PCF Calculation',
-    textKey: 'modulePcfNoticeText',
-    text: 'Reserved module. This area can be extended for product carbon footprint calculation.'
+    titleKey: 'automatedDataConsolidation',
+    title: '4. Automated Data Consolidation',
+    textKey: 'automationPageLead',
+    text: 'Upload all required files and run M1A through M3A in one guided workflow.'
   }
 };
 
@@ -2557,6 +2604,17 @@ document.querySelectorAll('.nav-item').forEach(btn => {
     }
     if (key === 'factor') {
       activateFactorPage();
+      return;
+    }
+    if (key === 'pcf') {
+      document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
+      document.getElementById('automated-data-consolidation').classList.add('active');
+      moduleNotice.classList.add('hidden');
+      setDynamicI18n(pageTitle, 'automatedDataConsolidation', 'Automated Data Consolidation');
+      setDynamicI18n(pageLead, 'automationPageLead', 'Upload all required files and run M1A through M3A in one guided workflow.');
+      pageLead.style.display = 'block';
+      cmpApplyI18n();
+      document.querySelector('.content').scrollTo({top: 0, behavior: 'smooth'});
       return;
     }
 
@@ -3493,6 +3551,86 @@ ruleForm.onsubmit = async (e) => {
     update(textNode);
     const observer = new MutationObserver(() => update(textNode));
     observer.observe(textNode, { childList: true, characterData: true, subtree: true });
+  });
+})();
+
+
+// Module 4 · Automated Data Consolidation
+(function initAutomatedDataConsolidation() {
+  const form = document.getElementById('automationForm');
+  if (!form) return;
+  const statusBox = document.getElementById('automationStatus');
+  const statusTitle = document.getElementById('automationStatusTitle');
+  const statusText = document.getElementById('automationStatusText');
+  const statusTime = document.getElementById('automationStatusTime');
+  const progressBar = document.getElementById('automationProgressBar');
+  const stepsBox = document.getElementById('automationSteps');
+  const log = document.getElementById('automationLog');
+  const startBtn = document.getElementById('automationStartBtn');
+  const downloads = document.getElementById('automationDownloads');
+  const m1bDownload = document.getElementById('automationM1bDownload');
+  const m3aDownload = document.getElementById('automationM3aDownload');
+  const steps = [
+    ['M1A', 'automationStepM1a', 'Work Order Processing'],
+    ['M2A', 'automationStepM2a', 'Standard BOM Total Usage'],
+    ['M1B', 'automationStepM1b', 'Product Activity Bulk'],
+    ['M2B', 'automationStepM2b', 'Raw Material Bulk'],
+    ['M2C', 'automationStepM2c', 'Supplier Mapping'],
+    ['M3A', 'automationStepM3a', 'CCL Factor Mapping & Split Bulk']
+  ];
+  let lines = [];
+
+  function renderSteps(activeIndex=-1, doneCount=0, failedIndex=-1) {
+    stepsBox.innerHTML = steps.map((s, i) => {
+      const state = i === failedIndex ? 'error' : (i < doneCount ? 'success' : (i === activeIndex ? 'running' : 'idle'));
+      const icon = state === 'success' ? '✓' : (state === 'error' ? '!' : (state === 'running' ? '↻' : '○'));
+      return `<div class="automation-step ${state}"><span>${icon}</span><b>${s[0]}</b><em data-i18n="${s[1]}">${s[2]}</em></div>`;
+    }).join('');
+  }
+  function setState(mode, title, text, progress) {
+    statusBox.classList.remove('idle','running','success','error'); statusBox.classList.add(mode);
+    statusTitle.textContent=title; statusText.textContent=text; statusTime.textContent=`${Math.round(progress)}%`;
+    progressBar.style.width=`${Math.max(0,Math.min(100,progress))}%`;
+  }
+  function write(message) { lines.push(`[${new Date().toLocaleTimeString()}] ${message}`); log.textContent=lines.join('\n'); log.scrollTop=log.scrollHeight; }
+  async function json(res) { const raw=await res.text(); let data={}; try{data=raw?JSON.parse(raw):{}}catch(e){throw new Error(raw||`HTTP ${res.status}`)} if(!res.ok||data.ok===false) throw new Error(data.message||data.error||`HTTP ${res.status}`); return data; }
+  async function poll(url, unwrapJob=false, onProgress=null) {
+    while(true){ await new Promise(r=>setTimeout(r,1200)); const data=await json(await fetch(url,{cache:'no-store'})); const job=unwrapJob?(data.job||{}):data; if(onProgress)onProgress(job); if(job.status==='success')return job; if(['failed','error'].includes(job.status))throw new Error(job.error||job.message||'Processing failed'); }
+  }
+  function appendFiles(fd,name,inputId){ Array.from(document.getElementById(inputId).files||[]).forEach(f=>fd.append(name,f)); }
+  function oneFile(inputId){ return document.getElementById(inputId).files[0]; }
+  async function runJob(index,label,startUrl,fd,statusUrlBuilder,unwrap=false){
+    renderSteps(index,index); setState('running',`${label} processing`,cmpT('automationRunningHint','The automated workflow is running. Do not close this page.'),(index/steps.length)*100); write(`Start ${label}`);
+    const start=await json(await fetch(startUrl,{method:'POST',body:fd})); const jobId=start.job_id; if(!jobId)throw new Error(`${label}: missing job_id`);
+    const job=await poll(statusUrlBuilder(jobId),unwrap,(j)=>{const inner=Number(j.progress||0);setState('running',`${label} processing`,j.step||j.message||'Processing',((index+inner/100)/steps.length)*100)});
+    write(`Completed ${label}`); return job;
+  }
+  renderSteps();
+  form.addEventListener('submit', async e=>{
+    e.preventDefault(); lines=[]; downloads.classList.add('hidden'); startBtn.disabled=true; let current=0;
+    try{
+      current=0; let fd=new FormData(); appendFiles(fd,'files','autoProductionFiles'); appendFiles(fd,'labor_files','autoLaborFiles'); fd.append('rule_set',document.getElementById('autoRuleSet').value); fd.append('labor_mode',document.getElementById('autoLaborMode').value); const year=document.getElementById('autoYear').value; if(year)fd.append('year',year);
+      await runJob(0,'M1A','/module1a/process-job',fd,id=>`/module1a/process-job/${encodeURIComponent(id)}`);
+
+      current=1; fd=new FormData(); appendFiles(fd,'module2a_bom_files','autoBomFiles');
+      await runJob(1,'M2A','/module2a/standard-bom-total-usage-job',fd,id=>`/module2/bom-job/${encodeURIComponent(id)}`);
+
+      current=2; renderSteps(2,2); setState('running','M1B processing','Generating Product Activity Bulk',38); write('Start M1B');
+      fd=new FormData(); fd.append('template_file',oneFile('autoProductTemplate')); fd.append('working_hour_source',document.getElementById('autoWorkingHourSource').value);
+      const m1b=await json(await fetch('/generate-bulk-file',{method:'POST',body:fd})); m1bDownload.href=m1b.download_url||m1b.summary?.download_url||m1b.summary?.module1b_product_activity_bulk_latest_download_url||'#'; m1bDownload.classList.toggle('disabled',!m1bDownload.href||m1bDownload.href.endsWith('#')); write('Completed M1B');
+
+      current=3; fd=new FormData(); fd.append('module2b_template_file',oneFile('autoRawTemplate'));
+      await runJob(3,'M2B','/module2b/raw-material-bulk-job',fd,id=>`/module2/bom-job/${encodeURIComponent(id)}`);
+
+      current=4; fd=new FormData(); appendFiles(fd,'module2c_supplier_files','autoSupplierFiles');
+      await runJob(4,'M2C','/module2c/supplier-mapping-bulk-job',fd,id=>`/module2/bom-job/${encodeURIComponent(id)}`);
+
+      current=5; fd=new FormData(); fd.append('ccl_mapping_file',oneFile('autoCclFile'));
+      const m3=await runJob(5,'M3A','/module3/apply-ccl-factors-job',fd,id=>`/module3/ccl-job/${encodeURIComponent(id)}`,true);
+      m3aDownload.href=m3.download_url||'#'; m3aDownload.classList.toggle('disabled',!m3.download_url);
+      renderSteps(-1,steps.length); setState('success',cmpT('automationCompleted','Automated consolidation completed'),cmpT('automationCompletedHint','M1B and M3A Bulk files are ready for download.'),100); downloads.classList.remove('hidden'); write('Pipeline completed successfully.');
+    }catch(err){ renderSteps(-1,current,current); setState('error',cmpT('automationFailed','Automated consolidation failed'),err.message||String(err),(current/steps.length)*100); write(`ERROR: ${err.message||err}`); }
+    finally{ startBtn.disabled=false; }
   });
 })();
 
