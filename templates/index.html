@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Data Integration Platform (DIP)</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=20260712-auto-v3" />
 
   <style>
     .rule-import-status {
@@ -381,20 +381,20 @@
               <div>
                 <p class="section-eyebrow">MODULE 04</p>
                 <h2 data-i18n="automatedDataConsolidation">全自動化資料彙整</h2>
-                <p data-i18n="automationPageLead">上傳完整資料來源後，一鍵依序執行 M1A、M2A、M1B、M2B、M2C、M3A，最後提供 M1B 與 M3A Bulk 檔。</p>
+                <p data-i18n="automationPageLead">上傳完整資料來源後，系統將依序完成工單彙整、標準 BOM 總用量、產品活動數據 Bulk、原物料 Bulk、供應商對應與 CCL 係數套用，最後提供兩類 Bulk 產出檔。</p>
               </div>
               <span class="step-chip" data-i18n="oneClickProcess">一鍵流程</span>
             </div>
 
             <form id="automationForm" class="form-panel automation-form" enctype="multipart/form-data">
               <div class="automation-input-grid">
-                <label><span data-i18n="automationProductionFiles">M1A 生產數量工單</span><input id="autoProductionFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
-                <label><span data-i18n="automationLaborFiles">M1A 工時工單</span><input id="autoLaborFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple></label>
-                <label><span data-i18n="automationBomFiles">M2A 標準 BOM</span><input id="autoBomFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
-                <label><span data-i18n="automationProductTemplate">M1B Product Activity Bulk Template</span><input id="autoProductTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
-                <label><span data-i18n="automationRawTemplate">M2B Raw Material Bulk Template</span><input id="autoRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
-                <label><span data-i18n="automationSupplierFiles">M2C 供應商資料</span><input id="autoSupplierFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
-                <label><span data-i18n="automationCclFile">M3A CCL 係數組配表</span><input id="autoCclFile" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                <label><span data-i18n="automationProductionFiles">生產數量工單</span><input id="autoProductionFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                <label><span data-i18n="automationLaborFiles">工時工單</span><input id="autoLaborFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple></label>
+                <label><span data-i18n="automationBomFiles">標準 BOM</span><input id="autoBomFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                <label><span data-i18n="automationProductTemplate">Product Activity Bulk Template</span><input id="autoProductTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                <label><span data-i18n="automationRawTemplate">Raw Material Bulk Template</span><input id="autoRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                <label><span data-i18n="automationSupplierFiles">供應商資料</span><input id="autoSupplierFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                <label><span data-i18n="automationCclFile">CCL 係數組配表</span><input id="autoCclFile" type="file" accept=".xlsx,.xls,.xlsm" required></label>
                 <label><span data-i18n="businessUnitRuleSet">Business Unit Rule Set</span><select id="autoRuleSet"><option value="IPS" selected>IPS</option><option value="AE">AE</option><option value="PC_CE">PC&amp;CE</option></select></label>
                 <label><span data-i18n="laborAllocationSource">Labor Allocation Source</span><select id="autoLaborMode"><option value="both" data-i18n="automationLaborBoth" selected>Labor HR.Act + FOH-Others.Act</option><option value="labor_hr" data-i18n="automationLaborHrOnly">Labor HR.Act Only</option><option value="foh" data-i18n="automationFohOnly">FOH-Others.Act Only</option></select></label>
                 <label><span data-i18n="reportingYear">Reporting Year</span><input id="autoYear" type="number" placeholder="e.g. 2024" data-i18n-placeholder="yearPlaceholder"></label>
@@ -413,8 +413,8 @@
             <div id="automationSteps" class="automation-step-list"></div>
             <pre id="automationLog" class="log-box">Ready.</pre>
             <div id="automationDownloads" class="automation-downloads hidden">
-              <a id="automationM1bDownload" class="download disabled" href="#" data-i18n="downloadM1bResult">下載 M1B Product Activity Bulk</a>
-              <a id="automationM3aDownload" class="download disabled" href="#" data-i18n="downloadM3aResult">下載 M3A Raw Material Bulk</a>
+              <a id="automationM1bDownload" class="download disabled" href="#" data-i18n="downloadM1bResult">下載 Product Activity Bulk</a>
+              <a id="automationM3aDownload" class="download disabled" href="#" data-i18n="downloadM3aResult">下載 Raw Material Bulk</a>
             </div>
           </section>
         </section>
@@ -3571,20 +3571,28 @@ ruleForm.onsubmit = async (e) => {
   const m1bDownload = document.getElementById('automationM1bDownload');
   const m3aDownload = document.getElementById('automationM3aDownload');
   const steps = [
-    ['M1A', 'automationStepM1a', 'Work Order Processing'],
-    ['M2A', 'automationStepM2a', 'Standard BOM Total Usage'],
-    ['M1B', 'automationStepM1b', 'Product Activity Bulk'],
-    ['M2B', 'automationStepM2b', 'Raw Material Bulk'],
-    ['M2C', 'automationStepM2c', 'Supplier Mapping'],
-    ['M3A', 'automationStepM3a', 'CCL Factor Mapping & Split Bulk']
+    { code: 'M1A', key: 'automationStepM1a', fallback: '工單資料彙整' },
+    { code: 'M2A', key: 'automationStepM2a', fallback: '標準 BOM 總用量' },
+    { code: 'M1B', key: 'automationStepM1b', fallback: '產品活動數據 Bulk' },
+    { code: 'M2B', key: 'automationStepM2b', fallback: '原物料 Bulk 寫入' },
+    { code: 'M2C', key: 'automationStepM2c', fallback: '供應商資料對應' },
+    { code: 'M3A', key: 'automationStepM3a', fallback: 'CCL 係數套用與 Bulk 切檔' }
   ];
   let lines = [];
 
   function renderSteps(activeIndex=-1, doneCount=0, failedIndex=-1) {
-    stepsBox.innerHTML = steps.map((s, i) => {
+    const stateKeys = {
+      idle: ['automationStageWaiting', '待執行'],
+      running: ['automationStageRunning', '執行中'],
+      success: ['automationStageCompleted', '已完成'],
+      error: ['automationStageFailed', '失敗']
+    };
+    stepsBox.innerHTML = steps.map((step, i) => {
       const state = i === failedIndex ? 'error' : (i < doneCount ? 'success' : (i === activeIndex ? 'running' : 'idle'));
       const icon = state === 'success' ? '✓' : (state === 'error' ? '!' : (state === 'running' ? '↻' : '○'));
-      return `<div class="automation-step ${state}"><span>${icon}</span><b>${s[0]}</b><em data-i18n="${s[1]}">${s[2]}</em></div>`;
+      const stateKey = stateKeys[state][0];
+      const stateFallback = stateKeys[state][1];
+      return `<div class="automation-step ${state}" data-stage="${step.code}"><span aria-hidden="true">${icon}</span><b data-i18n="${step.key}">${step.fallback}</b><em data-i18n="${stateKey}">${stateFallback}</em></div>`;
     }).join('');
   }
   function setState(mode, title, text, progress) {
@@ -3595,46 +3603,67 @@ ruleForm.onsubmit = async (e) => {
   function write(message) { lines.push(`[${new Date().toLocaleTimeString()}] ${message}`); log.textContent=lines.join('\n'); log.scrollTop=log.scrollHeight; }
   async function json(res) { const raw=await res.text(); let data={}; try{data=raw?JSON.parse(raw):{}}catch(e){throw new Error(raw||`HTTP ${res.status}`)} if(!res.ok||data.ok===false) throw new Error(data.message||data.error||`HTTP ${res.status}`); return data; }
   async function poll(url, unwrapJob=false, onProgress=null) {
-    while(true){ await new Promise(r=>setTimeout(r,1200)); const data=await json(await fetch(url,{cache:'no-store'})); const job=unwrapJob?(data.job||{}):data; if(onProgress)onProgress(job); if(job.status==='success')return job; if(['failed','error'].includes(job.status))throw new Error(job.error||job.message||'Processing failed'); }
+    while (true) {
+      await new Promise(r => setTimeout(r, 1200));
+      const data = await json(await fetch(url, { cache: 'no-store' }));
+      const job = unwrapJob ? (data.job || {}) : data;
+      if (onProgress) onProgress(job);
+      const normalizedStatus = String(job.status || '').trim().toLowerCase();
+      if (['success', 'done', 'completed', 'complete'].includes(normalizedStatus)) return job;
+      if (['failed', 'error', 'cancelled', 'canceled'].includes(normalizedStatus)) {
+        throw new Error(job.error || job.message || job.step || 'Processing failed');
+      }
+    }
   }
   function appendFiles(fd,name,inputId){ Array.from(document.getElementById(inputId).files||[]).forEach(f=>fd.append(name,f)); }
   function oneFile(inputId){ return document.getElementById(inputId).files[0]; }
-  async function runJob(index,label,startUrl,fd,statusUrlBuilder,unwrap=false){
-    renderSteps(index,index); setState('running',`${label} processing`,cmpT('automationRunningHint','The automated workflow is running. Do not close this page.'),(index/steps.length)*100); write(`Start ${label}`);
-    const start=await json(await fetch(startUrl,{method:'POST',body:fd})); const jobId=start.job_id; if(!jobId)throw new Error(`${label}: missing job_id`);
-    const job=await poll(statusUrlBuilder(jobId),unwrap,(j)=>{const inner=Number(j.progress||0);setState('running',`${label} processing`,j.step||j.message||'Processing',((index+inner/100)/steps.length)*100)});
-    write(`Completed ${label}`); return job;
+  async function runJob(index, step, startUrl, fd, statusUrlBuilder, unwrap=false) {
+    const stageName = cmpT(step.key, step.fallback);
+    renderSteps(index, index);
+    setState('running', stageName, cmpT('automationRunningHint', '全自動化流程執行中，請勿關閉此頁面。'), (index / steps.length) * 100);
+    write(`${stageName}：開始`);
+    const start = await json(await fetch(startUrl, { method: 'POST', body: fd }));
+    const jobId = start.job_id;
+    if (!jobId) throw new Error(`${stageName}：未取得工作編號`);
+    const job = await poll(statusUrlBuilder(jobId), unwrap, (j) => {
+      const inner = Number(j.progress || 0);
+      setState('running', stageName, j.step || j.message || cmpT('automationStageRunning', '執行中'), ((index + inner / 100) / steps.length) * 100);
+    });
+    renderSteps(-1, index + 1);
+    setState('running', stageName, cmpT('automationStageCompleted', '已完成'), ((index + 1) / steps.length) * 100);
+    write(`${stageName}：完成`);
+    return job;
   }
   renderSteps();
   form.addEventListener('submit', async e=>{
     e.preventDefault(); lines=[]; downloads.classList.add('hidden'); startBtn.disabled=true; let current=0;
     try{
       current=0; let fd=new FormData(); appendFiles(fd,'files','autoProductionFiles'); appendFiles(fd,'labor_files','autoLaborFiles'); fd.append('rule_set',document.getElementById('autoRuleSet').value); fd.append('labor_mode',document.getElementById('autoLaborMode').value); const year=document.getElementById('autoYear').value; if(year)fd.append('year',year);
-      await runJob(0,'M1A','/module1a/process-job',fd,id=>`/module1a/process-job/${encodeURIComponent(id)}`);
+      await runJob(0, steps[0], '/module1a/process-job', fd, id => `/module1a/process-job/${encodeURIComponent(id)}`);
 
       current=1; fd=new FormData(); appendFiles(fd,'module2a_bom_files','autoBomFiles');
-      await runJob(1,'M2A','/module2a/standard-bom-total-usage-job',fd,id=>`/module2/bom-job/${encodeURIComponent(id)}`);
+      await runJob(1, steps[1], '/module2a/standard-bom-total-usage-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
 
-      current=2; renderSteps(2,2); setState('running','M1B processing','Generating Product Activity Bulk',38); write('Start M1B');
+      current=2; renderSteps(2,2); setState('running',cmpT(steps[2].key,steps[2].fallback),cmpT('automationGeneratingProductBulk','正在產出產品活動數據 Bulk。'),38); write(`${cmpT(steps[2].key,steps[2].fallback)}：開始`);
       fd=new FormData(); fd.append('template_file',oneFile('autoProductTemplate')); fd.append('working_hour_source',document.getElementById('autoWorkingHourSource').value);
-      const m1b=await json(await fetch('/generate-bulk-file',{method:'POST',body:fd})); m1bDownload.href=m1b.download_url||m1b.summary?.download_url||m1b.summary?.module1b_product_activity_bulk_latest_download_url||'#'; m1bDownload.classList.toggle('disabled',!m1bDownload.href||m1bDownload.href.endsWith('#')); write('Completed M1B');
+      const m1b=await json(await fetch('/generate-bulk-file',{method:'POST',body:fd})); m1bDownload.href=m1b.download_url||m1b.summary?.download_url||m1b.summary?.module1b_product_activity_bulk_latest_download_url||'#'; m1bDownload.classList.toggle('disabled',!m1bDownload.href||m1bDownload.href.endsWith('#')); renderSteps(-1,3); setState('running',cmpT(steps[2].key,steps[2].fallback),cmpT('automationStageCompleted','已完成'),50); write(`${cmpT(steps[2].key,steps[2].fallback)}：完成`);
 
       current=3; fd=new FormData(); fd.append('module2b_template_file',oneFile('autoRawTemplate'));
-      await runJob(3,'M2B','/module2b/raw-material-bulk-job',fd,id=>`/module2/bom-job/${encodeURIComponent(id)}`);
+      await runJob(3, steps[3], '/module2b/raw-material-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
 
       current=4; fd=new FormData(); appendFiles(fd,'module2c_supplier_files','autoSupplierFiles');
-      await runJob(4,'M2C','/module2c/supplier-mapping-bulk-job',fd,id=>`/module2/bom-job/${encodeURIComponent(id)}`);
+      await runJob(4, steps[4], '/module2c/supplier-mapping-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
 
       current=5; fd=new FormData(); fd.append('ccl_mapping_file',oneFile('autoCclFile'));
-      const m3=await runJob(5,'M3A','/module3/apply-ccl-factors-job',fd,id=>`/module3/ccl-job/${encodeURIComponent(id)}`,true);
+      const m3=await runJob(5, steps[5], '/module3/apply-ccl-factors-job', fd, id => `/module3/ccl-job/${encodeURIComponent(id)}`, true);
       m3aDownload.href=m3.download_url||'#'; m3aDownload.classList.toggle('disabled',!m3.download_url);
-      renderSteps(-1,steps.length); setState('success',cmpT('automationCompleted','Automated consolidation completed'),cmpT('automationCompletedHint','M1B and M3A Bulk files are ready for download.'),100); downloads.classList.remove('hidden'); write('Pipeline completed successfully.');
-    }catch(err){ renderSteps(-1,current,current); setState('error',cmpT('automationFailed','Automated consolidation failed'),err.message||String(err),(current/steps.length)*100); write(`ERROR: ${err.message||err}`); }
+      renderSteps(-1,steps.length); setState('success',cmpT('automationCompleted','Automated consolidation completed'),cmpT('automationCompletedHint','Product Activity 與 Raw Material Bulk 檔已可下載。'),100); downloads.classList.remove('hidden'); write(cmpT('automationPipelineCompletedLog','全自動化資料彙整：全部完成。'));
+    }catch(err){ renderSteps(-1,current,current); const failedStage=steps[current]||steps[0]; setState('error',cmpT('automationFailed','全自動化資料彙整失敗'),`${cmpT(failedStage.key,failedStage.fallback)}：${err.message||String(err)}`,(current/steps.length)*100); write(`${cmpT(failedStage.key,failedStage.fallback)}：失敗－${err.message||err}`); }
     finally{ startBtn.disabled=false; }
   });
 })();
 
 </script>
-<script src="/static/i18n.js"></script>
+<script src="/static/i18n.js?v=20260712-auto-v3"></script>
 </body>
 </html>

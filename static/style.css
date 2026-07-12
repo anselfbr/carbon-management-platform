@@ -2811,3 +2811,192 @@ select:focus {
 
 /* Module 4 Automated Data Consolidation */
 .automation-input-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.automation-input-grid label{display:flex;flex-direction:column;gap:8px;font-weight:700}.automation-start-btn{margin-top:20px;width:100%}.automation-step-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:18px 0}.automation-step{display:grid;grid-template-columns:28px auto;gap:4px 8px;align-items:center;padding:12px;border:1px solid #d8e0ea;border-radius:12px;background:#fff}.automation-step span{grid-row:1/3;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:#eef2f7}.automation-step b{font-size:14px}.automation-step em{font-size:12px;font-style:normal;color:#64748b}.automation-step.running{border-color:#3b82f6;background:#eff6ff}.automation-step.success{border-color:#22c55e;background:#f0fdf4}.automation-step.error{border-color:#ef4444;background:#fef2f2}.automation-downloads{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}.automation-downloads.hidden{display:none}@media(max-width:900px){.automation-input-grid,.automation-step-list{grid-template-columns:1fr}}
+
+/* Module 04 automated consolidation layout + stage status fix v3 */
+#automated-data-consolidation .automation-workspace {
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, .65fr);
+  align-items: start;
+}
+
+#automated-data-consolidation .automation-form {
+  width: 100%;
+}
+
+#automated-data-consolidation .automation-input-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 16px 18px !important;
+  align-items: stretch;
+}
+
+#automated-data-consolidation .automation-input-grid > label {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: auto minmax(52px, auto);
+  gap: 8px !important;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  align-content: start;
+}
+
+#automated-data-consolidation .automation-input-grid > label > span {
+  display: block;
+  min-height: 22px;
+  color: var(--navy);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+#automated-data-consolidation .automation-input-grid input[type="file"],
+#automated-data-consolidation .automation-input-grid input[type="number"],
+#automated-data-consolidation .automation-input-grid select {
+  display: block;
+  width: 100% !important;
+  min-width: 0;
+  height: 52px;
+  box-sizing: border-box;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f9fbfd;
+  color: var(--navy);
+  font: inherit;
+}
+
+#automated-data-consolidation .automation-input-grid input[type="file"] {
+  padding: 7px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#automated-data-consolidation .automation-input-grid input[type="file"]::file-selector-button {
+  height: 36px;
+  margin: 0 10px 0 0;
+  padding: 0 14px;
+  border: 1px solid #aeb9c8;
+  border-radius: 9px;
+  background: #ffffff;
+  color: var(--navy);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#automated-data-consolidation .automation-input-grid select,
+#automated-data-consolidation .automation-input-grid input[type="number"] {
+  padding: 0 14px;
+}
+
+#automated-data-consolidation .automation-start-btn {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 22px;
+}
+
+#automated-data-consolidation .automation-step-list {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 10px !important;
+  margin: 18px 0;
+}
+
+#automated-data-consolidation .automation-step {
+  display: grid !important;
+  grid-template-columns: 34px minmax(0, 1fr) auto !important;
+  grid-template-rows: auto !important;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 14px;
+  border: 1px solid #d8e0ea;
+  border-radius: 14px;
+  background: #fff;
+}
+
+#automated-data-consolidation .automation-step > span {
+  grid-row: auto !important;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  background: #eef2f7;
+  color: #64748b;
+  font-size: 16px;
+  font-weight: 900;
+}
+
+#automated-data-consolidation .automation-step > b {
+  min-width: 0;
+  color: var(--navy);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+#automated-data-consolidation .automation-step > em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+#automated-data-consolidation .automation-step.running {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+#automated-data-consolidation .automation-step.running > span {
+  color: #ffffff;
+  background: #3b82f6;
+  animation: automationSpin 1.15s linear infinite;
+}
+
+#automated-data-consolidation .automation-step.success {
+  border-color: #22c55e;
+  background: #f0fdf4;
+}
+
+#automated-data-consolidation .automation-step.success > span {
+  color: #ffffff;
+  background: #16a34a;
+  animation: none;
+}
+
+#automated-data-consolidation .automation-step.success > em {
+  color: #15803d;
+}
+
+#automated-data-consolidation .automation-step.error {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+
+#automated-data-consolidation .automation-step.error > span {
+  color: #ffffff;
+  background: #dc2626;
+  animation: none;
+}
+
+#automated-data-consolidation .automation-step.error > em {
+  color: #b91c1c;
+}
+
+@keyframes automationSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1180px) {
+  #automated-data-consolidation .automation-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  #automated-data-consolidation .automation-input-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
