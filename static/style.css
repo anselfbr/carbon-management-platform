@@ -3000,3 +3000,198 @@ select:focus {
     grid-template-columns: minmax(0, 1fr) !important;
   }
 }
+
+
+/* Module 04 visual refinement v4: normal label weight + sticky progress panel */
+#automated-data-consolidation .automation-workspace {
+  grid-template-columns: minmax(0, 1.22fr) minmax(390px, .78fr);
+  gap: 24px;
+}
+
+#automated-data-consolidation .automation-input-grid > label > span {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: 0;
+}
+
+#automated-data-consolidation .automation-input-grid input[type="file"],
+#automated-data-consolidation .automation-input-grid input[type="number"],
+#automated-data-consolidation .automation-input-grid select {
+  font-size: 14px;
+  font-weight: 400;
+}
+
+#automated-data-consolidation .automation-input-grid input[type="file"]::file-selector-button {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+#automated-data-consolidation .automation-status-card {
+  position: sticky;
+  top: 22px;
+  align-self: start;
+  min-width: 0;
+  max-height: calc(100vh - 44px);
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+#automated-data-consolidation .automation-status-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+#automated-data-consolidation .automation-status-heading .section-eyebrow {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .11em;
+}
+
+#automated-data-consolidation .automation-status-heading h3 {
+  margin: 0;
+  color: var(--navy);
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+#automated-data-consolidation .automation-status-heading p:last-child {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+#automated-data-consolidation .automation-stage-counter {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid #cfe3f8;
+  border-radius: 999px;
+  background: #eef7ff;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#automated-data-consolidation .automation-current-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 14px;
+  margin-top: 16px;
+  padding: 17px 18px;
+  border-radius: 18px;
+}
+
+#automated-data-consolidation .automation-current-status .automation-current-copy {
+  min-width: 0;
+}
+
+#automated-data-consolidation .automation-current-status b {
+  display: block;
+  color: var(--navy);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+#automated-data-consolidation .automation-current-status p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+#automated-data-consolidation .automation-progress-percent {
+  align-self: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+#automated-data-consolidation .automation-current-status .progress-track {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+}
+
+#automated-data-consolidation .automation-current-status.running {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+#automated-data-consolidation .automation-current-status.success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+#automated-data-consolidation .automation-current-status.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+#automated-data-consolidation .automation-step-list {
+  margin-top: 14px;
+  margin-bottom: 14px;
+}
+
+#automated-data-consolidation .automation-step {
+  min-height: 52px;
+  padding: 9px 12px;
+  border-radius: 12px;
+}
+
+#automated-data-consolidation .automation-step > b {
+  font-weight: 600;
+}
+
+#automated-data-consolidation .automation-log-panel {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+#automated-data-consolidation .automation-log-panel > summary {
+  padding: 12px 14px;
+  color: var(--navy);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+#automated-data-consolidation .automation-log-panel .log-box {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  max-height: 180px;
+  background: #0f172a;
+}
+
+@media (max-width: 1180px) {
+  #automated-data-consolidation .automation-status-card {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+}

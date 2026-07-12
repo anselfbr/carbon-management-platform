@@ -383,7 +383,7 @@
                 <h2 data-i18n="automatedDataConsolidation">全自動化資料彙整</h2>
                 <p data-i18n="automationPageLead">上傳完整資料來源後，系統將依序完成工單彙整、標準 BOM 總用量、產品活動數據 Bulk、原物料 Bulk、供應商對應與 CCL 係數套用，最後提供兩類 Bulk 產出檔。</p>
               </div>
-              <span class="step-chip" data-i18n="oneClickProcess">一鍵流程</span>
+              <span class="step-chip" data-i18n="oneClickProcess">一鍵產出</span>
             </div>
 
             <form id="automationForm" class="form-panel automation-form" enctype="multipart/form-data">
@@ -404,14 +404,29 @@
             </form>
           </section>
 
-          <section class="card">
-            <div id="automationStatus" class="processing-status idle">
-              <div><b id="automationStatusTitle" data-i18n="automationReady">全自動化流程已就緒</b><p id="automationStatusText" data-i18n="automationReadyHint">選擇所有必要檔案後即可開始。</p></div>
-              <span id="automationStatusTime">0%</span>
+          <section class="card automation-status-card">
+            <div class="automation-status-heading">
+              <div>
+                <p class="section-eyebrow" data-i18n="automationProgressEyebrow">STATUS</p>
+                <h3 data-i18n="automationProgressTitle">執行進度</h3>
+                <p data-i18n="automationProgressHint">每完成一個階段，系統會自動標示勾選並繼續下一階段。</p>
+              </div>
+              <span id="automationStageCounter" class="automation-stage-counter">0 / 6</span>
+            </div>
+
+            <div id="automationStatus" class="processing-status idle automation-current-status">
+              <div class="automation-current-copy"><b id="automationStatusTitle" data-i18n="automationReady">全自動化流程已就緒</b><p id="automationStatusText" data-i18n="automationReadyHint">選擇所有必要檔案後即可開始。</p></div>
+              <span id="automationStatusTime" class="automation-progress-percent">0%</span>
               <div class="progress-track"><div id="automationProgressBar" class="progress-bar" style="width:0%"></div></div>
             </div>
+
             <div id="automationSteps" class="automation-step-list"></div>
-            <pre id="automationLog" class="log-box">Ready.</pre>
+
+            <details class="automation-log-panel" open>
+              <summary data-i18n="automationExecutionLog">執行紀錄</summary>
+              <pre id="automationLog" class="log-box">Ready.</pre>
+            </details>
+
             <div id="automationDownloads" class="automation-downloads hidden">
               <a id="automationM1bDownload" class="download disabled" href="#" data-i18n="downloadM1bResult">下載 Product Activity Bulk</a>
               <a id="automationM3aDownload" class="download disabled" href="#" data-i18n="downloadM3aResult">下載 Raw Material Bulk</a>
@@ -3565,6 +3580,7 @@ ruleForm.onsubmit = async (e) => {
   const statusTime = document.getElementById('automationStatusTime');
   const progressBar = document.getElementById('automationProgressBar');
   const stepsBox = document.getElementById('automationSteps');
+  const stageCounter = document.getElementById('automationStageCounter');
   const log = document.getElementById('automationLog');
   const startBtn = document.getElementById('automationStartBtn');
   const downloads = document.getElementById('automationDownloads');
@@ -3581,6 +3597,7 @@ ruleForm.onsubmit = async (e) => {
   let lines = [];
 
   function renderSteps(activeIndex=-1, doneCount=0, failedIndex=-1) {
+    if (stageCounter) stageCounter.textContent = `${Math.max(0, Math.min(doneCount, steps.length))} / ${steps.length}`;
     const stateKeys = {
       idle: ['automationStageWaiting', '待執行'],
       running: ['automationStageRunning', '執行中'],
@@ -3664,6 +3681,6 @@ ruleForm.onsubmit = async (e) => {
 })();
 
 </script>
-<script src="/static/i18n.js?v=20260712-auto-v3"></script>
+<script src="/static/i18n.js?v=20260712-auto-v4"></script>
 </body>
 </html>
