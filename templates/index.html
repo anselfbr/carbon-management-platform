@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Data Integration Platform (DIP)</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260712-auto-v7" />
+  <link rel="stylesheet" href="/static/style.css?v=20260713-auto-v8" />
 
   <style>
     .rule-import-status {
@@ -381,7 +381,7 @@
               <div>
                 <p class="section-eyebrow">MODULE 04</p>
                 <h2 data-i18n="automatedDataConsolidation">全自動化資料彙整</h2>
-                <p data-i18n="automationPageLead">上傳完整資料來源後，系統將依序完成工單彙整、標準 BOM 總用量、產品活動數據 Bulk、原物料 Bulk、供應商對應與 CCL 係數套用，最後提供兩類 Bulk 產出檔。</p>
+                <p data-i18n="automationPageLead">上傳完整資料來源後，系統將依序完成工單彙整、標準 BOM 總用量、產品活動數據 Bulk、原物料 Bulk、供應商對應與 CCL 係數套用，最後提供 Product Activity、供應商對應與 CCL Raw Material 三類 Bulk 產出檔。</p>
               </div>
               <span class="step-chip" data-i18n="oneClickProcess">一鍵產出</span>
             </div>
@@ -429,7 +429,8 @@
 
             <div id="automationDownloads" class="automation-downloads hidden">
               <a id="automationM1bDownload" class="download disabled" href="#" data-i18n="downloadM1bResult">下載 Product Activity Bulk</a>
-              <a id="automationM3aDownload" class="download disabled" href="#" data-i18n="downloadM3aResult">下載 Raw Material Bulk</a>
+              <a id="automationM2cDownload" class="download disabled" href="#" data-i18n="downloadM2cSupplierResult">下載供應商對應 Raw Material Bulk</a>
+              <a id="automationM3aDownload" class="download disabled" href="#" data-i18n="downloadM3aResult">下載 CCL Raw Material Bulk</a>
             </div>
           </section>
         </section>
@@ -1031,150 +1032,9 @@
               <pre id="module2cLog" class="rule-log">MODULE 2C is ready.</pre>
             </div>
 
-            <div id="module2-legacy-workspace" class="module2-legacy-panel">
-              <details>
-                <summary>進階 / Raw Material Bulk 一次產出流程（僅限低數據量）</summary>
-
-            <form id="bomForm" class="form-panel">
-              <label data-i18n="uploadStandardBomFiles">Upload Standard BOM Files</label>
-              <input id="bomFile" name="bom_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
-
-              <label data-i18n="uploadRawMaterialBulkTemplate">Upload Raw Material Bulk Template</label>
-              <input id="rawMaterialTemplateFile" name="template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
-
-              <div id="bomStep1Source" class="module3-source-card">
-                <b data-i18n="uploadStep1OutputForRollup">引用 Module 1A 年度產品產量與分類結果</b>
-                <p id="bomStep1SourceText">來源：Module 1A 年度產品產量與分類結果檢查中...</p>
-              </div>
-
-              <label data-i18n="uploadSupplierFiles">Upload Supplier Files</label>
-              <input id="supplierFiles" name="supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple />
-              <p class="form-hint" data-i18n="supplierFilesHint">Optional. Supports multiple Excel files. Uses Raw Material Code + Vendor number to write Supplier Name. Transportation Origin uses Supplier Address or Country + City + Street. Also exports supplier_bulk_create from the built-in template.</p>
-
-              <button type="submit" class="btn-secondary">
-                <span class="btn-icon">⌘</span>
-                <span data-i18n="processBomExpansion">Process BOM Expansion</span>
-              </button>
-            </form>
-
-            <div id="bomProcessingStatus" class="processing-status idle">
-              <div class="status-header">
-                <div class="spinner"></div>
-                <div>
-                  <b id="bomStatusTitle">Ready for BOM Expansion</b>
-                  <p id="bomStatusText">Upload standard BOM and raw material bulk template to start processing.</p>
-                </div>
-                <span id="bomStatusTime" class="status-time">Idle</span>
-              </div>
-              <div class="progress-track">
-                <div id="bomProgressBar" class="progress-bar"></div>
-              </div>
-            </div>
-
-            <a id="bomDownload" class="download disabled" href="#"><span data-i18n="downloadRawMaterialBulk">Download Raw Material Bulk</span></a>
-            <a id="workingHourRollupDownload" class="download disabled" href="#"><span data-i18n="downloadWorkingHourRollup">Download Working Hour Roll-up</span></a>
-            <a id="supplierBulkDownload" class="download disabled" href="#"><span data-i18n="downloadSupplierBulk">Download Supplier Bulk Create</span></a>
-
-              </details>
-            </div>
 
           </section>
 
-          <section class="card insight-card">
-            <details class="bom-logic-details">
-              <summary>
-                <span data-i18n="bomExpansionLogic">BOM Expansion Logic</span>
-              </summary>
-              <p data-i18n="bomColumnMappingHint">Configure source column names for BOM Expansion. Use Default for system settings or Confirm to apply your input.</p>
-
-            <div class="logic-mapping-table">
-              <div class="logic-mapping-row" data-default="Parent Node">
-                <span class="logic-mapping-label" data-i18n="parentMaterial">Parent Material</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="parent_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>Parent Node</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="Component">
-                <span class="logic-mapping-label" data-i18n="component">Component</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="component_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>Component</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="CS03 Qty">
-                <span class="logic-mapping-label" data-i18n="quantity">Quantity</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="qty_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>CS03 Qty</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="CS03 UoM">
-                <span class="logic-mapping-label" data-i18n="unit">Unit</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="unit_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>CS03 UoM</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="Component Description">
-                <span class="logic-mapping-label" data-i18n="componentDescription">Component Description</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="description_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>Component Description</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="Material group">
-                <span class="logic-mapping-label" data-i18n="materialGroup">Material Group</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="material_group_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>Material group</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row" data-default="BOM Valid From">
-                <span class="logic-mapping-label" data-i18n="validFrom">Valid From</span>
-                <div class="logic-mapping-control">
-                  <input form="bomForm" name="valid_from_col" type="text" placeholder="Enter BOM column name" data-i18n-placeholder="enterBomColumnName" />
-                  <button class="mapping-default-btn" type="button" data-i18n="default">Default</button>
-                  <button class="mapping-confirm-btn" type="button" data-i18n="confirm">Confirm</button>
-                  <div class="mapping-current">Current Setting: <b>BOM Valid From</b></div>
-                </div>
-              </div>
-
-              <div class="logic-mapping-row read-only">
-                <span class="logic-mapping-label" data-i18n="semiFinishedRule">Semi-finished Rule</span>
-                <div class="logic-readonly-value" data-i18n="semiFinishedRuleDesc">Component also exists as Parent Node</div>
-              </div>
-
-              <div class="logic-mapping-row read-only">
-                <span class="logic-mapping-label" data-i18n="quantityRollUp">Quantity Roll-up</span>
-                <div class="logic-readonly-value" data-i18n="quantityRollUpDesc">Multiply quantities across all BOM levels</div>
-              </div>
-            </div>
-
-            <h2 data-i18n="rawMaterialBulkOutput">Raw Material Bulk Output</h2>
-            <p data-i18n="rawMaterialBulkOutputHint">Input Sheet Activity Data and Input Sheet Raw Material will be populated. Optional fields are not written.</p>
-
-            <pre id="bomLog" class="rule-log">BOM Expansion is ready.</pre>
-            </details>
-          </section>
         </section>
       </section>
 
@@ -2097,7 +1957,7 @@ document.querySelectorAll('.logic-mapping-row[data-default]').forEach(row => {
   });
 });
 
-bomForm.addEventListener('submit', async (e) => {
+if (bomForm) bomForm.addEventListener('submit', async (e) => {
   e.preventDefault();
 
   bomDownload.classList.add('disabled');
@@ -3585,6 +3445,7 @@ ruleForm.onsubmit = async (e) => {
   const startBtn = document.getElementById('automationStartBtn');
   const downloads = document.getElementById('automationDownloads');
   const m1bDownload = document.getElementById('automationM1bDownload');
+  const m2cDownload = document.getElementById('automationM2cDownload');
   const m3aDownload = document.getElementById('automationM3aDownload');
   const steps = [
     { code: 'M1A', key: 'automationStepM1a', fallback: '工單資料彙整' },
@@ -3679,7 +3540,13 @@ ruleForm.onsubmit = async (e) => {
   }
   renderSteps();
   form.addEventListener('submit', async e=>{
-    e.preventDefault(); lines=[]; downloads.classList.add('hidden'); startBtn.disabled=true; let current=0;
+    e.preventDefault(); lines=[]; downloads.classList.add('hidden');
+    [m1bDownload, m2cDownload, m3aDownload].forEach(link => {
+      if (!link) return;
+      link.href = '#';
+      link.classList.add('disabled');
+    });
+    startBtn.disabled=true; let current=0;
     try{
       current=0; let fd=new FormData(); appendFiles(fd,'files','autoProductionFiles'); appendFiles(fd,'labor_files','autoLaborFiles'); fd.append('rule_set',document.getElementById('autoRuleSet').value); fd.append('labor_mode',document.getElementById('autoLaborMode').value); const year=document.getElementById('autoYear').value; if(year)fd.append('year',year);
       await runJob(0, steps[0], '/module1a/process-job', fd, id => `/module1a/process-job/${encodeURIComponent(id)}`);
@@ -3696,18 +3563,23 @@ ruleForm.onsubmit = async (e) => {
       await runJob(3, steps[3], '/module2b/raw-material-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
 
       current=4; fd=new FormData(); appendFiles(fd,'module2c_supplier_files','autoSupplierFiles');
-      await runJob(4, steps[4], '/module2c/supplier-mapping-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
+      const m2c=await runJob(4, steps[4], '/module2c/supplier-mapping-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
+      const m2cDownloadUrl=m2c.download_url||m2c.summary?.download_url||'';
+      if (m2cDownload) {
+        m2cDownload.href=m2cDownloadUrl||'#';
+        m2cDownload.classList.toggle('disabled',!m2cDownloadUrl);
+      }
 
       current=5; fd=new FormData(); fd.append('ccl_mapping_file',oneFile('autoCclFile'));
       const m3=await runJob(5, steps[5], '/module3/apply-ccl-factors-job', fd, id => `/module3/ccl-job/${encodeURIComponent(id)}`, true);
       m3aDownload.href=m3.download_url||'#'; m3aDownload.classList.toggle('disabled',!m3.download_url);
-      renderSteps(-1,steps.length); setState('success',cmpT('automationCompleted','Automated consolidation completed'),cmpT('automationCompletedHint','Product Activity 與 Raw Material Bulk 檔已可下載。'),100); downloads.classList.remove('hidden'); write(cmpT('automationPipelineCompletedLog','全自動化資料彙整：全部完成。'));
+      renderSteps(-1,steps.length); setState('success',cmpT('automationCompleted','Automated consolidation completed'),cmpT('automationCompletedHint','Product Activity、供應商對應與 CCL Raw Material Bulk 檔已可下載。'),100); downloads.classList.remove('hidden'); write(cmpT('automationPipelineCompletedLog','全自動化資料彙整：全部完成。'));
     }catch(err){ renderSteps(-1,current,current); const failedStage=steps[current]||steps[0]; setState('error',cmpT('automationFailed','全自動化資料彙整失敗'),`${cmpT(failedStage.key,failedStage.fallback)}：${err.message||String(err)}`,(current/steps.length)*100); write(`${cmpT(failedStage.key,failedStage.fallback)}：失敗－${err.message||err}`); }
     finally{ startBtn.disabled=false; }
   });
 })();
 
 </script>
-<script src="/static/i18n.js?v=20260712-auto-v7"></script>
+<script src="/static/i18n.js?v=20260713-auto-v8"></script>
 </body>
 </html>
