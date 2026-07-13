@@ -879,6 +879,42 @@
                 </div>
               </button>
             </div>
+
+            <div class="module1-entry-status-grid module2-entry-status-grid" aria-label="Module 2 progress status">
+              <div id="module2EntryProgressStatus" class="processing-status idle module1-entry-progress-status">
+                <div class="status-header">
+                  <div class="spinner"></div>
+                  <div>
+                    <b id="module2EntryStatusTitle" data-i18n="module2ProgressCheckingTitle">MODULE 2 進度檢查中</b>
+                    <p id="module2EntryStatusText" data-i18n="module2ProgressCheckingText">系統正在確認 Module 2A、Module 2B 與 Module 2C 的最新產出狀態。</p>
+                  </div>
+                  <span id="module2EntryStatusTime" class="status-time">Checking</span>
+                </div>
+                <div class="progress-track">
+                  <div id="module2EntryProgressBar" class="progress-bar"></div>
+                </div>
+              </div>
+
+              <div class="module2-entry-source-grid">
+                <div class="module3-source-card source-card-checkable" id="module2EntryM2aSourceCard">
+                  <span class="source-card-check" aria-hidden="true">✓</span>
+                  <b data-i18n="module2aOutputsTitle">Module 2A 標準 BOM 總用量與工時彙整</b>
+                  <p id="module2EntryM2aTotalUsageText" data-i18n="sourceChecking">來源檢查中...</p>
+                  <p id="module2EntryM2aRollupText" data-i18n="sourceChecking">來源檢查中...</p>
+                </div>
+                <div class="module3-source-card source-card-checkable" id="module2EntryM2bSourceCard">
+                  <span class="source-card-check" aria-hidden="true">✓</span>
+                  <b data-i18n="module2bOutputTitle">Module 2B Raw Material Bulk</b>
+                  <p id="module2EntryM2bSourceText" data-i18n="sourceChecking">來源檢查中...</p>
+                </div>
+                <div class="module3-source-card source-card-checkable" id="module2EntryM2cSourceCard">
+                  <span class="source-card-check" aria-hidden="true">✓</span>
+                  <b data-i18n="module2cOutputsTitle">Module 2C 供應商對應結果</b>
+                  <p id="module2EntryM2cMappedText" data-i18n="sourceChecking">來源檢查中...</p>
+                  <p id="module2EntrySupplierBulkText" data-i18n="sourceChecking">來源檢查中...</p>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section class="card insight-card module3-policy-card">
@@ -1262,6 +1298,19 @@ const module1EntryStatusTime = document.getElementById('module1EntryStatusTime')
 const module1EntryProgressBar = document.getElementById('module1EntryProgressBar');
 const module1EntryM1aSourceText = document.getElementById('module1EntryM1aSourceText');
 const module1EntryM1bSourceText = document.getElementById('module1EntryM1bSourceText');
+const module2EntryProgressStatus = document.getElementById('module2EntryProgressStatus');
+const module2EntryStatusTitle = document.getElementById('module2EntryStatusTitle');
+const module2EntryStatusText = document.getElementById('module2EntryStatusText');
+const module2EntryStatusTime = document.getElementById('module2EntryStatusTime');
+const module2EntryProgressBar = document.getElementById('module2EntryProgressBar');
+const module2EntryM2aSourceCard = document.getElementById('module2EntryM2aSourceCard');
+const module2EntryM2aTotalUsageText = document.getElementById('module2EntryM2aTotalUsageText');
+const module2EntryM2aRollupText = document.getElementById('module2EntryM2aRollupText');
+const module2EntryM2bSourceCard = document.getElementById('module2EntryM2bSourceCard');
+const module2EntryM2bSourceText = document.getElementById('module2EntryM2bSourceText');
+const module2EntryM2cSourceCard = document.getElementById('module2EntryM2cSourceCard');
+const module2EntryM2cMappedText = document.getElementById('module2EntryM2cMappedText');
+const module2EntrySupplierBulkText = document.getElementById('module2EntrySupplierBulkText');
 
 const bomForm = document.getElementById('bomForm');
 const bomDownload = document.getElementById('bomDownload');
@@ -1784,6 +1833,114 @@ document.querySelectorAll('[data-module3-page]').forEach(el => {
   el.onclick = () => activateFactorPage(el.dataset.module3Page);
 });
 
+function setModule2EntryProgressState(mode, title, text, timeText, progress) {
+  if (!module2EntryProgressStatus) return;
+  module2EntryProgressStatus.classList.remove('idle', 'running', 'success', 'error');
+  module2EntryProgressStatus.classList.add(mode || 'idle');
+  if (module2EntryStatusTitle) module2EntryStatusTitle.textContent = title || '';
+  if (module2EntryStatusText) module2EntryStatusText.textContent = text || '';
+  if (module2EntryStatusTime) module2EntryStatusTime.textContent = cmpStatusTimeText(timeText || '', mode || 'idle');
+  if (module2EntryProgressBar) module2EntryProgressBar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
+}
+
+function setModule2EntrySourceReady(card, ready) {
+  if (!card) return;
+  card.classList.toggle('source-ready', Boolean(ready));
+}
+
+function module2EntrySourceLine(labelZh, labelEn, data) {
+  const label = cmpLang() === 'zh' ? labelZh : labelEn;
+  if (!data || data.ok === false) {
+    if (data && data.message) return data.message;
+    return cmpLang() === 'zh' ? `尚未找到 ${label}。` : `${label} has not been generated yet.`;
+  }
+  const sourceWord = cmpLang() === 'zh' ? '來源' : 'Source';
+  const fileWord = cmpLang() === 'zh' ? '檔案' : 'File';
+  return `${sourceWord}：${label}｜${fileWord}：${data.filename || ''}${cmpSourceMetaText(data)}`;
+}
+
+function module2EntryProgressCopy(data) {
+  const zh = cmpLang() === 'zh';
+  if (data.ready_module2c) {
+    return {
+      title: zh ? 'MODULE 2 已完成' : 'MODULE 2 completed',
+      text: zh ? 'Module 2A、Module 2B 與 Module 2C 都已完成，可進入 Module 3 套用 CCL 係數。' : 'Module 2A, Module 2B, and Module 2C are complete. You can continue to Module 3 for CCL factor application.',
+      label: zh ? '已完成' : 'Completed'
+    };
+  }
+  if (data.ready_module2b) {
+    return {
+      title: zh ? 'MODULE 2B 已完成，等待 Module 2C' : 'MODULE 2B completed; waiting for Module 2C',
+      text: zh ? '已找到 Raw Material Bulk；下一步請執行 Module 2C 供應商資料對應。' : 'Raw Material Bulk is available. Next, run Module 2C supplier mapping.',
+      label: '67%'
+    };
+  }
+  if (data.ready_module2a) {
+    return {
+      title: zh ? 'MODULE 2A 已完成，等待 Module 2B' : 'MODULE 2A completed; waiting for Module 2B',
+      text: zh ? '已找到標準 BOM 總用量與 working_hour_rollup；下一步請執行 Module 2B Raw Material Bulk 寫入。' : 'Standard BOM total usage and working_hour_rollup are available. Next, run Module 2B Raw Material Bulk writing.',
+      label: '34%'
+    };
+  }
+  return {
+    title: zh ? 'MODULE 2 尚未開始' : 'MODULE 2 not started',
+    text: zh ? '尚未找到 Module 2A 標準 BOM 總用量與 working_hour_rollup；請先執行 Module 2A。' : 'Module 2A Standard BOM total usage and working_hour_rollup were not found. Start with Module 2A.',
+    label: '0%'
+  };
+}
+
+async function refreshModule2EntryStatus() {
+  if (!module2EntryProgressStatus) return;
+  const zh = cmpLang() === 'zh';
+  setModule2EntryProgressState(
+    'idle',
+    zh ? 'MODULE 2 進度檢查中' : 'Checking MODULE 2 progress',
+    zh ? '正在確認 Module 2A、Module 2B 與 Module 2C 的最新產出。' : 'Checking the latest outputs from Module 2A, Module 2B, and Module 2C.',
+    'Checking',
+    5
+  );
+  try {
+    const res = await fetch('/module2/progress-status', { cache: 'no-store' });
+    const data = await readJsonOrThrow(res);
+    const progress = Number(data.progress_percent || 0);
+    const copy = module2EntryProgressCopy(data);
+    setModule2EntryProgressState(data.ready_module2c ? 'success' : 'idle', copy.title, copy.text, copy.label, progress);
+
+    const totalUsage = data.module2a_total_usage || {};
+    const rollup = data.module2a_working_hour_rollup || {};
+    const rawBulk = data.module2b_raw_material_bulk || {};
+    const mappedBulk = data.module2c_supplier_mapped_bulk || {};
+    const supplierBulk = data.module2c_supplier_bulk || {};
+
+    if (module2EntryM2aTotalUsageText) module2EntryM2aTotalUsageText.textContent = module2EntrySourceLine('標準 BOM 總用量', 'Standard BOM Total Usage', totalUsage);
+    if (module2EntryM2aRollupText) module2EntryM2aRollupText.textContent = module2EntrySourceLine('working_hour_rollup', 'working_hour_rollup', rollup);
+    if (module2EntryM2bSourceText) module2EntryM2bSourceText.textContent = module2EntrySourceLine('Raw Material Bulk', 'Raw Material Bulk', rawBulk);
+    if (module2EntryM2cMappedText) module2EntryM2cMappedText.textContent = module2EntrySourceLine('供應商對應 Raw Material Bulk', 'Supplier-mapped Raw Material Bulk', mappedBulk);
+    if (module2EntrySupplierBulkText) module2EntrySupplierBulkText.textContent = module2EntrySourceLine('供應商 Bulk', 'Supplier Bulk', supplierBulk);
+
+    setModule2EntrySourceReady(module2EntryM2aSourceCard, Boolean(totalUsage.ok && rollup.ok));
+    setModule2EntrySourceReady(module2EntryM2bSourceCard, Boolean(rawBulk.ok));
+    setModule2EntrySourceReady(module2EntryM2cSourceCard, Boolean(mappedBulk.ok && supplierBulk.ok));
+  } catch (err) {
+    setModule2EntryProgressState(
+      'error',
+      zh ? 'MODULE 2 進度讀取失敗' : 'Unable to read MODULE 2 progress',
+      err.message || (zh ? '無法更新 Module 2 狀態，請重新整理頁面或查看後端 log。' : 'Unable to refresh Module 2 status. Reload the page or review the backend log.'),
+      'Error',
+      100
+    );
+    const errorText = zh ? '無法更新來源狀態。' : 'Unable to refresh source status.';
+    if (module2EntryM2aTotalUsageText) module2EntryM2aTotalUsageText.textContent = errorText;
+    if (module2EntryM2aRollupText) module2EntryM2aRollupText.textContent = errorText;
+    if (module2EntryM2bSourceText) module2EntryM2bSourceText.textContent = errorText;
+    if (module2EntryM2cMappedText) module2EntryM2cMappedText.textContent = errorText;
+    if (module2EntrySupplierBulkText) module2EntrySupplierBulkText.textContent = errorText;
+    setModule2EntrySourceReady(module2EntryM2aSourceCard, false);
+    setModule2EntrySourceReady(module2EntryM2bSourceCard, false);
+    setModule2EntrySourceReady(module2EntryM2cSourceCard, false);
+  }
+}
+
 function activateModule2EntryPage() {
   setSidebarSubNavExpanded('bom', true);
   document.querySelectorAll('.page-section').forEach(p => p.classList.remove('active'));
@@ -1799,6 +1956,7 @@ function activateModule2EntryPage() {
   setDynamicI18n(pageLead, message.leadKey, message.lead);
   pageLead.style.display = 'block';
   cmpApplyI18n();
+  refreshModule2EntryStatus();
   scrollContentToAnchor('');
 }
 

@@ -3154,6 +3154,96 @@ def _find_latest_module2b_raw_material_bulk_zip() -> Path | None:
         candidates.append(path)
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
+
+def _find_latest_module2c_supplier_bulk() -> Path | None:
+    """Return the latest final Supplier Bulk created by Module 2C."""
+    candidates = [
+        path
+        for path in OUTPUT_DIR.glob("supplier_bulk_create_*.xlsx")
+        if not path.name.startswith("~$") and path.is_file()
+    ]
+    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+
+@app.get("/module2/progress-status")
+def module2_progress_status():
+    """Module 2 overview progress and auto-fetched source status for the entry page."""
+    total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH if MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH.exists() else None
+    rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH if LATEST_WORKING_HOUR_ROLLUP_PATH.exists() else None
+    raw_bulk_path = _find_latest_module2b_raw_material_bulk_zip()
+    mapped_bulk_path = _find_latest_module2c_supplier_mapped_raw_material_bulk_zip()
+    supplier_bulk_path = _find_latest_module2c_supplier_bulk()
+
+    ready_module2a = bool(total_usage_path and rollup_path)
+    ready_module2b = bool(raw_bulk_path and raw_bulk_path.exists())
+    ready_module2c = bool(
+        mapped_bulk_path and mapped_bulk_path.exists()
+        and supplier_bulk_path and supplier_bulk_path.exists()
+    )
+
+    if ready_module2c:
+        progress_percent = 100
+        title = "MODULE 2 已完成"
+        message = "Module 2A、Module 2B 與 Module 2C 都已完成，可進入 Module 3。"
+        status_label = "Completed"
+        next_step = "Module 3"
+    elif ready_module2b:
+        progress_percent = 67
+        title = "MODULE 2B 已完成，等待 Module 2C"
+        message = "已找到 Raw Material Bulk；下一步請執行 Module 2C 供應商資料對應。"
+        status_label = "67%"
+        next_step = "Module 2C"
+    elif ready_module2a:
+        progress_percent = 34
+        title = "MODULE 2A 已完成，等待 Module 2B"
+        message = "已找到標準 BOM 總用量與 working_hour_rollup；下一步請執行 Module 2B。"
+        status_label = "34%"
+        next_step = "Module 2B"
+    else:
+        progress_percent = 0
+        title = "MODULE 2 尚未開始"
+        message = "尚未找到 Module 2A 標準 BOM 總用量與 working_hour_rollup；請先執行 Module 2A。"
+        status_label = "0%"
+        next_step = "Module 2A"
+
+    return {
+        "ok": True,
+        "ready_module2a": ready_module2a,
+        "ready_module2b": ready_module2b,
+        "ready_module2c": ready_module2c,
+        "progress_percent": progress_percent,
+        "title": title,
+        "message": message,
+        "status_label": status_label,
+        "next_step": next_step,
+        "module2a_total_usage": _source_info_for_existing_path(
+            total_usage_path,
+            "Module 2A Standard BOM Total Usage",
+            "尚未找到 Module 2A 標準 BOM 總用量。請先完成 Module 2A。",
+        ),
+        "module2a_working_hour_rollup": _source_info_for_existing_path(
+            rollup_path,
+            "Module 2A working_hour_rollup",
+            "尚未找到 Module 2A working_hour_rollup。請先完成 Module 2A。",
+        ),
+        "module2b_raw_material_bulk": _source_info_for_existing_path(
+            raw_bulk_path,
+            "Module 2B Raw Material Bulk",
+            "尚未找到 Module 2B Raw Material Bulk。請先完成 Module 2B。",
+        ),
+        "module2c_supplier_mapped_bulk": _source_info_for_existing_path(
+            mapped_bulk_path,
+            "Module 2C Supplier-mapped Raw Material Bulk",
+            "尚未找到 Module 2C 供應商對應 Raw Material Bulk。請先完成 Module 2C。",
+        ),
+        "module2c_supplier_bulk": _source_info_for_existing_path(
+            supplier_bulk_path,
+            "Module 2C Supplier Bulk",
+            "尚未找到 Module 2C Supplier Bulk。請先完成 Module 2C。",
+        ),
+    }
+
+
 @app.get("/module3/raw-material-bulk-source")
 def module3_raw_material_bulk_source():
     raw_path = _find_latest_module2_raw_material_bulk()

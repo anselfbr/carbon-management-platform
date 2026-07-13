@@ -194,6 +194,30 @@
         "en": "Use Module 2B Raw Material Bulk ZIP, apply supplier data, and output the Module 2C Bulk.",
         "zh": "引用 Module 2B Raw Material Bulk ZIP，套用供應商資料並產出 Module 2C Bulk。"
     },
+    "module2ProgressCheckingTitle": {
+        "en": "Checking MODULE 2 progress",
+        "zh": "MODULE 2 進度檢查中"
+    },
+    "module2ProgressCheckingText": {
+        "en": "Checking the latest outputs from Module 2A, Module 2B, and Module 2C.",
+        "zh": "系統正在確認 Module 2A、Module 2B 與 Module 2C 的最新產出狀態。"
+    },
+    "module2aOutputsTitle": {
+        "en": "Module 2A Standard BOM Total Usage and Working-hour Rollup",
+        "zh": "Module 2A 標準 BOM 總用量與工時彙整"
+    },
+    "module2bOutputTitle": {
+        "en": "Module 2B Raw Material Bulk",
+        "zh": "Module 2B Raw Material Bulk"
+    },
+    "module2cOutputsTitle": {
+        "en": "Module 2C Supplier Mapping Outputs",
+        "zh": "Module 2C 供應商對應結果"
+    },
+    "sourceChecking": {
+        "en": "Checking source...",
+        "zh": "來源檢查中..."
+    },
     "module2IntegrationPolicy": {
         "en": "Module 2 Integration Policy",
         "zh": "模組 2 整合原則"

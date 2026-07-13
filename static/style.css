@@ -3324,3 +3324,37 @@ select:focus {
     justify-self: start;
   }
 }
+
+
+/* Module 2 entry progress overview: mirrors Module 1 and shows all three stages. */
+.module2-entry-status-grid {
+  margin-top: 18px;
+}
+
+.module2-entry-source-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.module2-entry-source-grid .module3-source-card {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.module2-entry-source-grid .module3-source-card p {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1180px) {
+  .module2-entry-source-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .module2-entry-source-grid {
+    grid-template-columns: 1fr;
+  }
+}
