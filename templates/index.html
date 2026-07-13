@@ -381,7 +381,7 @@
               <div>
                 <p class="section-eyebrow">MODULE 04</p>
                 <h2 data-i18n="automatedDataConsolidation">全自動化資料彙整</h2>
-                <p data-i18n="automationPageLead">上傳完整資料來源後，系統將依序完成工單彙整、標準 BOM 總用量、產品活動數據 Bulk、原物料 Bulk、供應商對應與 CCL 係數套用，最後提供 Product Activity、供應商對應與 CCL Raw Material 三類 Bulk 產出檔。</p>
+                <p data-i18n="automationPageLead">上傳完整資料來源後，系統將依序完成工單彙整、標準 BOM 總用量、產品活動數據 Bulk、原物料 Bulk、供應商對應與 CCL 係數套用，最後提供 Product Activity Bulk、供應商 Bulk 與 CCL Raw Material Bulk 產出檔。</p>
               </div>
               <span class="step-chip" data-i18n="oneClickProcess">一鍵產出</span>
             </div>
@@ -429,7 +429,7 @@
 
             <div id="automationDownloads" class="automation-downloads hidden">
               <a id="automationM1bDownload" class="download disabled" href="#" data-i18n="downloadM1bResult">下載 Product Activity Bulk</a>
-              <a id="automationM2cDownload" class="download disabled" href="#" data-i18n="downloadM2cSupplierResult">下載供應商對應 Raw Material Bulk</a>
+              <a id="automationSupplierBulkDownload" class="download disabled" href="#" data-i18n="downloadSupplierBulkResult">下載供應商 Bulk</a>
               <a id="automationM3aDownload" class="download disabled" href="#" data-i18n="downloadM3aResult">下載 CCL Raw Material Bulk</a>
             </div>
           </section>
@@ -3445,7 +3445,7 @@ ruleForm.onsubmit = async (e) => {
   const startBtn = document.getElementById('automationStartBtn');
   const downloads = document.getElementById('automationDownloads');
   const m1bDownload = document.getElementById('automationM1bDownload');
-  const m2cDownload = document.getElementById('automationM2cDownload');
+  const supplierBulkDownload = document.getElementById('automationSupplierBulkDownload');
   const m3aDownload = document.getElementById('automationM3aDownload');
   const steps = [
     { code: 'M1A', key: 'automationStepM1a', fallback: '工單資料彙整' },
@@ -3541,7 +3541,7 @@ ruleForm.onsubmit = async (e) => {
   renderSteps();
   form.addEventListener('submit', async e=>{
     e.preventDefault(); lines=[]; downloads.classList.add('hidden');
-    [m1bDownload, m2cDownload, m3aDownload].forEach(link => {
+    [m1bDownload, supplierBulkDownload, m3aDownload].forEach(link => {
       if (!link) return;
       link.href = '#';
       link.classList.add('disabled');
@@ -3564,22 +3564,25 @@ ruleForm.onsubmit = async (e) => {
 
       current=4; fd=new FormData(); appendFiles(fd,'module2c_supplier_files','autoSupplierFiles');
       const m2c=await runJob(4, steps[4], '/module2c/supplier-mapping-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
-      const m2cDownloadUrl=m2c.download_url||m2c.summary?.download_url||'';
-      if (m2cDownload) {
-        m2cDownload.href=m2cDownloadUrl||'#';
-        m2cDownload.classList.toggle('disabled',!m2cDownloadUrl);
+      const supplierBulkUrl=m2c.summary?.supplier_bulk_download_url||m2c.supplier_bulk_download_url||'#';
+      if (!supplierBulkUrl || supplierBulkUrl.endsWith('#')) {
+        const supplierBulkError=m2c.summary?.supplier_bulk_error||cmpT('automationSupplierBulkMissing','供應商 Bulk 未成功產出，請確認內建 Supplier Bulk Template 是否存在。');
+        throw new Error(supplierBulkError);
       }
+      supplierBulkDownload.href=supplierBulkUrl;
+      supplierBulkDownload.classList.remove('disabled');
+      write(cmpT('automationSupplierBulkReadyLog','供應商 Bulk：已產出。'));
 
       current=5; fd=new FormData(); fd.append('ccl_mapping_file',oneFile('autoCclFile'));
       const m3=await runJob(5, steps[5], '/module3/apply-ccl-factors-job', fd, id => `/module3/ccl-job/${encodeURIComponent(id)}`, true);
       m3aDownload.href=m3.download_url||'#'; m3aDownload.classList.toggle('disabled',!m3.download_url);
-      renderSteps(-1,steps.length); setState('success',cmpT('automationCompleted','Automated consolidation completed'),cmpT('automationCompletedHint','Product Activity、供應商對應與 CCL Raw Material Bulk 檔已可下載。'),100); downloads.classList.remove('hidden'); write(cmpT('automationPipelineCompletedLog','全自動化資料彙整：全部完成。'));
+      renderSteps(-1,steps.length); setState('success',cmpT('automationCompleted','Automated consolidation completed'),cmpT('automationCompletedHint','Product Activity Bulk、供應商 Bulk 與 CCL Raw Material Bulk 檔已可下載。'),100); downloads.classList.remove('hidden'); write(cmpT('automationPipelineCompletedLog','全自動化資料彙整：全部完成。'));
     }catch(err){ renderSteps(-1,current,current); const failedStage=steps[current]||steps[0]; setState('error',cmpT('automationFailed','全自動化資料彙整失敗'),`${cmpT(failedStage.key,failedStage.fallback)}：${err.message||String(err)}`,(current/steps.length)*100); write(`${cmpT(failedStage.key,failedStage.fallback)}：失敗－${err.message||err}`); }
     finally{ startBtn.disabled=false; }
   });
 })();
 
 </script>
-<script src="/static/i18n.js?v=20260713-auto-v8"></script>
+<script src="/static/i18n.js?v=20260713-auto-v10"></script>
 </body>
 </html>
