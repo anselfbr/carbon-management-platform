@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V24_2_M2B_ZERO_HOUR_FILTER"
+BOM_FORMATTER_VERSION = "CMP_V27_2_VENDOR_NAME_VENDOR_ORDER"
 
 
 DEFAULT_MAPPING = {
@@ -1974,11 +1974,48 @@ def _normalize_vendor_code(value: Any) -> str:
 
 
 def _format_supplier_display_name(vendor_code: Any, vendor_name: Any) -> str:
+    """Format Supplier Name for M2C mapped Raw Material Bulk.
+
+    Display order is ``Vendor Name - Vendor`` so users see the readable supplier
+    name first while the vendor code remains available for identification.
+    """
     vendor = _normalize_vendor_code(vendor_code)
     name = _safe_text(vendor_name)
     if vendor and name:
-        return f"{vendor} - {name}"
-    return vendor or name
+        return f"{name} - {vendor}"
+    return name or vendor
+
+
+def _supplier_bulk_name_only(supplier_master_name: Any, supplier_display_name: Any, vendor_code: Any) -> str:
+    """Return the plain supplier name for Supplier Bulk Create output.
+
+    M2C mapped Raw Material Bulk uses ``Vendor Name - Vendor`` for display and
+    supplier mapping/dropdown matching. The
+    separate supplier_bulk_create workbook should contain only the supplier name
+    in its ``Supplier Name`` column.
+    """
+    master_name = _safe_text(supplier_master_name)
+    if master_name:
+        return master_name
+
+    display_name = _safe_text(supplier_display_name)
+    vendor = _normalize_vendor_code(vendor_code)
+    if not display_name:
+        return vendor
+
+    # Fallback for rows that only retain a combined display value. Support both
+    # legacy ``Vendor - Vendor Name`` and current ``Vendor Name - Vendor`` forms.
+    match = re.match(r"^\s*(.*?)\s+-\s+(.*?)\s*$", display_name)
+    if match:
+        left_text = _safe_text(match.group(1))
+        right_text = _safe_text(match.group(2))
+        left_code = _normalize_vendor_code(left_text)
+        right_code = _normalize_vendor_code(right_text)
+        if vendor and left_code == vendor and right_text:
+            return right_text
+        if vendor and right_code == vendor and left_text:
+            return left_text
+    return display_name
 
 
 def _supplier_header_key(value: Any) -> str:
@@ -2432,9 +2469,9 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
         if not supplier_code:
             continue
         unit_name = _first_text(row, ["transport_destination", "Transportation Destination", "transportation_destination", "production_site", "Production Site", "Unit Name"])
-        supplier_name = _first_text(row, ["supplier_name", "Supplier Name", "Supplier Name (optional)"])
-        if not supplier_name:
-            supplier_name = _first_text(row, ["supplier_master_name", "Vendor Name", "Search Term"])
+        supplier_display_name = _first_text(row, ["supplier_name", "Supplier Name", "Supplier Name (optional)"])
+        supplier_master_name = _first_text(row, ["supplier_master_name", "Vendor Name-2", "Vendor Name", "Search Term"])
+        supplier_name = _supplier_bulk_name_only(supplier_master_name, supplier_display_name, supplier_code)
         country_area = _first_text(row, ["supplier_country_area", "Country/Area", "country_area", "Country"])
         supplier_address = _first_text(row, ["supplier_address", "Supplier Address", "transport_origin", "Transportation Origin"])
         key = (supplier_name, supplier_code, country_area, supplier_address, unit_name)
@@ -4299,7 +4336,11 @@ def _write_supplier_mapped_bulk_streaming(
                 supplier_code = _normalize_vendor_code(mapped_row.get("supplier_code", ""))
                 if supplier_code:
                     supplier_unique.add((
-                        _safe_text(mapped_row.get("supplier_name", "")) or _safe_text(mapped_row.get("supplier_master_name", "")),
+                        _supplier_bulk_name_only(
+                            mapped_row.get("supplier_master_name", ""),
+                            mapped_row.get("supplier_name", ""),
+                            supplier_code,
+                        ),
                         supplier_code,
                         _safe_text(mapped_row.get("supplier_country_area", "")),
                         _safe_text(mapped_row.get("supplier_address", "")) or _safe_text(mapped_row.get("transport_origin", "")),
@@ -4352,7 +4393,17 @@ def _write_supplier_mapped_bulk_streaming(
                     raw_descriptions[raw_material] = mapped_row.get("description", "") or description_map.get(raw_material, "") or ""
                 supplier_code = _normalize_vendor_code(mapped_row.get("supplier_code", ""))
                 if supplier_code:
-                    supplier_unique.add((_safe_text(mapped_row.get("supplier_name", "")) or _safe_text(mapped_row.get("supplier_master_name", "")), supplier_code, _safe_text(mapped_row.get("supplier_country_area", "")), _safe_text(mapped_row.get("supplier_address", "")) or _safe_text(mapped_row.get("transport_origin", "")), _safe_text(mapped_row.get("transport_destination", ""))))
+                    supplier_unique.add((
+                        _supplier_bulk_name_only(
+                            mapped_row.get("supplier_master_name", ""),
+                            mapped_row.get("supplier_name", ""),
+                            supplier_code,
+                        ),
+                        supplier_code,
+                        _safe_text(mapped_row.get("supplier_country_area", "")),
+                        _safe_text(mapped_row.get("supplier_address", "")) or _safe_text(mapped_row.get("transport_origin", "")),
+                        _safe_text(mapped_row.get("transport_destination", "")),
+                    ))
                 output_rows += 1
             if progress_callback and (input_rows == 1 or input_rows % progress_every == 0):
                 progress_callback(step=f"Applying Supplier mapping: {current_file or source_file.name}", processed=input_rows, total=0, progress=30, current_file=current_file or source_file.name)
@@ -4561,4 +4612,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V27_0_MODULE2C_LARGE_DATASET_STREAMING"
+BOM_FORMATTER_VERSION = "CMP_V27_2_VENDOR_NAME_VENDOR_ORDER"
