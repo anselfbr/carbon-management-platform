@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AG_AA_FALLBACK_FORMULA_V1_20260711"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SHORT_BULK_FILENAME_V1_20260714"
 
 
 def _norm(value: Any) -> str:
@@ -1377,6 +1377,53 @@ def apply_ccl_factors_to_raw_material_bulk(
     }
 
 
+def _short_m3_bulk_output_base_name(original_name: str) -> str:
+    """Build a concise, readable M3A output basename from an M2B/M2C workbook.
+
+    Example:
+    supplier_mapped_raw_material_activity_data_bulk_廣州石碣廠-IPS_3a7a714e15_e17fd5fe2b.xlsx
+    -> raw_material_bulk_廣州石碣廠-IPS_e17fd5fe
+
+    The first upstream token is removed and the final job token is shortened to
+    eight characters. The site / BU label remains intact for user recognition.
+    """
+    stem = Path(original_name).stem
+    lowered = stem.lower()
+    prefixes = (
+        "factor_filled_supplier_mapped_raw_material_activity_data_bulk_",
+        "factor_filled_supplier_mapped_raw_material_bulk_",
+        "supplier_mapped_raw_material_activity_data_bulk_",
+        "supplier_mapped_raw_material_bulk_",
+        "factor_filled_raw_material_activity_data_bulk_",
+        "raw_material_activity_data_bulk_",
+        "factor_filled_raw_material_bulk_",
+        "raw_material_bulk_",
+    )
+    remainder = stem
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            remainder = stem[len(prefix):]
+            break
+
+    # M2C names normally end with two hexadecimal tokens:
+    # <site-BU>_<module2b-token>_<module2c-token>. Keep only the final token.
+    two_tokens = re.match(r"^(?P<label>.+)_(?P<upstream>[0-9a-fA-F]{8,})_(?P<job>[0-9a-fA-F]{8,})$", remainder)
+    if two_tokens:
+        label = two_tokens.group("label").strip(" _-")
+        short_token = two_tokens.group("job")[:8].lower()
+        return f"raw_material_bulk_{label}_{short_token}"
+
+    # M2B input may contain only one token. Keep a shortened form of that token.
+    one_token = re.match(r"^(?P<label>.+)_(?P<job>[0-9a-fA-F]{8,})$", remainder)
+    if one_token:
+        label = one_token.group("label").strip(" _-")
+        short_token = one_token.group("job")[:8].lower()
+        return f"raw_material_bulk_{label}_{short_token}"
+
+    cleaned = remainder.strip(" _-") or "output"
+    return f"raw_material_bulk_{cleaned}"
+
+
 def _is_raw_material_bulk_zip_member(filename: str) -> bool:
     """Return True only for Raw Material Bulk workbooks inside Module 2 ZIP packages.
 
@@ -1455,13 +1502,14 @@ def apply_ccl_factors_to_raw_material_bulk_package(
             with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
                 for file_idx, info in enumerate(excel_members, start=1):
                     original_name = Path(info.filename).name
-                    original_stem = Path(original_name).stem
                     input_file = tmpdir_path / f"input_{file_idx}_{original_name}"
-                    filled_name = f"factor_filled_{original_name}"
+                    concise_base_name = _short_m3_bulk_output_base_name(original_name)
+                    filled_name = f"{concise_base_name}.xlsx"
                     # Use a temporary ZIP per input workbook so large single workbooks
                     # can be split into multiple XLSX parts, then flatten those parts
-                    # into the final M3 package.
-                    filled_file = tmpdir_path / f"factor_filled_{original_stem}.zip"
+                    # into the final M3 package. The temporary ZIP basename controls
+                    # the final split workbook names inside the delivered ZIP.
+                    filled_file = tmpdir_path / f"{concise_base_name}.zip"
                     with zin.open(info, "r") as src, input_file.open("wb") as dst:
                         shutil.copyfileobj(src, dst, length=1024 * 1024)
 
@@ -1858,7 +1906,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_AA_AG_AA_FALLBACK_FORMULA_V1_20260711"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SHORT_BULK_FILENAME_V1_20260714"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
