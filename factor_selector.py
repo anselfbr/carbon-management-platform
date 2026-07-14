@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SHORT_BULK_FILENAME_V1_20260714"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SHORT_FILENAME_COUNTRY_TBD_MATCHED_ONLY_V3_20260714"
 
 
 def _norm(value: Any) -> str:
@@ -1118,13 +1118,16 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                     out[target_activity_cols["data_source"] - 1] = "SAP"
                 if target_activity_cols.get("unit") and not out[target_activity_cols["unit"] - 1]:
                     out[target_activity_cols["unit"] - 1] = _row_value(values, source_activity_cols.get("unit")) or "PC"
+                # Country/Area is populated only when the CCL factor is matched.
+                # Clear any upstream/source value first so unmatched rows remain blank.
+                out[factor_cols["country_area"] - 1] = None
                 item = ccl_map.get(normalized_material)
                 if item:
+                    out[factor_cols["country_area"] - 1] = "TBD"
                     out[factor_cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
                     out[factor_cols["emission_factor"] - 1] = item.get("emission_factor")
                     out[factor_cols["factor_source"] - 1] = "Ecoinvent"
                     out[factor_cols["factor_comment"] - 1] = "CCLibrary"
-                    out[factor_cols["country_area"] - 1] = "GLO"
                     start_date = _row_value(values, source_activity_cols.get("doc_start"))
                     out[factor_cols["enabled_date"] - 1] = start_date or out[target_activity_cols["doc_start"] - 1] if target_activity_cols.get("doc_start") else start_date
                     out[factor_cols["data_quality"] - 1] = "SECONDARY"
@@ -1312,13 +1315,16 @@ def apply_ccl_factors_to_raw_material_bulk(
             material = _text(row_values[cols["material"] - 1] if len(row_values) >= cols["material"] else None)
             if material:
                 non_empty_material_rows += 1
+                # Country/Area is populated only when the CCL factor is matched.
+                # Clear any upstream/source value first so unmatched rows remain blank.
+                row_values[cols["country"] - 1] = None
                 item = ccl_map.get(_normalize_material_key(material))
                 if item:
+                    row_values[cols["country"] - 1] = "TBD"
                     row_values[cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
                     row_values[cols["emission_factor"] - 1] = item.get("emission_factor")
                     row_values[cols["factor_source"] - 1] = "Ecoinvent"
                     row_values[cols["factor_comment"] - 1] = "CCLibrary"
-                    row_values[cols["country"] - 1] = "GLO"
                     row_values[cols["enabled_date"] - 1] = row_values[cols["doc_start"] - 1] if cols.get("doc_start") else None
                     row_values[cols["data_quality"] - 1] = "SECONDARY"
                     matched += 1
@@ -1906,7 +1912,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SHORT_BULK_FILENAME_V1_20260714"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SHORT_FILENAME_COUNTRY_TBD_MATCHED_ONLY_V3_20260714"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
