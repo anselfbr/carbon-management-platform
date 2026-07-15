@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V27_2_VENDOR_NAME_VENDOR_ORDER"
+BOM_FORMATTER_VERSION = "CMP_V27_3_PLANT_TBC_PRIORITY"
 
 
 DEFAULT_MAPPING = {
@@ -1952,6 +1952,36 @@ SUPPLIER_BULK_CODE_ALIASES = ["Supplier Code", "Supplier Code (optional)", "Vend
 SUPPLIER_BULK_COUNTRY_ALIASES = ["Country/Area", "Country / Area", "Country", "Country Area", "國家/地區", "國家"]
 SUPPLIER_BULK_ADDRESS_ALIASES = ["Supplier Address", "Supplier Address (optional)", "Supplier Address1", "供應商地址"]
 SUPPLIER_BULK_UNIT_ALIASES = ["Unit Name", "Unit", "Transportation Destination", "Production Site", "單位名稱", "廠區"]
+SUPPLIER_PLANT_ALIASES = [
+    "Plant", "Plant Code", "Production Plant", "Production Site", "Site", "Factory",
+    "工廠", "工廠代碼", "廠別", "廠區", "廠區代碼", "生產廠區",
+]
+
+# Plant/Unit Name aliases used only for selecting the uploaded site-specific TBC
+# supplier. 2670 can produce both A2 and A9 products, so its TBC record is made
+# available to both destinations when the supplier master identifies the site by
+# Plant code instead of the full Unit Name.
+_PLANT_TO_UNIT_NAMES: dict[str, tuple[str, ...]] = {
+    "2670": ("常州廠(A9)-IPS", "常州廠(A2)-IPS"),
+    "3760": ("廣州石碣廠-IPS",),
+    "3775": ("廣州石碣廠-IPS",),
+    "4070": ("泰國廠-IPS",),
+    "4270": ("越南海防廠-IPS",),
+    "429A": ("越南海防廠-IPS",),
+    "A9": ("常州廠(A9)-IPS",),
+    "A2": ("常州廠(A2)-IPS",),
+}
+
+_PLANT_COUNTRY_AREA: dict[str, str] = {
+    "2670": "China",
+    "3760": "China",
+    "3775": "China",
+    "4070": "Thailand",
+    "4270": "Viet Nam",
+    "429A": "Viet Nam",
+    "A9": "China",
+    "A2": "China",
+}
 
 # Broaden raw material template header aliases while keeping old behavior.
 TRANSPORT_ORIGIN_ALIASES = list(dict.fromkeys(TRANSPORT_ORIGIN_ALIASES + [
@@ -1971,6 +2001,78 @@ def _normalize_vendor_code(value: Any) -> str:
         text = text[:-2]
     text = re.sub(r"\s+", "", text)
     return text
+
+
+def _site_lookup_keys(value: Any) -> list[str]:
+    """Return normalized lookup keys for Plant codes and Unit Name labels."""
+    text = _safe_text(value)
+    if not text:
+        return []
+
+    keys: list[str] = []
+
+    def add(candidate: Any) -> None:
+        candidate_text = _safe_text(candidate)
+        if not candidate_text:
+            return
+        for key in (
+            _normalize_template_header(candidate_text),
+            re.sub(r"\s+", "", candidate_text).upper(),
+            _normalize_vendor_code(candidate_text),
+        ):
+            if key and key not in keys:
+                keys.append(key)
+
+    add(text)
+    plant_code = _normalize_vendor_code(text)
+    for unit_name in _PLANT_TO_UNIT_NAMES.get(plant_code, ()):
+        add(unit_name)
+
+    compact = re.sub(r"\s+", "", text).upper()
+    alias_matches = {
+        "常州廠(A9)-IPS": ("A9", "CHANGZHOUA9"),
+        "常州廠(A2)-IPS": ("A2", "CHANGZHOUA2"),
+        "廣州石碣廠-IPS": ("廣州", "广州", "石碣", "GUANGZHOU", "SHIJIE"),
+        "泰國廠-IPS": ("泰國", "泰国", "THAILAND", "THAI"),
+        "越南海防廠-IPS": ("越南", "海防", "VIETNAM", "VIET NAM", "HAIPHONG", "HAI PHONG"),
+    }
+    for unit_name, aliases in alias_matches.items():
+        if any(re.sub(r"\s+", "", alias).upper() in compact for alias in aliases):
+            add(unit_name)
+
+    return keys
+
+
+def _country_area_for_unit_name(unit_name: Any, plant_value: Any = "", uploaded_country: Any = "") -> str:
+    """Resolve the Supplier Bulk country using the destination Unit Name first."""
+    unit_text = _safe_text(unit_name)
+    compact = re.sub(r"\s+", "", unit_text).upper()
+    if any(token in compact for token in ("常州", "廣州", "广州", "CHANGZHOU", "GUANGZHOU", "SHIJIE")):
+        return "China"
+    if any(token in compact for token in ("泰國", "泰国", "THAILAND", "THAI")):
+        return "Thailand"
+    if any(token in compact for token in ("越南", "海防", "VIETNAM", "HAIPHONG")):
+        return "Viet Nam"
+
+    plant_code = _normalize_vendor_code(plant_value)
+    if plant_code in _PLANT_COUNTRY_AREA:
+        return _PLANT_COUNTRY_AREA[plant_code]
+
+    country = _safe_text(uploaded_country)
+    normalized_country = re.sub(r"\s+", " ", country).strip()
+    if normalized_country.upper() in {"VIETNAM", "VIET NAM"}:
+        return "Viet Nam"
+    return normalized_country
+
+
+def _select_uploaded_tbc_supplier_for_destination(
+    tbc_supplier_map: dict[str, dict[str, str]] | None,
+    transportation_destination: Any,
+) -> dict[str, str] | None:
+    for key in _site_lookup_keys(transportation_destination):
+        if tbc_supplier_map and key in tbc_supplier_map:
+            return tbc_supplier_map[key]
+    return None
 
 
 def _format_supplier_display_name(vendor_code: Any, vendor_name: Any) -> str:
@@ -2078,6 +2180,14 @@ def _find_supplier_col_by_rule(df: pd.DataFrame, kind: str) -> str | None:
             if "INCOTERMS" in key and ("PART2" in key or key.endswith("2")):
                 return col
         return None
+    if kind == "plant":
+        exact = _find_any_dataframe_column(df, SUPPLIER_PLANT_ALIASES)
+        if exact:
+            return exact
+        for key, col in keyed:
+            if key in {"PLANT", "PLANTCODE", "PRODUCTIONPLANT", "PRODUCTIONSITE", "SITE", "FACTORY"}:
+                return col
+        return None
     return None
 
 
@@ -2128,16 +2238,19 @@ def _supplier_record_score(record: dict[str, str]) -> int:
     return score
 
 
-def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ...] | None) -> tuple[dict[str, list[dict[str, str]]], Dict[str, Any]]:
+def _read_supplier_files(
+    supplier_paths: list[str | Path] | tuple[str | Path, ...] | None,
+) -> tuple[dict[str, list[dict[str, str]]], dict[str, dict[str, str]], Dict[str, Any]]:
     """Read one or many supplier masters and normalize to Material -> suppliers.
 
     A/B supplier formats are supported. If the same Material+Vendor appears in
     multiple uploaded files, the record with richer address information wins.
     """
     if not supplier_paths:
-        return {}, {"supplier_files": 0, "supplier_rows": 0, "supplier_mapped_materials": 0, "supplier_mapped_suppliers": 0, "supplier_skipped_files": []}
+        return {}, {}, {"supplier_files": 0, "supplier_rows": 0, "supplier_mapped_materials": 0, "supplier_mapped_suppliers": 0, "supplier_site_tbc_records": 0, "supplier_skipped_files": []}
 
     by_material_vendor: dict[tuple[str, str], dict[str, str]] = {}
+    site_tbc_by_key: dict[str, dict[str, str]] = {}
     total_rows = 0
     skipped_files: list[str] = []
 
@@ -2157,16 +2270,18 @@ def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ..
         city_col = _find_supplier_col_by_rule(df, "city")
         street_col = _find_supplier_col_by_rule(df, "street")
         incoterms2_col = _find_supplier_col_by_rule(df, "incoterms2")
+        plant_col = _find_supplier_col_by_rule(df, "plant")
 
-        if not material_col or not vendor_col:
-            skipped_files.append(f"{path.name}: missing material/vendor column")
+        if not vendor_col or (not material_col and not plant_col):
+            skipped_files.append(f"{path.name}: missing vendor and material/plant column")
             continue
 
         total_rows += int(len(df))
         for _, row in df.iterrows():
-            material_key = _normalize_material_key(row.get(material_col))
+            material_key = _normalize_material_key(row.get(material_col)) if material_col else ""
             vendor_code = _normalize_vendor_code(row.get(vendor_col))
-            if not material_key or not vendor_code:
+            plant_value = _safe_text(row.get(plant_col)) if plant_col else ""
+            if not vendor_code:
                 continue
             vendor_name = _safe_text(row.get(vendor_name_col)) if vendor_name_col else ""
             country = _safe_text(row.get(country_col)) if country_col else ""
@@ -2179,12 +2294,28 @@ def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ..
                 "country_area": country,
                 "supplier_address": supplier_address,
                 "transport_origin": supplier_address,
+                "plant": plant_value,
                 "source_file": path.name,
             }
-            key = (material_key, vendor_code)
-            current = by_material_vendor.get(key)
-            if current is None or _supplier_record_score(candidate) > _supplier_record_score(current):
-                by_material_vendor[key] = candidate
+            if material_key:
+                key = (material_key, vendor_code)
+                current = by_material_vendor.get(key)
+                if current is None or _supplier_record_score(candidate) > _supplier_record_score(current):
+                    by_material_vendor[key] = candidate
+
+            # IPS supplier masters may define one generic TBC supplier per Plant
+            # without a material number. Preserve it as the preferred fallback for
+            # all unmatched raw materials at that Unit Name.
+            if vendor_code == "TBC" and plant_value:
+                tbc_candidate = dict(candidate)
+                tbc_candidate["supplier_code"] = "TBC"
+                tbc_candidate["vendor_code"] = "TBC"
+                tbc_candidate["supplier_master_name"] = "TBC"
+                tbc_candidate["supplier_name"] = "TBC - TBC"
+                for site_key in _site_lookup_keys(plant_value):
+                    current_tbc = site_tbc_by_key.get(site_key)
+                    if current_tbc is None or _supplier_record_score(tbc_candidate) > _supplier_record_score(current_tbc):
+                        site_tbc_by_key[site_key] = tbc_candidate
 
     records: dict[str, list[dict[str, str]]] = {}
     for (material_key, _vendor_code), record in by_material_vendor.items():
@@ -2192,11 +2323,16 @@ def _read_supplier_files(supplier_paths: list[str | Path] | tuple[str | Path, ..
     for material_key in records:
         records[material_key].sort(key=lambda r: r.get("vendor_code", ""))
 
-    return records, {
+    unique_tbc_records = {
+        (record.get("plant", ""), record.get("supplier_address", ""), record.get("country_area", ""))
+        for record in site_tbc_by_key.values()
+    }
+    return records, site_tbc_by_key, {
         "supplier_files": int(len(supplier_paths)),
         "supplier_rows": int(total_rows),
         "supplier_mapped_materials": int(len(records)),
         "supplier_mapped_suppliers": int(sum(len(v) for v in records.values())),
+        "supplier_site_tbc_records": int(len(unique_tbc_records)),
         "supplier_skipped_files": skipped_files,
     }
 
@@ -2371,26 +2507,34 @@ def _apply_supplier_mapping_to_exploded(
             "tbc_fallback_rows": 0,
         }
 
-    # If a raw material does not match any uploaded supplier row, keep the activity row
-    # but leave all supplier-related fields blank. Module 2C must not invent a TBC
-    # supplier; only supplier records explicitly present in the uploaded supplier file
-    # are allowed to be written.
+    # If a raw material does not match a material-level supplier row, prefer the
+    # uploaded Plant-specific TBC supplier. Only use the deterministic system TBC
+    # when the supplier master does not define a TBC for that destination.
     for _, row in work.iterrows():
         original = row.to_dict()
         raw_key = _normalize_material_key(row.get("raw_material"))
         destination = _safe_text(row.get("transport_destination"))
         suppliers = supplier_map.get(raw_key) or []
         if not suppliers:
-            unmatched_row = dict(original)
-            unmatched_row["transport_destination"] = destination
-            unmatched_row["supplier_name"] = ""
-            unmatched_row["transport_origin"] = ""
-            unmatched_row["supplier_code"] = ""
-            unmatched_row["supplier_master_name"] = ""
-            unmatched_row["supplier_country_area"] = ""
-            unmatched_row["supplier_address"] = ""
-            supplier_name_missing += 1
-            output_rows.append(unmatched_row)
+            uploaded_tbc = _select_uploaded_tbc_supplier_for_destination(tbc_supplier_map, destination)
+            uploaded_address = ""
+            uploaded_country = ""
+            uploaded_plant = ""
+            if uploaded_tbc:
+                uploaded_address = uploaded_tbc.get("supplier_address", "") or uploaded_tbc.get("transport_origin", "")
+                uploaded_country = uploaded_tbc.get("country_area", "")
+                uploaded_plant = uploaded_tbc.get("plant", "")
+            fallback_row = dict(original)
+            fallback_row["transport_destination"] = destination
+            fallback_row["supplier_name"] = "TBC - TBC"
+            fallback_row["transport_origin"] = uploaded_address or "TBC"
+            fallback_row["supplier_code"] = "TBC"
+            fallback_row["supplier_master_name"] = "TBC"
+            fallback_row["supplier_country_area"] = _country_area_for_unit_name(destination, uploaded_plant, uploaded_country)
+            fallback_row["supplier_address"] = uploaded_address or "TBC"
+            supplier_name_matched += 1
+            tbc_fallback_rows += 1
+            output_rows.append(fallback_row)
             continue
         matched_source_rows += 1
         for info in suppliers:
@@ -2399,13 +2543,22 @@ def _apply_supplier_mapping_to_exploded(
             new_row["transport_destination"] = destination
             supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
             supplier_code = info.get("supplier_code", "") or info.get("vendor_code", "")
+            if _normalize_vendor_code(supplier_code) == "TBC":
+                uploaded_tbc = _select_uploaded_tbc_supplier_for_destination(tbc_supplier_map, destination)
+                if uploaded_tbc:
+                    supplier_address = supplier_address or uploaded_tbc.get("supplier_address", "") or uploaded_tbc.get("transport_origin", "")
             supplier_name = info.get("supplier_name", "") or _format_supplier_display_name(supplier_code, info.get("supplier_master_name", ""))
             if not supplier_name:
                 supplier_name = _select_supplier_name_option(supplier_options, destination, supplier_code)
             new_row["transport_origin"] = supplier_address
             new_row["supplier_code"] = supplier_code
             new_row["supplier_master_name"] = info.get("supplier_master_name", "") or _supplier_name_from_option(supplier_name)
-            new_row["supplier_country_area"] = info.get("country_area", "")
+            if _normalize_vendor_code(supplier_code) == "TBC":
+                new_row["supplier_country_area"] = _country_area_for_unit_name(destination, info.get("plant", ""), info.get("country_area", ""))
+                new_row["supplier_master_name"] = "TBC"
+                new_row["supplier_name"] = "TBC - TBC"
+            else:
+                new_row["supplier_country_area"] = info.get("country_area", "")
             new_row["supplier_address"] = supplier_address
             new_row["supplier_name"] = supplier_name
             if supplier_name:
@@ -2441,6 +2594,60 @@ def _first_text(row: pd.Series, names: list[str]) -> str:
     return ""
 
 
+def _supplier_bulk_row_score(row: tuple[str, str, str, str, str]) -> int:
+    """Prefer uploaded, information-rich rows when duplicate TBC rows exist."""
+    supplier_name, supplier_code, country_area, supplier_address, unit_name = row
+    score = 0
+    address = _safe_text(supplier_address)
+    country = _safe_text(country_area)
+    if address and address.upper() != "TBC":
+        score += 10000 + min(len(address), 1000)
+    elif address:
+        score += 1
+    if country:
+        score += 1000
+    if _safe_text(supplier_name):
+        score += 100
+    if _safe_text(unit_name):
+        score += 10
+    if _normalize_vendor_code(supplier_code) == "TBC":
+        score += 5
+    return score
+
+
+def _normalize_supplier_bulk_rows(
+    supplier_rows: Any,
+) -> list[tuple[str, str, str, str, str]]:
+    """Normalize Supplier Bulk rows and keep only one TBC per Unit Name."""
+    selected: dict[tuple[Any, ...], tuple[str, str, str, str, str]] = {}
+    for raw_row in supplier_rows or []:
+        if len(raw_row) != 5:
+            continue
+        supplier_name, supplier_code, country_area, supplier_address, unit_name = raw_row
+        code = _normalize_vendor_code(supplier_code)
+        name = _safe_text(supplier_name)
+        country = _safe_text(country_area)
+        address = _safe_text(supplier_address)
+        unit = _safe_text(unit_name)
+        if not code:
+            continue
+
+        if code == "TBC":
+            name = "TBC"
+            country = _country_area_for_unit_name(unit, uploaded_country=country)
+            normalized_unit = _normalize_template_header(unit) or re.sub(r"\s+", "", unit).upper()
+            key: tuple[Any, ...] = ("TBC", normalized_unit)
+        else:
+            key = (name, code, country, address, unit)
+
+        candidate = (name, code, country, address, unit)
+        current = selected.get(key)
+        if current is None or _supplier_bulk_row_score(candidate) > _supplier_bulk_row_score(current):
+            selected[key] = candidate
+
+    return sorted(selected.values(), key=lambda row: (row[4], row[1], row[0], row[3]))
+
+
 def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supplier_bulk_template_path: str | Path, output_path: str | Path) -> Dict[str, Any]:
     supplier_bulk_template_path = Path(supplier_bulk_template_path)
     output_path = Path(output_path)
@@ -2462,8 +2669,7 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
     }
     _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
 
-    rows: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str, str, str]] = set()
+    raw_rows: list[tuple[str, str, str, str, str]] = []
     for _, row in expanded_with_suppliers.iterrows():
         supplier_code = _normalize_vendor_code(_first_text(row, ["supplier_code", "vendor_code", "Vendor", "Vender", "Supplier Code"]))
         if not supplier_code:
@@ -2474,25 +2680,17 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
         supplier_name = _supplier_bulk_name_only(supplier_master_name, supplier_display_name, supplier_code)
         country_area = _first_text(row, ["supplier_country_area", "Country/Area", "country_area", "Country"])
         supplier_address = _first_text(row, ["supplier_address", "Supplier Address", "transport_origin", "Transportation Origin"])
-        key = (supplier_name, supplier_code, country_area, supplier_address, unit_name)
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append({
-            "supplier_name": supplier_name,
-            "supplier_code": supplier_code,
-            "country_area": country_area,
-            "supplier_address": supplier_address,
-            "unit_name": unit_name,
-        })
+        raw_rows.append((supplier_name, supplier_code, country_area, supplier_address, unit_name))
+
+    rows = _normalize_supplier_bulk_rows(raw_rows)
 
     row_idx = DATA_START_ROW
-    for row in rows:
-        _write_template_value(ws, row_idx, cols["supplier_name"], row["supplier_name"])
-        _write_template_value(ws, row_idx, cols["supplier_code"], row["supplier_code"])
-        _write_template_value(ws, row_idx, cols["country_area"], row["country_area"])
-        _write_template_value(ws, row_idx, cols["supplier_address"], row["supplier_address"])
-        _write_template_value(ws, row_idx, cols["unit_name"], row["unit_name"])
+    for supplier_name, supplier_code, country_area, supplier_address, unit_name in rows:
+        _write_template_value(ws, row_idx, cols["supplier_name"], supplier_name)
+        _write_template_value(ws, row_idx, cols["supplier_code"], supplier_code)
+        _write_template_value(ws, row_idx, cols["country_area"], country_area)
+        _write_template_value(ws, row_idx, cols["supplier_address"], supplier_address)
+        _write_template_value(ws, row_idx, cols["unit_name"], unit_name)
         row_idx += 1
 
     wb.save(output_path)
@@ -2509,6 +2707,7 @@ def _write_raw_material_bulk_from_exploded(
     raw_material_template_path: str | Path,
     output_path: str | Path,
     supplier_map: dict[str, list[dict[str, str]]] | None = None,
+    tbc_supplier_map: dict[str, dict[str, str]] | None = None,
     return_expanded: bool = False,
 ) -> Dict[str, Any] | tuple[Dict[str, Any], pd.DataFrame]:
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
@@ -2559,7 +2758,7 @@ def _write_raw_material_bulk_from_exploded(
         exploded,
         supplier_map or {},
         supplier_options,
-        tbc_supplier_map=None,
+        tbc_supplier_map=tbc_supplier_map,
     )
 
     _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
@@ -2611,8 +2810,8 @@ def _write_raw_material_bulk_from_exploded(
         "raw_materials": int(expanded["raw_material"].nunique()) if not expanded.empty else 0,
         "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
         "supplier_name_options": int(len(supplier_options)),
-        "site_tbc_supplier_count": 0,
-        "tbc_fallback_policy": "disabled_leave_supplier_fields_blank",
+        "site_tbc_supplier_count": int(len({id(v) for v in (tbc_supplier_map or {}).values()})),
+        "tbc_fallback_policy": "prefer_uploaded_plant_tbc_then_system_fallback",
     }
     result.update(supplier_write_summary)
     if return_expanded:
@@ -2631,7 +2830,7 @@ def generate_raw_material_bulk_file(
 ) -> Dict[str, Any]:
     output_path = Path(output_path)
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
-    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+    supplier_map, tbc_supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
     exploded, summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
@@ -2642,6 +2841,7 @@ def generate_raw_material_bulk_file(
         raw_material_template_path=raw_material_template_path,
         output_path=output_path,
         supplier_map=supplier_map,
+        tbc_supplier_map=tbc_supplier_map,
         return_expanded=True,
     )
     summary.update(write_summary)
@@ -2670,7 +2870,7 @@ def generate_raw_material_bulk_files_by_site_zip(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     bom_df, used_columns = _read_boms(bom_path, mapping=mapping)
-    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+    supplier_map, tbc_supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
     exploded, base_summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
@@ -2726,6 +2926,7 @@ def generate_raw_material_bulk_files_by_site_zip(
                 raw_material_template_path=raw_material_template_path,
                 output_path=file_path,
                 supplier_map=supplier_map,
+                tbc_supplier_map=tbc_supplier_map,
                 return_expanded=True,
             )
             expanded_all.append(expanded_site)
@@ -4200,30 +4401,45 @@ def _supplier_rows_for_activity_row(row: dict[str, Any], supplier_map: dict[str,
     destination = _safe_text(row.get("transport_destination"))
     suppliers = supplier_map.get(raw_key) or []
     if not suppliers:
-        # Preserve the activity row but do not invent a TBC supplier. Supplier fields
-        # stay blank unless the uploaded supplier file contains an explicit match.
+        uploaded_tbc = _select_uploaded_tbc_supplier_for_destination(tbc_supplier_map, destination)
+        uploaded_address = ""
+        uploaded_country = ""
+        uploaded_plant = ""
+        if uploaded_tbc:
+            uploaded_address = uploaded_tbc.get("supplier_address", "") or uploaded_tbc.get("transport_origin", "")
+            uploaded_country = uploaded_tbc.get("country_area", "")
+            uploaded_plant = uploaded_tbc.get("plant", "")
         out = dict(row)
         out["transport_destination"] = destination
-        out["supplier_name"] = ""
-        out["transport_origin"] = ""
-        out["supplier_code"] = ""
-        out["supplier_master_name"] = ""
-        out["supplier_country_area"] = ""
-        out["supplier_address"] = ""
-        yield out, False, False, False
+        out["supplier_name"] = "TBC - TBC"
+        out["transport_origin"] = uploaded_address or "TBC"
+        out["supplier_code"] = "TBC"
+        out["supplier_master_name"] = "TBC"
+        out["supplier_country_area"] = _country_area_for_unit_name(destination, uploaded_plant, uploaded_country)
+        out["supplier_address"] = uploaded_address or "TBC"
+        yield out, False, True, True
         return
     for info in suppliers:
         out = dict(row)
         out["transport_destination"] = destination
         supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
         supplier_code = info.get("supplier_code", "") or info.get("vendor_code", "")
+        if _normalize_vendor_code(supplier_code) == "TBC":
+            uploaded_tbc = _select_uploaded_tbc_supplier_for_destination(tbc_supplier_map, destination)
+            if uploaded_tbc:
+                supplier_address = supplier_address or uploaded_tbc.get("supplier_address", "") or uploaded_tbc.get("transport_origin", "")
         supplier_name = info.get("supplier_name", "") or _format_supplier_display_name(supplier_code, info.get("supplier_master_name", ""))
         if not supplier_name:
             supplier_name = _select_supplier_name_option(supplier_options, destination, supplier_code)
         out["transport_origin"] = supplier_address
         out["supplier_code"] = supplier_code
         out["supplier_master_name"] = info.get("supplier_master_name", "") or _supplier_name_from_option(supplier_name)
-        out["supplier_country_area"] = info.get("country_area", "")
+        if _normalize_vendor_code(supplier_code) == "TBC":
+            out["supplier_master_name"] = "TBC"
+            out["supplier_country_area"] = _country_area_for_unit_name(destination, info.get("plant", ""), info.get("country_area", ""))
+            supplier_name = "TBC - TBC"
+        else:
+            out["supplier_country_area"] = info.get("country_area", "")
         out["supplier_address"] = supplier_address
         out["supplier_name"] = supplier_name
         yield out, True, bool(supplier_name), False
@@ -4259,6 +4475,7 @@ def _write_supplier_mapped_bulk_streaming(
     source_file: str | Path,
     output_path: str | Path,
     supplier_map: dict[str, list[dict[str, str]]],
+    tbc_supplier_map: dict[str, dict[str, str]] | None = None,
     progress_callback=None,
     current_file: str = "",
 ) -> tuple[Dict[str, Any], set[tuple[str, str, str, str, str]]]:
@@ -4271,7 +4488,7 @@ def _write_supplier_mapped_bulk_streaming(
     raw_headers = raw_header_rows[0]
     # Lightweight M2B files may not contain Dropdown Values; supplier display-name
     # options are only a fallback for matched vendors missing a display name.
-    # Unmatched materials remain in the output with blank supplier-related fields.
+    # Plant-specific TBC records are read from the uploaded IPS supplier master.
     try:
         wb_meta = load_workbook(source_file, read_only=True, data_only=True)
         try:
@@ -4280,7 +4497,7 @@ def _write_supplier_mapped_bulk_streaming(
             wb_meta.close()
     except Exception:
         supplier_options = []
-    tbc_supplier_map = {}
+    tbc_supplier_map = tbc_supplier_map or {}
     description_map = _read_raw_material_descriptions_streaming(source_file)
 
     input_rows = 0
@@ -4427,8 +4644,8 @@ def _write_supplier_mapped_bulk_streaming(
         "supplier_dropdown_missing_rows": int(supplier_name_missing),
         "tbc_fallback_rows": int(tbc_fallback_rows),
         "supplier_name_options": int(len(supplier_options)),
-        "site_tbc_supplier_count": 0,
-        "tbc_fallback_policy": "disabled_leave_supplier_fields_blank",
+        "site_tbc_supplier_count": int(len({id(v) for v in tbc_supplier_map.values()})),
+        "tbc_fallback_policy": "prefer_uploaded_plant_tbc_then_system_fallback",
         "m2c_large_dataset_mode": True,
         "m2c_template_policy": "Headers and sheet names are preserved; styles/dropdowns/validations/formulas are not copied in M2C Large Dataset Mode.",
     }, supplier_unique
@@ -4455,8 +4672,9 @@ def _write_supplier_bulk_create_file_from_unique_rows(supplier_rows: set[tuple[s
         "unit_name": _find_template_column(ws, SUPPLIER_BULK_UNIT_ALIASES, 5),
     }
     _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
+    normalized_rows = _normalize_supplier_bulk_rows(supplier_rows)
     row_idx = DATA_START_ROW
-    for supplier_name, supplier_code, country_area, supplier_address, unit_name in sorted(supplier_rows):
+    for supplier_name, supplier_code, country_area, supplier_address, unit_name in normalized_rows:
         _write_template_value(ws, row_idx, cols["supplier_name"], supplier_name)
         _write_template_value(ws, row_idx, cols["supplier_code"], supplier_code)
         _write_template_value(ws, row_idx, cols["country_area"], country_area)
@@ -4465,7 +4683,7 @@ def _write_supplier_bulk_create_file_from_unique_rows(supplier_rows: set[tuple[s
         row_idx += 1
     wb.save(output_path)
     return {
-        "supplier_bulk_rows": int(len(supplier_rows)),
+        "supplier_bulk_rows": int(len(normalized_rows)),
         "supplier_bulk_filename": output_path.name,
         "supplier_bulk_download_url": f"/download/{output_path.name}",
         "supplier_bulk_template_columns": cols,
@@ -4500,7 +4718,7 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
 
     if progress_callback:
         progress_callback(step="Reading Supplier files", processed=0, total=0, progress=6)
-    supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
+    supplier_map, tbc_supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
 
     zip_filename = f"supplier_mapped_raw_material_bulk_by_site_{token}.zip"
     zip_path = output_dir / zip_filename
@@ -4544,6 +4762,7 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
                     source_file=source_file,
                     output_path=output_path,
                     supplier_map=supplier_map,
+                    tbc_supplier_map=tbc_supplier_map,
                     progress_callback=progress_callback,
                     current_file=current_name,
                 )
@@ -4611,4 +4830,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V27_3_DISABLE_UNMATCHED_TBC_FALLBACK"
+BOM_FORMATTER_VERSION = "CMP_V27_3_PLANT_TBC_PRIORITY"
