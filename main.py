@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 import traceback
 import uuid
+from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -54,7 +57,7 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V15_0_RULE_MASTER_ENGINE_SITE_PREFIX_WHITELIST =====")
+print("===== CMP MAIN VERSION: CMP_V15_1_F5_WORKSPACE_RESET =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -75,6 +78,88 @@ MODULE2A_JOB_DIR = OUTPUT_DIR / "module2a_jobs"
 MODULE2A_JOB_DIR.mkdir(parents=True, exist_ok=True)
 
 CMP_TIMEZONE = ZoneInfo("Asia/Taipei")
+
+# Every full page load receives a server-side timestamp. All AJAX requests from
+# that page send the timestamp in X-CMP-Workspace-Started-At. Auto-fetch and
+# progress APIs only recognize files created after that timestamp, so F5 starts
+# a clean logical workspace without deleting shared output files.
+CMP_WORKSPACE_CUTOFF: ContextVar[float] = ContextVar("cmp_workspace_cutoff", default=0.0)
+CMP_WORKSPACE_ID: ContextVar[str] = ContextVar("cmp_workspace_id", default="")
+CMP_WORKSPACE_OUTPUT_OWNERS: Dict[str, str] = {}
+CMP_WORKSPACE_OUTPUT_LOCK = Lock()
+
+
+def _workspace_cutoff() -> float:
+    try:
+        return max(0.0, float(CMP_WORKSPACE_CUTOFF.get() or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _workspace_id() -> str:
+    return str(CMP_WORKSPACE_ID.get() or "").strip()
+
+
+def _workspace_path_key(path: Path) -> str:
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path.absolute())
+
+
+def _register_workspace_output(path: Path | None, workspace_id: str = "") -> None:
+    if not path or not path.exists():
+        return
+    owner = str(workspace_id or _workspace_id()).strip()
+    if not owner:
+        return
+    with CMP_WORKSPACE_OUTPUT_LOCK:
+        CMP_WORKSPACE_OUTPUT_OWNERS[_workspace_path_key(path)] = owner
+
+
+def _is_workspace_fresh(path: Path | None) -> bool:
+    if not path or not path.exists():
+        return False
+    workspace_id = _workspace_id()
+    if workspace_id:
+        with CMP_WORKSPACE_OUTPUT_LOCK:
+            return CMP_WORKSPACE_OUTPUT_OWNERS.get(_workspace_path_key(path)) == workspace_id
+    cutoff = _workspace_cutoff()
+    if cutoff <= 0:
+        return True
+    try:
+        return path.stat().st_mtime >= cutoff
+    except OSError:
+        return False
+
+
+def _fresh_path(path: Path | None) -> Path | None:
+    return path if _is_workspace_fresh(path) else None
+
+
+def _freshest_path(paths: list[Path]) -> Path | None:
+    candidates = [path for path in paths if _is_workspace_fresh(path)]
+    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+
+
+@app.middleware("http")
+async def cmp_workspace_scope(request: Request, call_next):
+    raw_cutoff = request.headers.get("x-cmp-workspace-started-at", "")
+    workspace_id = str(request.headers.get("x-cmp-workspace-id", "") or "").strip()
+    try:
+        cutoff = max(0.0, float(raw_cutoff)) if raw_cutoff else 0.0
+    except (TypeError, ValueError):
+        cutoff = 0.0
+    cutoff_token = CMP_WORKSPACE_CUTOFF.set(cutoff)
+    workspace_token = CMP_WORKSPACE_ID.set(workspace_id)
+    try:
+        response = await call_next(request)
+        response.headers["X-CMP-Workspace-Started-At"] = str(cutoff or "")
+        response.headers["X-CMP-Workspace-ID"] = workspace_id
+        return response
+    finally:
+        CMP_WORKSPACE_ID.reset(workspace_token)
+        CMP_WORKSPACE_CUTOFF.reset(cutoff_token)
 
 def _cmp_now_iso() -> str:
     return datetime.now(CMP_TIMEZONE).isoformat(timespec="seconds")
@@ -245,6 +330,7 @@ def _run_module2a_total_usage_job(
     step1_source_filename: str = "",
     step1_source_modified_at: str = "",
     step1_source_path: Path | None = None,
+    workspace_id: str = "",
 ) -> None:
     started_at = _cmp_now_iso()
 
@@ -285,14 +371,16 @@ def _run_module2a_total_usage_job(
             progress_callback=standard_progress_callback,
         )
         if output_path.exists():
+            _register_workspace_output(output_path, workspace_id)
             shutil.copy2(output_path, MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH)
+            _register_workspace_output(MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH, workspace_id)
 
         summary["module2a_working_hour_rollup_policy"] = "Module 2A creates working_hour_rollup_latest.xlsx for Module 1B when Module 1A annual output/classification is available. Module 1B requires this file only when Working Hour Source = Include Semi-finished Working Hour."
         summary["working_hour_rollup_required_by_step2"] = False
         summary["working_hour_rollup_status"] = "skipped"
         summary["working_hour_rollup_message"] = "未找到 Module 1A 年度產品產量與分類結果，因此僅產出標準BOM表總用量；Module 1B 若選擇 Direct Working Hour 不需要此檔。"
 
-        resolved_step1_path = Path(step1_source_path) if step1_source_path else _find_latest_module1_step1_output()
+        resolved_step1_path = Path(step1_source_path) if step1_source_path else None
         if resolved_step1_path and resolved_step1_path.exists():
             try:
                 working_hour_rollup_output_path = OUTPUT_DIR / f"working_hour_rollup_{job_id}.xlsx"
@@ -322,7 +410,9 @@ def _run_module2a_total_usage_job(
                     progress_callback=progress_callback,
                 )
                 if working_hour_rollup_output_path.exists():
+                    _register_workspace_output(working_hour_rollup_output_path, workspace_id)
                     shutil.copy2(working_hour_rollup_output_path, LATEST_WORKING_HOUR_ROLLUP_PATH)
+                    _register_workspace_output(LATEST_WORKING_HOUR_ROLLUP_PATH, workspace_id)
                 summary["working_hour_rollup_status"] = "success"
                 summary["working_hour_rollup_required_by_step2"] = True
                 summary["working_hour_rollup_message"] = "M2A 已以低記憶體串流方式產出 working hour rollup；Module 1B 選擇包含半品工時時會自動引用。"
@@ -385,6 +475,7 @@ def _run_module2b_raw_bulk_job(
     token: str,
     step1_path: Path,
     step1_source: Dict[str, str],
+    workspace_id: str = "",
 ) -> None:
     global MODULE2_RAW_MATERIAL_BULK_PATH
     started_at = _cmp_now_iso()
@@ -425,9 +516,13 @@ def _run_module2b_raw_bulk_job(
         output_path = output_dir / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
         if output_path.exists():
             MODULE2_RAW_MATERIAL_BULK_PATH = output_path
+            _register_workspace_output(output_path, workspace_id)
             shutil.copy2(output_path, MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH)
+            _register_workspace_output(MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH, workspace_id)
         if template_path.exists():
+            _register_workspace_output(template_path, workspace_id)
             shutil.copy2(template_path, RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH)
+            _register_workspace_output(RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH, workspace_id)
             summary["final_raw_material_template_latest"] = RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.name
             summary["final_raw_material_template_latest_download_url"] = f"/download/{RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.name}"
         summary["module1_step1_source_filename"] = step1_path.name
@@ -468,6 +563,7 @@ def _run_module2c_supplier_mapping_job(
     token: str,
     step1_source: Dict[str, str],
     raw_bulk_source: Dict[str, str],
+    workspace_id: str = "",
 ) -> None:
     global MODULE2_RAW_MATERIAL_BULK_PATH
     started_at = _cmp_now_iso()
@@ -512,7 +608,11 @@ def _run_module2c_supplier_mapping_job(
         output_path = output_dir / str(summary.get("output_filename", f"supplier_mapped_raw_material_bulk_by_site_{token}.zip"))
         if output_path.exists():
             MODULE2_RAW_MATERIAL_BULK_PATH = output_path
+            _register_workspace_output(output_path, workspace_id)
             shutil.copy2(output_path, MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH)
+            _register_workspace_output(MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH, workspace_id)
+        if supplier_bulk_output_path.exists():
+            _register_workspace_output(supplier_bulk_output_path, workspace_id)
         summary["module1_step1_source"] = step1_source
         summary["module2b_raw_bulk_source"] = raw_bulk_source
         _set_module2a_job(
@@ -541,7 +641,7 @@ def _run_module2c_supplier_mapping_job(
             completed_at=_cmp_now_iso(),
         )
 
-def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path, raw_template_path: Path | None = None) -> None:
+def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_path: Path, raw_template_path: Path | None = None, workspace_id: str = "") -> None:
     def report(
         progress: int,
         step: str,
@@ -568,6 +668,7 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, progress_callback=report, raw_material_template_path=raw_template_path)
         summary["app_version"] = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3"
         if output_path.exists():
+            _register_workspace_output(output_path, workspace_id)
             try:
                 summary["output_file_size_bytes"] = output_path.stat().st_size
                 summary["output_file_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
@@ -2290,7 +2391,19 @@ def save_uploaded_rule(file_path: Path, rule_set: object = DEFAULT_RULE_SET) -> 
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    workspace_started_at = time.time()
+    workspace_id = uuid.uuid4().hex
+    response = templates.TemplateResponse(
+        "index.html",
+        {
+            "request": request,
+            "workspace_started_at": workspace_started_at,
+            "workspace_id": workspace_id,
+        },
+    )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return response
 
 
 
@@ -2313,6 +2426,7 @@ def _run_module1a_process_job(
     saved_labor_paths: list[Path],
     labor_mode: str,
     rule_set: str,
+    workspace_id: str = "",
 ) -> None:
     started_at = datetime.now(CMP_TIMEZONE)
 
@@ -2352,6 +2466,7 @@ def _run_module1a_process_job(
             rule_set,
             progress_callback=report,
         )
+        _register_workspace_output(output_path, workspace_id)
         elapsed_seconds = max(1, int((datetime.now(CMP_TIMEZONE) - started_at).total_seconds()))
         _set_module1a_job(
             job_id,
@@ -2431,6 +2546,7 @@ async def module1a_process_job(request: Request):
         return JSONResponse({"ok": False, "message": "Reporting Year 請輸入有效年份，或留空代表全部年度。"}, status_code=400)
 
     job_id = uuid.uuid4().hex[:10]
+    workspace_id = _workspace_id()
     saved_paths: list[Path] = []
     for idx, upload in enumerate(upload_files, start=1):
         filename = str(getattr(upload, "filename", "") or f"production_order_{idx}.xlsx")
@@ -2462,6 +2578,7 @@ async def module1a_process_job(request: Request):
         labor_mode=labor_mode,
         rule_set=rule_set,
         year=year_value if year_value is not None else "ALL",
+        workspace_id=workspace_id,
     )
     MODULE1A_EXECUTOR.submit(
         _run_module1a_process_job,
@@ -2471,6 +2588,7 @@ async def module1a_process_job(request: Request):
         saved_labor_paths,
         labor_mode,
         rule_set,
+        workspace_id,
     )
     return {"ok": True, "job_id": job_id, "status_url": f"/module1a/process-job/{job_id}"}
 
@@ -2560,6 +2678,7 @@ async def process(request: Request):
             year_value = int(str(year).strip())
 
         output_path, summary = process_files(saved_paths, year_value, saved_labor_paths, labor_mode, rule_set)
+        _register_workspace_output(output_path)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
@@ -2579,6 +2698,7 @@ def _run_module1b_bulk_job(
     bom_structure_path: Path | None,
     working_hour_rollup_path: Path | None,
     step1_source_mode: str,
+    workspace_id: str = "",
 ) -> None:
     started_at = datetime.now(CMP_TIMEZONE)
 
@@ -2633,7 +2753,9 @@ def _run_module1b_bulk_job(
         output_filename = str(summary.get("output_filename") or "").strip()
         generated_output_path = OUTPUT_DIR / output_filename if output_filename else None
         if generated_output_path and generated_output_path.exists() and generated_output_path.suffix.lower() == ".zip":
+            _register_workspace_output(generated_output_path, workspace_id)
             shutil.copy2(generated_output_path, MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH)
+            _register_workspace_output(MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH, workspace_id)
             summary["module1b_product_activity_bulk_latest"] = MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.name
             summary["module1b_product_activity_bulk_latest_download_url"] = f"/download/{MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.name}"
 
@@ -2685,6 +2807,7 @@ async def module1b_generate_bulk_file_job(request: Request):
         return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
 
     job_id = uuid.uuid4().hex[:10]
+    workspace_id = _workspace_id()
     uploaded_step1_filename = str(getattr(step1_file, "filename", "") or "").strip() if step1_file else ""
     if uploaded_step1_filename:
         if not uploaded_step1_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
@@ -2704,13 +2827,13 @@ async def module1b_generate_bulk_file_job(request: Request):
     bom_structure_path = None
     working_hour_rollup_path = None
     if _is_include_semi_working_hour_source(working_hour_source):
-        if not LATEST_WORKING_HOUR_ROLLUP_PATH.exists():
+        if _find_latest_working_hour_rollup() is None:
             return JSONResponse({
                 "ok": False,
                 "message": "選擇『包含半品工時』時需要 Module 2A working_hour_rollup。請先完成 Module 2A；若只使用直接工時，請將 Working Hour Source 改為 Direct Working Hour。",
             }, status_code=400)
-        working_hour_rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH
-        bom_structure_path = LATEST_BOM_STRUCTURE_PATH if LATEST_BOM_STRUCTURE_PATH.exists() else None
+        working_hour_rollup_path = _find_latest_working_hour_rollup()
+        bom_structure_path = _fresh_path(LATEST_BOM_STRUCTURE_PATH)
 
     _set_module1b_job(
         job_id,
@@ -2723,6 +2846,7 @@ async def module1b_generate_bulk_file_job(request: Request):
         source_filename=step1_path.name,
         template_filename=template_path.name,
         working_hour_source=working_hour_source,
+        workspace_id=workspace_id,
     )
     MODULE1B_EXECUTOR.submit(
         _run_module1b_bulk_job,
@@ -2733,6 +2857,7 @@ async def module1b_generate_bulk_file_job(request: Request):
         bom_structure_path,
         working_hour_rollup_path,
         step1_source_mode,
+        workspace_id,
     )
     return {"ok": True, "job_id": job_id, "status_url": f"/module1b/generate-bulk-file-job/{job_id}"}
 
@@ -2758,6 +2883,7 @@ async def generate_bulk_file(
         return JSONResponse({"ok": False, "message": "Bulk Template 請上傳 Excel 檔案"}, status_code=400)
 
     token = uuid.uuid4().hex[:10]
+    workspace_id = _workspace_id()
 
     uploaded_step1_filename = str(getattr(step1_file, "filename", "") or "").strip() if step1_file else ""
     if uploaded_step1_filename:
@@ -2782,13 +2908,13 @@ async def generate_bulk_file(
     bom_structure_path = None
     working_hour_rollup_path = None
     if _is_include_semi_working_hour_source(working_hour_source):
-        if not LATEST_WORKING_HOUR_ROLLUP_PATH.exists():
+        if _find_latest_working_hour_rollup() is None:
             return JSONResponse({
                 "ok": False,
                 "message": "選擇『包含半品工時』時需要 Module 2A working_hour_rollup。請先完成 Module 2A；若只使用直接工時，請將 Working Hour Source 改為 Direct Working Hour。"
             }, status_code=400)
-        working_hour_rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH
-        bom_structure_path = LATEST_BOM_STRUCTURE_PATH if LATEST_BOM_STRUCTURE_PATH.exists() else None
+        working_hour_rollup_path = _find_latest_working_hour_rollup()
+        bom_structure_path = _fresh_path(LATEST_BOM_STRUCTURE_PATH)
 
     try:
         summary = generate_product_activity_bulk_files_by_site_zip(
@@ -2810,7 +2936,9 @@ async def generate_bulk_file(
         if output_filename:
             generated_output_path = OUTPUT_DIR / output_filename
             if generated_output_path.exists() and generated_output_path.suffix.lower() == ".zip":
+                _register_workspace_output(generated_output_path, workspace_id)
                 shutil.copy2(generated_output_path, MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH)
+                _register_workspace_output(MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH, workspace_id)
                 summary["module1b_product_activity_bulk_latest"] = MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.name
                 summary["module1b_product_activity_bulk_latest_download_url"] = f"/download/{MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.name}"
     except Exception as exc:
@@ -2893,12 +3021,36 @@ def _find_latest_module1_step1_output() -> Path | None:
                 continue
             if path.suffix.lower() in [".xlsx", ".xlsm", ".xls"]:
                 candidates.append(path)
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    return _freshest_path(candidates)
+
+
+def _find_latest_module2a_total_usage() -> Path | None:
+    """Return this workspace's latest Module 2A Standard BOM Total Usage."""
+    if _is_workspace_fresh(MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH):
+        return MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
+    candidates = [
+        path
+        for path in OUTPUT_DIR.glob("standard_bom_total_usage_*.xlsx")
+        if path != MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH and not path.name.startswith("~$")
+    ]
+    return _freshest_path(candidates)
+
+
+def _find_latest_working_hour_rollup() -> Path | None:
+    """Return this workspace's latest Module 2A Working Hour Roll-up."""
+    if _is_workspace_fresh(LATEST_WORKING_HOUR_ROLLUP_PATH):
+        return LATEST_WORKING_HOUR_ROLLUP_PATH
+    candidates = [
+        path
+        for path in OUTPUT_DIR.glob("working_hour_rollup_*.xlsx")
+        if path != LATEST_WORKING_HOUR_ROLLUP_PATH and not path.name.startswith("~$")
+    ]
+    return _freshest_path(candidates)
 
 
 def _find_latest_module1b_product_activity_bulk() -> Path | None:
     """Return the latest Module 1B Product Activity Bulk output for progress display."""
-    if MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH.exists():
+    if _is_workspace_fresh(MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH):
         return MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH
     candidates: list[Path] = []
     for pattern in (
@@ -2910,7 +3062,7 @@ def _find_latest_module1b_product_activity_bulk() -> Path | None:
                 continue
             if path.suffix.lower() in [".zip", ".xlsx", ".xlsm", ".xls"]:
                 candidates.append(path)
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    return _freshest_path(candidates)
 
 
 @app.get("/module1/progress-status")
@@ -2918,8 +3070,8 @@ def module1_progress_status():
     """Module 1 overview progress for the entry page."""
     step1_path = _find_latest_module1_step1_output()
     step2_path = _find_latest_module1b_product_activity_bulk()
-    ready_module1a = bool(step1_path and step1_path.exists())
-    ready_module1b = bool(step2_path and step2_path.exists())
+    ready_module1a = bool(step1_path)
+    ready_module1b = bool(step2_path)
 
     if ready_module1b:
         progress_percent = 100
@@ -2995,7 +3147,7 @@ def _is_include_semi_working_hour_source(value: str | None) -> bool:
 
 
 def _source_info_for_existing_path(path: Path | None, label: str, missing_message: str) -> Dict[str, Any]:
-    if path and path.exists():
+    if _is_workspace_fresh(path):
         stat = path.stat()
         return {
             "ok": True,
@@ -3016,12 +3168,12 @@ def module1_step2_source_info():
     required only when users select Include Semi-finished Working Hour.
     """
     step1_path = _find_latest_module1_step1_output()
-    total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH if MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH.exists() else None
-    rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH if LATEST_WORKING_HOUR_ROLLUP_PATH.exists() else None
+    total_usage_path = _find_latest_module2a_total_usage()
+    rollup_path = _find_latest_working_hour_rollup()
     return {
         "ok": True,
-        "ready_direct": bool(step1_path and step1_path.exists()),
-        "ready_include_semi": bool(step1_path and step1_path.exists() and rollup_path and rollup_path.exists()),
+        "ready_direct": bool(step1_path),
+        "ready_include_semi": bool(step1_path and rollup_path),
         "module1_step1": _source_info_for_existing_path(
             step1_path,
             "Module 1A 年度產品產量與分類結果",
@@ -3042,7 +3194,7 @@ def module1_step2_source_info():
 
 def _find_latest_module2c_supplier_mapped_raw_material_bulk_zip() -> Path | None:
     """Return the latest Module 2C supplier-mapped Raw Material Bulk ZIP for Module 3."""
-    if MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH.exists():
+    if _is_workspace_fresh(MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH):
         return MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH
     candidates: list[Path] = []
     for pattern in ("supplier_mapped_raw_material_bulk_by_site_*.zip", "supplier_mapped_raw_material_activity_data_bulk_by_site_*.zip"):
@@ -3050,7 +3202,7 @@ def _find_latest_module2c_supplier_mapped_raw_material_bulk_zip() -> Path | None
             if path.name.startswith("~$"):
                 continue
             candidates.append(path)
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    return _freshest_path(candidates)
 
 
 def _module2_raw_bulk_source_label(path: Path) -> str:
@@ -3088,7 +3240,7 @@ def _find_latest_module2_raw_material_bulk() -> Path | None:
         MODULE2_RAW_MATERIAL_BULK_PATH = module2c_zip
         return module2c_zip
 
-    if MODULE2_RAW_MATERIAL_BULK_PATH and MODULE2_RAW_MATERIAL_BULK_PATH.exists():
+    if MODULE2_RAW_MATERIAL_BULK_PATH and _is_workspace_fresh(MODULE2_RAW_MATERIAL_BULK_PATH):
         cached_stage = _module2_raw_bulk_source_stage(MODULE2_RAW_MATERIAL_BULK_PATH)
         if cached_stage in {"module2b", "module2"}:
             return MODULE2_RAW_MATERIAL_BULK_PATH
@@ -3105,9 +3257,9 @@ def _find_latest_module2_raw_material_bulk() -> Path | None:
             if name.endswith("_latest.xlsx") or path.name.startswith("~$"):
                 continue
             candidates.append(path)
-    if not candidates:
+    latest = _freshest_path(candidates)
+    if latest is None:
         return None
-    latest = max(candidates, key=lambda p: p.stat().st_mtime)
     MODULE2_RAW_MATERIAL_BULK_PATH = latest
     return latest
 
@@ -3120,7 +3272,7 @@ def _find_latest_raw_material_bulk_template() -> Path | None:
     using the original template uploaded at Module 2B / legacy Module 2.
     """
     candidates: list[Path] = []
-    if RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.exists():
+    if _is_workspace_fresh(RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH):
         candidates.append(RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH)
     for pattern in (
         "raw_material_bulk_template_latest.xlsx",
@@ -3135,14 +3287,14 @@ def _find_latest_raw_material_bulk_template() -> Path | None:
                     continue
                 candidates.append(path)
     # Prefer the explicit latest template when present; it is copied from the latest M2B upload.
-    if RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.exists():
+    if _is_workspace_fresh(RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH):
         return RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    return _freshest_path(candidates)
 
 
 def _find_latest_module2b_raw_material_bulk_zip() -> Path | None:
     """Return the latest Module 2B Raw Material Bulk ZIP for Module 2C."""
-    if MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH.exists():
+    if _is_workspace_fresh(MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH):
         return MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH
     candidates: list[Path] = []
     for path in OUTPUT_DIR.glob("raw_material_activity_data_bulk_by_site_*.zip"):
@@ -3152,7 +3304,7 @@ def _find_latest_module2b_raw_material_bulk_zip() -> Path | None:
         if path.name.startswith("~$"):
             continue
         candidates.append(path)
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    return _freshest_path(candidates)
 
 
 def _find_latest_module2c_supplier_bulk() -> Path | None:
@@ -3162,24 +3314,21 @@ def _find_latest_module2c_supplier_bulk() -> Path | None:
         for path in OUTPUT_DIR.glob("supplier_bulk_create_*.xlsx")
         if not path.name.startswith("~$") and path.is_file()
     ]
-    return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
+    return _freshest_path(candidates)
 
 
 @app.get("/module2/progress-status")
 def module2_progress_status():
     """Module 2 overview progress and auto-fetched source status for the entry page."""
-    total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH if MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH.exists() else None
-    rollup_path = LATEST_WORKING_HOUR_ROLLUP_PATH if LATEST_WORKING_HOUR_ROLLUP_PATH.exists() else None
+    total_usage_path = _find_latest_module2a_total_usage()
+    rollup_path = _find_latest_working_hour_rollup()
     raw_bulk_path = _find_latest_module2b_raw_material_bulk_zip()
     mapped_bulk_path = _find_latest_module2c_supplier_mapped_raw_material_bulk_zip()
     supplier_bulk_path = _find_latest_module2c_supplier_bulk()
 
     ready_module2a = bool(total_usage_path and rollup_path)
-    ready_module2b = bool(raw_bulk_path and raw_bulk_path.exists())
-    ready_module2c = bool(
-        mapped_bulk_path and mapped_bulk_path.exists()
-        and supplier_bulk_path and supplier_bulk_path.exists()
-    )
+    ready_module2b = bool(raw_bulk_path)
+    ready_module2c = bool(mapped_bulk_path and supplier_bulk_path)
 
     if ready_module2c:
         progress_percent = 100
@@ -3281,6 +3430,7 @@ async def module3_apply_ccl_factors_job(
 ):
     token = uuid.uuid4().hex[:10]
     job_id = token
+    workspace_id = _workspace_id()
 
     raw_path = _find_latest_module2_raw_material_bulk()
     if not raw_path:
@@ -3315,8 +3465,9 @@ async def module3_apply_ccl_factors_job(
         final_template_modified_at=_cmp_mtime_iso(raw_template_path),
         remaining_seconds=30,
         created_at=_cmp_now_iso(),
+        workspace_id=workspace_id,
     )
-    MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path, raw_template_path)
+    MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path, raw_template_path, workspace_id)
     return {
         "ok": True,
         "job_id": job_id,
@@ -3368,6 +3519,7 @@ async def module3_apply_ccl_factors(
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, raw_material_template_path=raw_template_path)
         summary["app_version"] = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3"
         if output_path.exists():
+            _register_workspace_output(output_path)
             try:
                 summary["output_file_size_bytes"] = output_path.stat().st_size
                 summary["output_file_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
@@ -3492,6 +3644,7 @@ async def module2a_standard_bom_total_usage_job(request: Request):
             return JSONResponse({"ok": False, "message": f"{filename} 不是標準 BOM Excel 檔案"}, status_code=400)
 
     job_id = uuid.uuid4().hex[:10]
+    workspace_id = _workspace_id()
 
     # MODULE 2A uses the latest Module 1A output only as source metadata.
     # It does not read Step 1 rows and does not require users to type version/date.
@@ -3529,6 +3682,7 @@ async def module2a_standard_bom_total_usage_job(request: Request):
         step1_source_filename=step1_source_filename,
         step1_source_modified_at=step1_source_modified_at,
         output_filename=output_path.name,
+        workspace_id=workspace_id,
     )
     MODULE2A_EXECUTOR.submit(
         _run_module2a_total_usage_job,
@@ -3540,6 +3694,7 @@ async def module2a_standard_bom_total_usage_job(request: Request):
         step1_source_filename,
         step1_source_modified_at,
         step1_source,
+        workspace_id,
     )
     return {"ok": True, "job_id": job_id, "status_url": f"/module2/bom-job/{job_id}"}
 
@@ -3556,8 +3711,8 @@ def module2_get_bom_job(job_id: str):
 
 @app.get("/module2/standard-bom-total-usage-source")
 def module2_standard_bom_total_usage_source():
-    path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
-    if not path.exists():
+    path = _find_latest_module2a_total_usage()
+    if path is None:
         return JSONResponse({"ok": False, "message": "尚未產出標準BOM表總用量，請先完成 Module 2A。"}, status_code=404)
     meta = _extract_source_version_date(path.name)
     data = {
@@ -3567,12 +3722,13 @@ def module2_standard_bom_total_usage_source():
         "mtime": _cmp_mtime_iso(path),
         **meta,
     }
-    if LATEST_WORKING_HOUR_ROLLUP_PATH.exists():
+    rollup_path = _find_latest_working_hour_rollup()
+    if rollup_path:
         data["working_hour_rollup"] = {
             "ok": True,
-            "filename": LATEST_WORKING_HOUR_ROLLUP_PATH.name,
-            "download_url": f"/download/{LATEST_WORKING_HOUR_ROLLUP_PATH.name}",
-            "mtime": _cmp_mtime_iso(LATEST_WORKING_HOUR_ROLLUP_PATH),
+            "filename": rollup_path.name,
+            "download_url": f"/download/{rollup_path.name}",
+            "mtime": _cmp_mtime_iso(rollup_path),
         }
     return data
 
@@ -3580,7 +3736,7 @@ def module2_standard_bom_total_usage_source():
 @app.get("/module2b/source-info")
 def module2b_source_info():
     step1_path = _find_latest_module1_step1_output()
-    total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
+    total_usage_path = _find_latest_module2a_total_usage()
 
     if step1_path:
         step1_info = {
@@ -3596,7 +3752,7 @@ def module2b_source_info():
             "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。",
         }
 
-    if total_usage_path.exists():
+    if total_usage_path is not None:
         total_usage_info = {
             "ok": True,
             "filename": total_usage_path.name,
@@ -3611,7 +3767,7 @@ def module2b_source_info():
 
     return {
         "ok": True,
-        "ready": bool(step1_path and total_usage_path.exists()),
+        "ready": bool(step1_path and total_usage_path is not None),
         "module1_step1": step1_info,
         "module2a_total_usage": total_usage_info,
     }
@@ -3635,12 +3791,13 @@ async def module2b_raw_material_bulk_job(request: Request):
     step1_path = _find_latest_module1_step1_output()
     if step1_path is None:
         return JSONResponse({"ok": False, "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。"}, status_code=400)
-    total_usage_path = MODULE2_STANDARD_BOM_TOTAL_USAGE_PATH
-    if not total_usage_path.exists():
+    total_usage_path = _find_latest_module2a_total_usage()
+    if total_usage_path is None:
         return JSONResponse({"ok": False, "message": "尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。"}, status_code=400)
 
     token = uuid.uuid4().hex[:10]
     job_id = token
+    workspace_id = _workspace_id()
     template_path = UPLOAD_DIR / f"module2b_raw_material_template_{token}_{Path(filename).name}"
     template_path.write_bytes(await template_file.read())
     step1_source = {
@@ -3659,6 +3816,7 @@ async def module2b_raw_material_bulk_job(request: Request):
         total_rows=0,
         module1_step1_source=step1_source,
         module2a_total_usage_filename=total_usage_path.name,
+        workspace_id=workspace_id,
     )
     MODULE2B_EXECUTOR.submit(
         _run_module2b_raw_bulk_job,
@@ -3669,6 +3827,7 @@ async def module2b_raw_material_bulk_job(request: Request):
         token,
         step1_path,
         step1_source,
+        workspace_id,
     )
     return {"ok": True, "job_id": job_id, "status_url": f"/module2/bom-job/{job_id}"}
 
@@ -3749,6 +3908,7 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
 
     token = uuid.uuid4().hex[:10]
     job_id = token
+    workspace_id = _workspace_id()
     supplier_paths: list[Path] = []
     for idx, supplier_file in enumerate(supplier_uploads, start=1):
         filename = str(getattr(supplier_file, "filename", "") or f"supplier_{idx}.xlsx")
@@ -3780,6 +3940,7 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
         module1_step1_source=step1_source,
         module2b_raw_bulk_source=raw_bulk_source,
         supplier_upload_files=len(supplier_paths),
+        workspace_id=workspace_id,
     )
     MODULE2C_EXECUTOR.submit(
         _run_module2c_supplier_mapping_job,
@@ -3790,6 +3951,7 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
         token,
         step1_source,
         raw_bulk_source,
+        workspace_id,
     )
     return {"ok": True, "job_id": job_id, "status_url": f"/module2/bom-job/{job_id}"}
 
@@ -3873,6 +4035,7 @@ async def process_bom_expansion(request: Request):
             )
 
     token = uuid.uuid4().hex[:10]
+    workspace_id = _workspace_id()
 
     bom_paths: list[Path] = []
     for idx, bom_file in enumerate(bom_uploads, start=1):
@@ -3891,7 +4054,9 @@ async def process_bom_expansion(request: Request):
 
     template_path.write_bytes(await template_file.read())
     if template_path.exists():
+        _register_workspace_output(template_path, workspace_id)
         shutil.copy2(template_path, RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH)
+        _register_workspace_output(RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH, workspace_id)
     if step1_path is None:
         return JSONResponse(
             {"ok": False, "message": "尚未找到 Module 1A 年度產品產量與分類結果，請先完成 Module 1A。"},
@@ -3928,6 +4093,7 @@ async def process_bom_expansion(request: Request):
                 supplier_bulk_output_path=supplier_bulk_output_path if supplier_paths else None,
             )
             output_path = OUTPUT_DIR / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
+            _register_workspace_output(output_path, workspace_id)
             summary["module1_step1_source_filename"] = step1_path.name
             summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
         else:
@@ -3945,6 +4111,7 @@ async def process_bom_expansion(request: Request):
             output_path=LATEST_BOM_STRUCTURE_PATH,
             mapping=mapping,
         )
+        _register_workspace_output(LATEST_BOM_STRUCTURE_PATH, workspace_id)
         summary["bom_structure_latest"] = LATEST_BOM_STRUCTURE_PATH.name
         summary["bom_structure_rows"] = int(bom_structure_summary.get("structure_rows", 0))
         summary["bom_structure_download_url"] = f"/download/{LATEST_BOM_STRUCTURE_PATH.name}"
@@ -3959,7 +4126,9 @@ async def process_bom_expansion(request: Request):
                 bom_structure_path=LATEST_BOM_STRUCTURE_PATH,
                 output_path=working_hour_rollup_output_path,
             )
+            _register_workspace_output(working_hour_rollup_output_path, workspace_id)
             LATEST_WORKING_HOUR_ROLLUP_PATH.write_bytes(working_hour_rollup_output_path.read_bytes())
+            _register_workspace_output(LATEST_WORKING_HOUR_ROLLUP_PATH, workspace_id)
             summary["working_hour_rollup_filename"] = working_hour_rollup_output_path.name
             summary["working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_output_path.name}"
             summary["working_hour_rollup_latest"] = LATEST_WORKING_HOUR_ROLLUP_PATH.name
@@ -3974,6 +4143,8 @@ async def process_bom_expansion(request: Request):
             summary["working_hour_rollup_download_url"] = ""
             summary["working_hour_rollup_rows"] = 0
 
+        if output_path.exists():
+            _register_workspace_output(output_path, workspace_id)
         if output_path.suffix.lower() == ".xlsx" and output_path.exists():
             MODULE2_RAW_MATERIAL_BULK_PATH = output_path
             summary["raw_material_bulk_filename"] = output_path.name
@@ -3987,6 +4158,8 @@ async def process_bom_expansion(request: Request):
             summary["supplier_bulk_generated"] = False
             summary["supplier_status"] = "Not Uploaded"
         else:
+            if supplier_bulk_output_path.exists():
+                _register_workspace_output(supplier_bulk_output_path, workspace_id)
             summary["supplier_bulk_generated"] = bool(summary.get("supplier_bulk_download_url"))
             summary["supplier_status"] = "Generated" if summary.get("supplier_bulk_download_url") else "Not Generated"
         summary["app_version"] = "CMP_V16_2_SUPPLIER_BULK_OPTIONAL"

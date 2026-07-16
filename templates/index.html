@@ -1189,6 +1189,29 @@
 <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
 <script>
+// A full page load (including F5) starts a new logical workspace. The server
+// timestamp is attached to every same-origin fetch so old outputs are not
+// auto-bound to the refreshed page.
+const CMP_WORKSPACE_STARTED_AT = Number('{{ workspace_started_at | default(0) }}') || 0;
+const CMP_WORKSPACE_ID = '{{ workspace_id | default("") }}';
+const cmpNativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const requestUrl = typeof input === 'string' ? new URL(input, window.location.href) : new URL(input.url, window.location.href);
+  if (requestUrl.origin !== window.location.origin) return cmpNativeFetch(input, init);
+  const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+  headers.set('X-CMP-Workspace-Started-At', String(CMP_WORKSPACE_STARTED_AT));
+  headers.set('X-CMP-Workspace-ID', CMP_WORKSPACE_ID);
+  return cmpNativeFetch(input, { ...init, headers });
+};
+
+window.addEventListener('pageshow', () => {
+  // Browsers may restore file inputs and form controls after reload/back-forward
+  // navigation. Explicitly reset them so the new workspace starts empty.
+  document.querySelectorAll('form').forEach(form => form.reset());
+  document.querySelectorAll('input[type="file"]').forEach(input => { input.value = ''; });
+  document.querySelectorAll('.source-ready').forEach(card => card.classList.remove('source-ready'));
+});
+
 const menuToggle = document.getElementById('menuToggle');
 const appShell = document.querySelector('.app-shell');
 
