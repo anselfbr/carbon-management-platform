@@ -57,7 +57,7 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V15_1_F5_WORKSPACE_RESET =====")
+print("===== CMP MAIN VERSION: CMP_V15_2_SITE_NAME_STANDARDIZATION =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -2005,7 +2005,7 @@ def process_files(
     # Resolve Plant -> Production Site before classification.
     # This makes Rule Master classification plant-aware:
     # - site-specific rules only apply to the same Production Site
-    # - blank-site rules remain generic and can be used by both 越南海防廠-IPS and 廣州石碣廠-IPS
+    # - blank-site rules remain generic and can be used by both 越南海防廠-IPS and 中國石碣廠-IPS
     _safe_job_progress_callback(progress_callback, "解析 Plant 對應生產廠區", progress=38, processed=0, total=len(out))
     plant_site_cache: dict[str, tuple[str, str]] = {}
 

@@ -10,9 +10,9 @@
 0.901,Production Site Material Prefix Whitelist,SG-,,,越南海防廠-IPS,,Y,3
 0.951,Production Site Material Prefix Whitelist,SM-,,,越南海防廠-IPS,,Y,3
 1,Material Number Prefix,850-,WIP,,,Y,Y,
-1,Plant Exact,3760,,,廣州石碣廠-IPS,,Y,
+1,Plant Exact,3760,,,中國石碣廠-IPS,,Y,
 2,Material Number Prefix,851-,WIP,,,Y,Y,
-2,Plant Exact,3775,,,廣州石碣廠-IPS,,Y,
+2,Plant Exact,3775,,,中國石碣廠-IPS,,Y,
 3,Material Number Prefix,852-,WIP,,,Y,Y,
 3,Plant Exact,4070,,,泰國廠-IPS,,Y,
 4,Material Number Prefix,H50-,WIP,,,Y,Y,
@@ -32,10 +32,10 @@
 12,Description Contains,FG,WIP,,,N,N,
 12,Description Contains,SFG,WIP,,,Y,Y,
 13,Material Number Prefix,856,WIP,,,Y,Y,
-20,Description Contains,CZ A2,NB,NB,常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
-20,Series Prefix,SN,NB,NB,常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
-21,Series Prefix,FU,NB,NB,常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
-22,Series Prefix,SP,TP,TP,常州廠(A9)-IPS,N,Y,NB_3RD_CHAR
+20,Description Contains,CZ A2,NB,NB,中國常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
+20,Series Prefix,SN,NB,NB,中國常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
+21,Series Prefix,FU,NB,NB,中國常州廠(A2)-IPS,N,Y,NB_3RD_CHAR
+22,Series Prefix,SP,TP,TP,中國常州廠(A9)-IPS,N,Y,NB_3RD_CHAR
 23,Material Number Prefix,903,DT Mouse,DT,,N,Y,DT_3_4_CHAR
 23,Series Prefix,SM,DT Mouse,DT,,N,Y,DT_3_4_CHAR
 24,Series Prefix,SA,DT Accessory,DT,,N,Y,DT_3_4_CHAR
@@ -47,14 +47,14 @@
 28,Series Prefix,ST,DT Tablet Keyboard,DT,,N,Y,DT_3_4_CHAR
 29,Series Prefix,SSE,Smart Pen,DT,,N,Y,DT_3_4_CHAR
 30,Description Contains,Track pad,Track pad,DT,,N,Y,
-31.1,Description Contains,TOUCH PAD MODULE,TP,TP,常州廠(A9)-IPS,N,Y,
-31.2,Description Contains,TOUCHPAD MODULE,TP,TP,常州廠(A9)-IPS,N,Y,
-32,Series Prefix,SCMC,WIP,TP,常州廠(A9)-IPS,Y,Y,
+31.1,Description Contains,TOUCH PAD MODULE,TP,TP,中國常州廠(A9)-IPS,N,Y,
+31.2,Description Contains,TOUCHPAD MODULE,TP,TP,中國常州廠(A9)-IPS,N,Y,
+32,Series Prefix,SCMC,WIP,TP,中國常州廠(A9)-IPS,Y,Y,
 800.6,Material Number Prefix,SA-,DT Accessory,DT,越南海防廠-IPS,N,Y,3
 800.7,Material Number Prefix,SB-,DT Keyboard+Mouse,DT,越南海防廠-IPS,N,Y,3
 800.8,Material Number Prefix,SD-,DT Dongle,DT,越南海防廠-IPS,N,Y,3
 800.9,Material Number Prefix,SG-,DT Keyboard,DT,越南海防廠-IPS,N,Y,3
 800.95,Material Number Prefix,SM-,DT Mouse,DT,越南海防廠-IPS,N,Y,3
-997,Production Site Strict Rule Match,廣州石碣廠-IPS,,,廣州石碣廠-IPS,,Y,
+997,Production Site Strict Rule Match,中國石碣廠-IPS,,,中國石碣廠-IPS,,Y,
 998,Production Site Strict Rule Match,越南海防廠-IPS,,,越南海防廠-IPS,,Y,
 999,Default,*,WIP,,,Y,Y,

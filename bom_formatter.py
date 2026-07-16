@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V27_6_CROSS_MATERIAL_BOM_VERSION_DEDUP"
+BOM_FORMATTER_VERSION = "CMP_V27_7_SITE_NAME_STANDARDIZATION"
 
 
 DEFAULT_MAPPING = {
@@ -2236,14 +2236,14 @@ SUPPLIER_PLANT_ALIASES = [
 # available to both destinations when the supplier master identifies the site by
 # Plant code instead of the full Unit Name.
 _PLANT_TO_UNIT_NAMES: dict[str, tuple[str, ...]] = {
-    "2670": ("常州廠(A9)-IPS", "常州廠(A2)-IPS"),
-    "3760": ("廣州石碣廠-IPS",),
-    "3775": ("廣州石碣廠-IPS",),
+    "2670": ("中國常州廠(A9)-IPS", "中國常州廠(A2)-IPS"),
+    "3760": ("中國石碣廠-IPS",),
+    "3775": ("中國石碣廠-IPS",),
     "4070": ("泰國廠-IPS",),
     "4270": ("越南海防廠-IPS",),
     "429A": ("越南海防廠-IPS",),
-    "A9": ("常州廠(A9)-IPS",),
-    "A2": ("常州廠(A2)-IPS",),
+    "A9": ("中國常州廠(A9)-IPS",),
+    "A2": ("中國常州廠(A2)-IPS",),
 }
 
 _PLANT_COUNTRY_AREA: dict[str, str] = {
@@ -2304,9 +2304,9 @@ def _site_lookup_keys(value: Any) -> list[str]:
 
     compact = re.sub(r"\s+", "", text).upper()
     alias_matches = {
-        "常州廠(A9)-IPS": ("A9", "CHANGZHOUA9"),
-        "常州廠(A2)-IPS": ("A2", "CHANGZHOUA2"),
-        "廣州石碣廠-IPS": ("廣州", "广州", "石碣", "GUANGZHOU", "SHIJIE"),
+        "中國常州廠(A9)-IPS": ("A9", "CHANGZHOUA9"),
+        "中國常州廠(A2)-IPS": ("A2", "CHANGZHOUA2"),
+        "中國石碣廠-IPS": ("廣州", "广州", "石碣", "GUANGZHOU", "SHIJIE"),
         "泰國廠-IPS": ("泰國", "泰国", "THAILAND", "THAI"),
         "越南海防廠-IPS": ("越南", "海防", "VIETNAM", "VIET NAM", "HAIPHONG", "HAI PHONG"),
     }
@@ -2618,7 +2618,7 @@ def _extract_site_tbc_supplier_map_from_raw_template(wb) -> dict[str, dict[str, 
     Expected Supplier Name (optional) pattern:
         <Transportation Destination>_TBC - TBC
     Example:
-        常州廠(A9)-IPS_TBC - TBC
+        中國常州廠(A9)-IPS_TBC - TBC
 
     The Transportation Origin is read from the same row in Dropdown Values.
     """
@@ -5109,4 +5109,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V27_6_CROSS_MATERIAL_BOM_VERSION_DEDUP"
+BOM_FORMATTER_VERSION = "CMP_V27_7_SITE_NAME_STANDARDIZATION"

@@ -1387,8 +1387,8 @@ def _short_m3_bulk_output_base_name(original_name: str) -> str:
     """Build a concise, readable M3A output basename from an M2B/M2C workbook.
 
     Example:
-    supplier_mapped_raw_material_activity_data_bulk_廣州石碣廠-IPS_3a7a714e15_e17fd5fe2b.xlsx
-    -> raw_material_bulk_廣州石碣廠-IPS_e17fd5fe
+    supplier_mapped_raw_material_activity_data_bulk_中國石碣廠-IPS_3a7a714e15_e17fd5fe2b.xlsx
+    -> raw_material_bulk_中國石碣廠-IPS_e17fd5fe
 
     The first upstream token is removed and the final job token is shortened to
     eight characters. The site / BU label remains intact for user recognition.
