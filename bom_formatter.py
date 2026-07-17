@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V27_7_SITE_NAME_STANDARDIZATION"
+BOM_FORMATTER_VERSION = "CMP_V27_3_PLANT_TBC_PRIORITY"
 
 
 DEFAULT_MAPPING = {
@@ -460,120 +460,15 @@ def _as_bom_path_list(bom_path: str | Path | list[str | Path] | tuple[str | Path
     return [Path(bom_path)]
 
 
-def _bom_version_display(value: Any) -> str:
-    """Return a stable display value for BOM Valid From in diagnostics."""
-    if isinstance(value, (date, datetime)):
-        return value.strftime("%Y-%m-%d")
-    return _safe_text(value)
-
-
-def _bom_definition_signature(group: pd.DataFrame) -> tuple[tuple[Any, ...], ...]:
-    """Build a deterministic calculation-content signature for one BOM version.
-
-    Material + BOM Valid From identifies a BOM version.  The signature compares
-    every calculation-relevant detail row inside that version so duplicated
-    exports can be removed safely without deleting different components from
-    the same BOM.
-    """
-    records: list[tuple[Any, ...]] = []
-    for _, values in group.iterrows():
-        probability = values.get("_usage_probability_ratio", None)
-        if probability is None or (isinstance(probability, float) and pd.isna(probability)):
-            probability_value: Any = None
-        else:
-            probability_value = round(float(probability), 12)
-        records.append((
-            _safe_text(values.get("_parent")),
-            _safe_text(values.get("_component")),
-            round(float(values.get("_qty", 0.0) or 0.0), 12),
-            _safe_text(values.get("_uom")),
-            _safe_text(values.get("_altitem_group")),
-            probability_value,
-        ))
-    # Duplicate detail rows inside one source do not change the BOM definition.
-    unique_records = set(records)
-    return tuple(sorted(unique_records, key=lambda item: tuple("" if v is None else str(v) for v in item)))
-
-
-def _deduplicate_bom_versions(merged: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Deduplicate complete BOM versions across files and reject conflicts.
-
-    Version key: Material + BOM Valid From.
-    - Same key and identical full detail signature: keep one complete version.
-    - Same key but different detail signature: stop instead of merging or adding.
-    """
-    if merged is None or merged.empty:
-        return merged.copy(), {
-            "bom_version_duplicate_groups_removed": 0,
-            "bom_version_duplicate_rows_removed": 0,
-            "bom_version_conflicts": 0,
-        }
-
-    work = merged.copy()
-    if "_source_file" not in work.columns:
-        work["_source_file"] = ""
-
-    keep_mask = pd.Series(True, index=work.index)
-    duplicate_groups_removed = 0
-    duplicate_rows_removed = 0
-    conflict_messages: list[str] = []
-
-    valid_material_mask = work["_bom_material"].astype(str).str.strip() != ""
-    version_work = work.loc[valid_material_mask]
-    for (material, valid_from), version_group in version_work.groupby(["_bom_material", "_valid_from"], dropna=False, sort=False):
-        source_groups = list(version_group.groupby("_source_file", dropna=False, sort=False))
-        if len(source_groups) <= 1:
-            continue
-
-        signatures: list[tuple[str, tuple[tuple[Any, ...], ...], pd.Index]] = []
-        for source_file, source_group in source_groups:
-            signatures.append((_safe_text(source_file), _bom_definition_signature(source_group), source_group.index))
-
-        first_source, first_signature, _first_index = signatures[0]
-        mismatched_sources = [source for source, signature, _idx in signatures[1:] if signature != first_signature]
-        if mismatched_sources:
-            files = [first_source] + [source for source, _signature, _idx in signatures[1:]]
-            conflict_messages.append(
-                f"Material={_safe_text(material)}、BOM Valid From={_bom_version_display(valid_from)}；來源檔案：{', '.join(files)}"
-            )
-            continue
-
-        # All complete definitions are identical. Keep the first source and
-        # remove every row belonging to duplicate source files for this version.
-        for _source, _signature, duplicate_index in signatures[1:]:
-            keep_mask.loc[duplicate_index] = False
-            duplicate_groups_removed += 1
-            duplicate_rows_removed += int(len(duplicate_index))
-
-    if conflict_messages:
-        preview = "；".join(conflict_messages[:10])
-        remaining = len(conflict_messages) - 10
-        if remaining > 0:
-            preview += f"；另有 {remaining} 組衝突"
-        raise ValueError(
-            "偵測到相同 Material + BOM Valid From，但完整 BOM 明細不一致。"
-            "系統已停止，避免將不同 BOM 合併或數量相加：" + preview
-        )
-
-    result = work.loc[keep_mask].copy().reset_index(drop=True)
-    return result, {
-        "bom_version_duplicate_groups_removed": int(duplicate_groups_removed),
-        "bom_version_duplicate_rows_removed": int(duplicate_rows_removed),
-        "bom_version_conflicts": 0,
-        "bom_version_key_rule": "Material + BOM Valid From identifies one BOM version; identical full definitions are deduplicated, inconsistent definitions stop processing.",
-    }
-
-
 def _read_boms(
     bom_paths: str | Path | list[str | Path] | tuple[str | Path, ...],
     mapping: dict[str, str | None] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Read and merge one or multiple standard BOM Excel files.
 
-    Complete BOM versions are identified by Material + BOM Valid From.  When
-    the same version is uploaded more than once, its complete calculation
-    content must be identical before a duplicate copy is removed.  Conflicting
-    definitions are rejected instead of silently merged.
+    Only fully identical normalized BOM rows are removed. Rows with different
+    quantities, units, descriptions, material groups, or valid-from dates are
+    preserved to avoid accidental data loss.
     """
     paths = _as_bom_path_list(bom_paths)
     if not paths:
@@ -601,28 +496,17 @@ def _read_boms(
         raise ValueError("沒有可處理的 BOM 資料")
 
     merged = pd.concat(frames, ignore_index=True)
-    before_version_dedup = int(len(merged))
-    merged, version_summary = _deduplicate_bom_versions(merged)
-
-    # Remove duplicated detail rows inside the retained complete version.  This
-    # is a second safety layer for accidental duplicate rows in one source file.
-    before_row_dedup = int(len(merged))
-    dedup_subset = [
-        "_bom_material", "_parent", "_component", "_qty", "_uom",
-        "_description", "_material_group", "_valid_from", "_altitem_group",
-        "_usage_probability_ratio", "_net_weight", "_gross_weight", "_weight_uom",
-    ]
+    before_dedup = int(len(merged))
+    dedup_subset = ["_bom_material", "_parent", "_component", "_qty", "_uom", "_description", "_material_group", "_valid_from", "_altitem_group", "_usage_probability_ratio", "_net_weight", "_gross_weight", "_weight_uom"]
     merged = merged.drop_duplicates(subset=dedup_subset, keep="first").reset_index(drop=True)
     after_dedup = int(len(merged))
 
     used = dict(used_columns or {})
     used["bom_files"] = int(len(paths))
-    used["bom_rows_before_dedup"] = before_version_dedup
-    used["bom_rows_after_version_dedup"] = before_row_dedup
+    used["bom_rows_before_dedup"] = before_dedup
     used["bom_rows_after_dedup"] = after_dedup
-    used["bom_duplicate_rows_removed"] = before_version_dedup - after_dedup
+    used["bom_duplicate_rows_removed"] = before_dedup - after_dedup
     used["bom_source_files"] = source_rows
-    used.update(version_summary)
     return merged, used
 
 def _exclude_zero_usage_rows(exploded: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -750,160 +634,81 @@ def _calculate_total_working_hour_by_target(
         "zero_total_working_hour_targets": int(len(zero_targets)),
     }
 
-def _bom_scope_key(material: Any, valid_from: Any) -> tuple[str, Any]:
-    return (_safe_text(material), valid_from)
+def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Explode BOM within each SAP Material scope.
 
+    SAP CS03 multi-material exports can contain the same Parent Node under
+    different finished Materials. Parent Node is only unique inside a Material,
+    so the graph must be built per Material to prevent cross-product mixing.
+    """
+    output_rows: list[dict[str, Any]] = []
+    cycle_count = 0
+    product_count = 0
+    semi_finished_total: set[str] = set()
 
-def _build_bom_scope_context(df: pd.DataFrame) -> dict[str, Any]:
-    """Build version-aware local graphs and cross-Material lookup tables."""
+    if df is None or df.empty:
+        trace_detail = pd.DataFrame(columns=[
+            "target_product", "source_material", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level",
+            "immediate_parent", "trace_path", "parent_accumulated_qty", "qty_this_level_effective",
+            "qty_this_level_original", "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio", "usage_per_path", "source_file"
+        ])
+        exploded = pd.DataFrame(columns=["target_product", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level"])
+        exploded.attrs["trace_detail"] = trace_detail
+        return exploded, {"products": 0, "semi_finished": 0, "raw_materials": 0, "activity_rows": 0, "max_level": 0, "cycles_skipped": 0}
+
     work = df.copy()
     if "_bom_material" not in work.columns:
         work["_bom_material"] = ""
     work["_bom_material"] = work["_bom_material"].apply(_safe_text)
 
-    has_material = work["_bom_material"].astype(str).str.strip().any()
-    if has_material:
-        grouped = list(work.groupby(["_bom_material", "_valid_from"], dropna=False, sort=False))
-    else:
-        grouped = [(('', None), work)]
+    # If Material column is unavailable, fall back to the legacy single global graph.
+    scoped_groups = list(work.groupby("_bom_material", dropna=False)) if work["_bom_material"].astype(str).str.strip().any() else [("", work)]
 
-    scopes: dict[tuple[str, Any], dict[str, Any]] = {}
-    material_index: dict[str, list[tuple[str, Any]]] = defaultdict(list)
-
-    for raw_key, scoped_df in grouped:
-        if has_material:
-            material_value, valid_from = raw_key
-        else:
-            material_value, valid_from = "", None
+    for material_value, scoped_df in scoped_groups:
         material = _safe_text(material_value)
-        key = _bom_scope_key(material, valid_from)
         parent_set = set(scoped_df["_parent"].dropna().astype(str))
         component_set = set(scoped_df["_component"].dropna().astype(str))
+        semi_finished_set = parent_set.intersection(component_set)
+        semi_finished_total.update(semi_finished_set)
+
         if material and material in parent_set:
             roots = [material]
         else:
-            roots = sorted(parent_set - component_set) or sorted(parent_set)
+            roots = sorted(parent_set - component_set)
+            if not roots:
+                roots = sorted(parent_set)
+        product_count += len(roots)
 
         children: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for _, row in scoped_df.iterrows():
-            parent = _safe_text(row.get("_parent", ""))
-            child = {
+        for _, r in scoped_df.iterrows():
+            row = {
                 "source_material": material,
-                "scope_valid_from": valid_from,
-                "parent": parent,
-                "component": _safe_text(row.get("_component", "")),
-                "qty": float(row.get("_qty", 0.0) or 0.0),
-                "qty_original": row.get("_qty_original", row.get("_qty", 0.0)),
-                "qty_adjusted_by_altitem": bool(row.get("_qty_adjusted_by_altitem", False)),
-                "altitem_group": row.get("_altitem_group", ""),
-                "usage_probability_ratio": row.get("_usage_probability_ratio", None),
-                "uom": _safe_text(row.get("_uom", "")),
-                "description": _safe_text(row.get("_description", "")),
-                "material_group": _safe_text(row.get("_material_group", "")),
-                "valid_from": row.get("_valid_from", valid_from),
-                "net_weight": row.get("_net_weight", ""),
-                "gross_weight": row.get("_gross_weight", ""),
-                "weight_uom": row.get("_weight_uom", ""),
-                "source_file": row.get("_source_file", ""),
+                "parent": r["_parent"],
+                "component": r["_component"],
+                "qty": r["_qty"],
+                "qty_original": r.get("_qty_original", r["_qty"]),
+                "qty_adjusted_by_altitem": bool(r.get("_qty_adjusted_by_altitem", False)),
+                "altitem_group": r.get("_altitem_group", ""),
+                "usage_probability_ratio": r.get("_usage_probability_ratio", None),
+                "uom": r["_uom"],
+                "description": r["_description"],
+                "material_group": r["_material_group"],
+                "valid_from": r["_valid_from"],
+                "net_weight": r.get("_net_weight", ""),
+                "gross_weight": r.get("_gross_weight", ""),
+                "weight_uom": r.get("_weight_uom", ""),
+                "source_file": r.get("_source_file", ""),
             }
-            children[parent].append(child)
-
-        scopes[key] = {
-            "key": key,
-            "material": material,
-            "valid_from": valid_from,
-            "roots": roots,
-            "children": children,
-            "parent_set": parent_set,
-            "component_set": component_set,
-        }
-        if material:
-            material_index[material].append(key)
-
-    return {"work": work, "scopes": scopes, "material_index": material_index, "has_material": bool(has_material)}
-
-
-def _select_cross_material_scope(
-    component: str,
-    preferred_valid_from: Any,
-    material_index: dict[str, list[tuple[str, Any]]],
-    scopes: dict[tuple[str, Any], dict[str, Any]],
-) -> tuple[str, Any] | None:
-    """Select the component's own BOM version for cross-Material expansion."""
-    candidates = list(material_index.get(component, []))
-    # A valid cross-Material BOM must actually have the component as an
-    # expandable parent node.  A Material value alone is not enough.
-    candidates = [key for key in candidates if component in scopes[key]["children"]]
-    if not candidates:
-        return None
-
-    exact = [key for key in candidates if key[1] == preferred_valid_from]
-    if len(exact) == 1:
-        return exact[0]
-    if len(exact) > 1:
-        return exact[0]
-    if len(candidates) == 1:
-        return candidates[0]
-
-    candidate_dates = ", ".join(_bom_version_display(key[1]) for key in candidates)
-    raise ValueError(
-        f"半成品 {component} 找到多個 BOM Valid From（{candidate_dates}），"
-        f"但沒有與上階 {_bom_version_display(preferred_valid_from)} 完全相同的唯一版本，無法安全展開。"
-    )
-
-
-def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
-    """Explode local and cross-Material semi-finished BOMs by BOM version.
-
-    Local expansion has priority.  When a Component has no local children but
-    exists as another Material's BOM root, the matching BOM Valid From version
-    is used and its final raw materials are rolled back to the original target.
-    """
-    output_rows: list[dict[str, Any]] = []
-    cycle_count = 0
-    product_count = 0
-    cross_material_expansions = 0
-    semi_finished_total: set[str] = set()
-
-    empty_trace_columns = [
-        "target_product", "target_valid_from", "source_material", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level",
-        "immediate_parent", "trace_path", "parent_accumulated_qty", "qty_this_level_effective",
-        "qty_this_level_original", "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio", "usage_per_path", "source_file",
-    ]
-    if df is None or df.empty:
-        trace_detail = pd.DataFrame(columns=empty_trace_columns)
-        exploded = pd.DataFrame(columns=["target_product", "target_valid_from", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level"])
-        exploded.attrs["trace_detail"] = trace_detail
-        return exploded, {
-            "products": 0, "semi_finished": 0, "raw_materials": 0,
-            "activity_rows": 0, "max_level": 0, "cycles_skipped": 0,
-            "cross_material_expansions": 0,
-        }
-
-    context = _build_bom_scope_context(df)
-    scopes = context["scopes"]
-    material_index = context["material_index"]
-
-    for scope_key, root_scope in scopes.items():
-        material = root_scope["material"]
-        target_valid_from = root_scope["valid_from"]
-        roots = root_scope["roots"]
-        product_count += len(roots)
+            children[row["parent"]].append(row)
 
         for root in roots:
             target_product = material or root
-            # scope_key, current parent, accumulated qty, level, path nodes,
-            # path scope keys.  Both node and scope tracking protect cycles.
-            stack: list[tuple[tuple[str, Any], str, float, int, list[str], list[tuple[str, Any]]]] = [
-                (scope_key, root, 1.0, 0, [root], [scope_key])
-            ]
+            stack: list[tuple[str, float, int, list[str]]] = [(root, 1.0, 0, [root])]
 
             while stack:
-                current_scope_key, current_parent, accumulated_qty, level, path, scope_path = stack.pop()
-                current_scope = scopes[current_scope_key]
-                current_children = current_scope["children"]
+                current_parent, accumulated_qty, level, path = stack.pop()
 
-                for child in current_children.get(current_parent, []):
+                for child in children.get(current_parent, []):
                     component = child["component"]
                     qty = child["qty"]
                     next_qty = accumulated_qty * qty
@@ -913,73 +718,50 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
                         cycle_count += 1
                         continue
 
-                    next_scope_key: tuple[str, Any] | None = None
-                    # Local Parent Node definition always wins.
-                    if component in current_children:
-                        next_scope_key = current_scope_key
-                    elif context["has_material"]:
-                        next_scope_key = _select_cross_material_scope(
-                            component=component,
-                            preferred_valid_from=child.get("valid_from", current_scope["valid_from"]),
-                            material_index=material_index,
-                            scopes=scopes,
-                        )
-
-                    if next_scope_key is not None:
-                        if next_scope_key in scope_path and next_scope_key != current_scope_key:
-                            cycle_count += 1
-                            continue
-                        semi_finished_total.add(component)
-                        if next_scope_key != current_scope_key:
-                            cross_material_expansions += 1
-                        stack.append((
-                            next_scope_key,
-                            component,
-                            next_qty,
-                            next_level,
-                            path + [component],
-                            scope_path + ([next_scope_key] if next_scope_key != current_scope_key else []),
-                        ))
-                        continue
-
-                    output_rows.append({
-                        "target_product": target_product,
-                        "target_valid_from": target_valid_from,
-                        "source_material": current_scope["material"],
-                        "raw_material": component,
-                        "usage": next_qty,
-                        "unit": child["uom"],
-                        "description": child["description"],
-                        "material_group": child["material_group"],
-                        "net_weight": child.get("net_weight", ""),
-                        "gross_weight": child.get("gross_weight", ""),
-                        "weight_uom": child.get("weight_uom", ""),
-                        "valid_from": child["valid_from"],
-                        "level": next_level,
-                        "immediate_parent": current_parent,
-                        "trace_path": " > ".join(path + [component]),
-                        "parent_accumulated_qty": accumulated_qty,
-                        "qty_this_level_effective": qty,
-                        "qty_this_level_original": child.get("qty_original", qty),
-                        "qty_adjusted_by_altitem": child.get("qty_adjusted_by_altitem", False),
-                        "altitem_group": child.get("altitem_group", ""),
-                        "usage_probability_ratio": child.get("usage_probability_ratio", None),
-                        "usage_per_path": next_qty,
-                        "source_file": child.get("source_file", ""),
-                    })
+                    if component in semi_finished_set:
+                        stack.append((component, next_qty, next_level, path + [component]))
+                    else:
+                        output_rows.append({
+                            "target_product": target_product,
+                            "source_material": material,
+                            "raw_material": component,
+                            "usage": next_qty,
+                            "unit": child["uom"],
+                            "description": child["description"],
+                            "material_group": child["material_group"],
+                            "net_weight": child.get("net_weight", ""),
+                            "gross_weight": child.get("gross_weight", ""),
+                            "weight_uom": child.get("weight_uom", ""),
+                            "valid_from": child["valid_from"],
+                            "level": next_level,
+                            "immediate_parent": current_parent,
+                            "trace_path": " > ".join(path + [component]),
+                            "parent_accumulated_qty": accumulated_qty,
+                            "qty_this_level_effective": qty,
+                            "qty_this_level_original": child.get("qty_original", qty),
+                            "qty_adjusted_by_altitem": child.get("qty_adjusted_by_altitem", False),
+                            "altitem_group": child.get("altitem_group", ""),
+                            "usage_probability_ratio": child.get("usage_probability_ratio", None),
+                            "usage_per_path": next_qty,
+                            "source_file": child.get("source_file", ""),
+                        })
 
     trace_detail = pd.DataFrame(output_rows)
     if trace_detail.empty:
-        trace_detail = pd.DataFrame(columns=empty_trace_columns)
+        trace_detail = pd.DataFrame(columns=[
+            "target_product", "source_material", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level",
+            "immediate_parent", "trace_path", "parent_accumulated_qty", "qty_this_level_effective",
+            "qty_this_level_original", "qty_adjusted_by_altitem", "altitem_group", "usage_probability_ratio", "usage_per_path", "source_file"
+        ])
 
     exploded = trace_detail.copy()
     if exploded.empty:
         exploded = pd.DataFrame(columns=[
-            "target_product", "target_valid_from", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level"
+            "target_product", "raw_material", "usage", "unit", "description", "material_group", "valid_from", "level"
         ])
     else:
         exploded = (
-            exploded.groupby(["target_product", "target_valid_from", "raw_material", "unit"], dropna=False, as_index=False)
+            exploded.groupby(["target_product", "raw_material", "unit"], dropna=False, as_index=False)
             .agg({
                 "usage": "sum",
                 "description": "first",
@@ -990,20 +772,20 @@ def _explode_bom(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
                 "valid_from": "first",
                 "level": "max",
             })
-            .sort_values(["target_product", "target_valid_from", "raw_material"])
+            .sort_values(["target_product", "raw_material"])
             .reset_index(drop=True)
         )
 
     exploded.attrs["trace_detail"] = trace_detail
+
     summary = {
         "products": int(product_count),
         "semi_finished": int(len(semi_finished_total)),
         "raw_materials": int(exploded["raw_material"].nunique()) if not exploded.empty else 0,
         "activity_rows": int(len(exploded)),
         "max_level": int(exploded["level"].max()) if not exploded.empty else 0,
-        "cycles_skipped": int(cycle_count),
-        "cross_material_expansions": int(cross_material_expansions),
-        "bom_scope_rule": "Expand within Material first; if no local children exist, match Component to another Material BOM using BOM Valid From and roll its raw materials back to the original target product.",
+        "cycles_skipped": cycle_count,
+        "bom_scope_rule": "BOM graph is built within each Material; identical Parent Node values from different Material values are not shared.",
     }
     return exploded, summary
 
@@ -1560,80 +1342,58 @@ def generate_raw_material_bulk_files_by_site_zip(
 
 
 def _explode_bom_structure(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any]]:
-    """Create version-aware structure including cross-Material semi-finished edges."""
+    """Create normalized multi-level BOM structure within each SAP Material scope."""
     rows: list[dict[str, Any]] = []
     cycle_count = 0
     product_count = 0
-    cross_material_expansions = 0
     semi_finished_total: set[str] = set()
-    columns = [
-        "Target Product", "Target BOM Valid From", "Source Material", "Source BOM Valid From",
-        "Parent Material", "Component", "Quantity Per Parent", "Accumulated Quantity",
-        "Unit", "Component Description", "Material Group", "Valid From", "Level",
-        "Is Semi-finished", "Expansion Type", "Source File",
-    ]
 
     if df is None or df.empty:
-        structure = pd.DataFrame(columns=columns)
-        return structure, {
-            "products": 0, "semi_finished": 0, "structure_rows": 0,
-            "max_level": 0, "cycles_skipped": 0, "cross_material_expansions": 0,
-        }
+        structure = pd.DataFrame(columns=["Target Product", "Source Material", "Parent Material", "Component", "Quantity Per Parent", "Accumulated Quantity", "Unit", "Component Description", "Material Group", "Valid From", "Level", "Is Semi-finished"])
+        return structure, {"products": 0, "semi_finished": 0, "structure_rows": 0, "max_level": 0, "cycles_skipped": 0}
 
-    context = _build_bom_scope_context(df)
-    scopes = context["scopes"]
-    material_index = context["material_index"]
+    work = df.copy()
+    if "_bom_material" not in work.columns:
+        work["_bom_material"] = ""
+    work["_bom_material"] = work["_bom_material"].apply(_safe_text)
+    scoped_groups = list(work.groupby("_bom_material", dropna=False)) if work["_bom_material"].astype(str).str.strip().any() else [("", work)]
 
-    for scope_key, root_scope in scopes.items():
-        material = root_scope["material"]
-        target_valid_from = root_scope["valid_from"]
-        roots = root_scope["roots"]
+    for material_value, scoped_df in scoped_groups:
+        material = _safe_text(material_value)
+        parent_set = set(scoped_df["_parent"].dropna().astype(str))
+        component_set = set(scoped_df["_component"].dropna().astype(str))
+        semi_finished_set = parent_set.intersection(component_set)
+        semi_finished_total.update(semi_finished_set)
+        if material and material in parent_set:
+            roots = [material]
+        else:
+            roots = sorted(parent_set - component_set) or sorted(parent_set)
         product_count += len(roots)
+
+        children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for _, r in scoped_df.iterrows():
+            children[r["_parent"]].append({
+                "parent": r["_parent"], "component": r["_component"], "qty": r["_qty"],
+                "uom": r["_uom"], "description": r["_description"],
+                "material_group": r["_material_group"], "valid_from": r["_valid_from"],
+            })
 
         for root in roots:
             target_product = material or root
-            stack: list[tuple[tuple[str, Any], str, float, int, list[str], list[tuple[str, Any]]]] = [
-                (scope_key, root, 1.0, 0, [root], [scope_key])
-            ]
+            stack: list[tuple[str, float, int, list[str]]] = [(root, 1.0, 0, [root])]
             while stack:
-                current_scope_key, current_parent, accumulated_qty, level, path, scope_path = stack.pop()
-                current_scope = scopes[current_scope_key]
-                current_children = current_scope["children"]
-
-                for child in current_children.get(current_parent, []):
+                current_parent, accumulated_qty, level, path = stack.pop()
+                for child in children.get(current_parent, []):
                     component = child["component"]
                     next_qty = accumulated_qty * child["qty"]
                     next_level = level + 1
+                    is_semi = component in semi_finished_set
                     if component in path:
                         cycle_count += 1
                         continue
-
-                    next_scope_key: tuple[str, Any] | None = None
-                    expansion_type = "Raw material"
-                    if component in current_children:
-                        next_scope_key = current_scope_key
-                        expansion_type = "Local Material"
-                    elif context["has_material"]:
-                        next_scope_key = _select_cross_material_scope(
-                            component=component,
-                            preferred_valid_from=child.get("valid_from", current_scope["valid_from"]),
-                            material_index=material_index,
-                            scopes=scopes,
-                        )
-                        if next_scope_key is not None:
-                            expansion_type = "Cross Material"
-
-                    is_semi = next_scope_key is not None
-                    if is_semi:
-                        semi_finished_total.add(component)
-                        if next_scope_key != current_scope_key:
-                            cross_material_expansions += 1
-
                     rows.append({
                         "Target Product": target_product,
-                        "Target BOM Valid From": target_valid_from,
-                        "Source Material": current_scope["material"],
-                        "Source BOM Valid From": current_scope["valid_from"],
+                        "Source Material": material,
                         "Parent Material": current_parent,
                         "Component": component,
                         "Quantity Per Parent": child["qty"],
@@ -1644,33 +1404,14 @@ def _explode_bom_structure(df: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, An
                         "Valid From": child["valid_from"],
                         "Level": next_level,
                         "Is Semi-finished": "Y" if is_semi else "N",
-                        "Expansion Type": expansion_type,
-                        "Source File": child.get("source_file", ""),
                     })
+                    if is_semi:
+                        stack.append((component, next_qty, next_level, path + [component]))
 
-                    if not is_semi:
-                        continue
-                    if next_scope_key in scope_path and next_scope_key != current_scope_key:
-                        cycle_count += 1
-                        continue
-                    stack.append((
-                        next_scope_key,
-                        component,
-                        next_qty,
-                        next_level,
-                        path + [component],
-                        scope_path + ([next_scope_key] if next_scope_key != current_scope_key else []),
-                    ))
-
-    structure = pd.DataFrame(rows, columns=columns)
-    summary = {
-        "products": int(product_count),
-        "semi_finished": int(len(semi_finished_total)),
-        "structure_rows": int(len(structure)),
-        "max_level": int(structure["Level"].max()) if not structure.empty else 0,
-        "cycles_skipped": int(cycle_count),
-        "cross_material_expansions": int(cross_material_expansions),
-    }
+    structure = pd.DataFrame(rows)
+    if structure.empty:
+        structure = pd.DataFrame(columns=["Target Product", "Source Material", "Parent Material", "Component", "Quantity Per Parent", "Accumulated Quantity", "Unit", "Component Description", "Material Group", "Valid From", "Level", "Is Semi-finished"])
+    summary = {"products": int(product_count), "semi_finished": int(len(semi_finished_total)), "structure_rows": int(len(structure)), "max_level": int(structure["Level"].max()) if not structure.empty else 0, "cycles_skipped": cycle_count}
     return structure, summary
 
 def export_bom_structure_file(
@@ -2035,15 +1776,36 @@ def generate_working_hour_rollup_file_from_standard_bom(
     max_level = 0
     scoped_count = 0
 
-    context = _build_bom_scope_context(bom_df)
-    scopes = context["scopes"]
-    material_index = context["material_index"]
-    total_scopes = max(len(scopes), 1)
-    cross_material_expansions = 0
+    if "_bom_material" not in bom_df.columns:
+        bom_df["_bom_material"] = ""
+    bom_df["_bom_material"] = bom_df["_bom_material"].apply(_safe_text)
+    scoped_groups = list(bom_df.groupby("_bom_material", dropna=False)) if bom_df["_bom_material"].astype(str).str.strip().any() else [("", bom_df)]
+    total_scopes = max(len(scoped_groups), 1)
 
-    for scoped_count, (scope_key, root_scope) in enumerate(scopes.items(), start=1):
-        material = root_scope["material"]
-        roots = root_scope["roots"]
+    for material_value, scoped_df in scoped_groups:
+        scoped_count += 1
+        material = _safe_text(material_value)
+        parent_set = set(scoped_df["_parent"].dropna().astype(str))
+        component_set = set(scoped_df["_component"].dropna().astype(str))
+        scoped_semi_set = parent_set.intersection(component_set)
+        for semi in scoped_semi_set:
+            semi_key = _normalize_material_key(semi)
+            if semi_key:
+                semi_materials.add(semi_key)
+
+        if material and material in parent_set:
+            roots = [material]
+        else:
+            roots = sorted(parent_set - component_set) or sorted(parent_set)
+
+        children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for parent, component, qty in scoped_df[["_parent", "_component", "_qty"]].itertuples(index=False, name=None):
+            if not parent or not component:
+                continue
+            children[parent].append({
+                "component": component,
+                "qty": float(qty or 0.0),
+            })
 
         for root in roots:
             target_product = material or root
@@ -2051,72 +1813,38 @@ def generate_working_hour_rollup_file_from_standard_bom(
             if target_key not in target_groups:
                 continue
             products_seen.add(target_key)
-
-            stack: list[tuple[tuple[str, Any], str, float, int, tuple[str, ...], tuple[tuple[str, Any], ...]]] = [
-                (scope_key, root, 1.0, 0, (root,), (scope_key,))
-            ]
+            stack: list[tuple[str, float, int, tuple[str, ...]]] = [(root, 1.0, 0, (root,))]
             while stack:
-                current_scope_key, current_parent, accumulated_qty, level, path, scope_path = stack.pop()
-                current_scope = scopes[current_scope_key]
-                current_children = current_scope["children"]
-
-                for child in current_children.get(current_parent, []):
+                current_parent, accumulated_qty, level, path = stack.pop()
+                for child in children.get(current_parent, []):
                     component = child["component"]
                     if component in path:
                         cycle_count += 1
                         continue
-
                     next_qty = accumulated_qty * float(child.get("qty") or 0.0)
                     next_level = level + 1
-                    max_level = max(max_level, next_level)
-
-                    next_scope_key: tuple[str, Any] | None = None
-                    if component in current_children:
-                        next_scope_key = current_scope_key
-                    elif context["has_material"]:
-                        next_scope_key = _select_cross_material_scope(
-                            component=component,
-                            preferred_valid_from=child.get("valid_from", current_scope["valid_from"]),
-                            material_index=material_index,
-                            scopes=scopes,
-                        )
-
-                    if next_scope_key is None:
-                        continue
-                    if next_scope_key in scope_path and next_scope_key != current_scope_key:
-                        cycle_count += 1
-                        continue
-
-                    semi_key = _normalize_material_key(component)
-                    if semi_key:
+                    if next_level > max_level:
+                        max_level = next_level
+                    is_semi = component in scoped_semi_set
+                    if is_semi:
+                        semi_key = _normalize_material_key(component)
                         semi_materials.add(semi_key)
-                    if next_scope_key != current_scope_key:
-                        cross_material_expansions += 1
-
-                    semi_hr_pc = float(hour_per_pc_by_material.get(semi_key, 0.0) or 0.0)
-                    for tg in target_groups.get(target_key, []):
-                        plant = _safe_text(tg.get("plant"))
-                        site = _safe_text(tg.get("site"))
-                        target_qty = float(tg.get("annual_qty") or 0.0)
-                        contrib_pc = next_qty * semi_hr_pc
-                        contrib_annual = target_qty * contrib_pc
-                        if contrib_annual:
-                            key = (target_key, plant, site)
-                            semi_by_key[key] = semi_by_key.get(key, 0.0) + contrib_annual
-                        detail_ws.append([
-                            target_key, plant, site, target_qty, current_parent, semi_key,
-                            next_qty, semi_hr_pc, contrib_pc, contrib_annual, next_level,
-                        ])
-                        detail_rows += 1
-
-                    stack.append((
-                        next_scope_key,
-                        component,
-                        next_qty,
-                        next_level,
-                        path + (component,),
-                        scope_path + ((next_scope_key,) if next_scope_key != current_scope_key else ()),
-                    ))
+                        semi_hr_pc = float(hour_per_pc_by_material.get(semi_key, 0.0) or 0.0)
+                        for tg in target_groups.get(target_key, []):
+                            plant = _safe_text(tg.get("plant"))
+                            site = _safe_text(tg.get("site"))
+                            target_qty = float(tg.get("annual_qty") or 0.0)
+                            contrib_pc = next_qty * semi_hr_pc
+                            contrib_annual = target_qty * contrib_pc
+                            if contrib_annual:
+                                key = (target_key, plant, site)
+                                semi_by_key[key] = semi_by_key.get(key, 0.0) + contrib_annual
+                            detail_ws.append([
+                                target_key, plant, site, target_qty, current_parent, semi_key,
+                                next_qty, semi_hr_pc, contrib_pc, contrib_annual, next_level,
+                            ])
+                            detail_rows += 1
+                        stack.append((component, next_qty, next_level, path + (component,)))
 
         if progress_callback and (scoped_count % 25 == 0 or scoped_count == total_scopes):
             progress = 89 + int((scoped_count / total_scopes) * 7)
@@ -2168,7 +1896,6 @@ def generate_working_hour_rollup_file_from_standard_bom(
     metadata_ws.append(["products_matched_to_bom", len(products_seen)])
     metadata_ws.append(["max_level", max_level])
     metadata_ws.append(["cycles_skipped", cycle_count])
-    metadata_ws.append(["cross_material_expansions", cross_material_expansions])
     metadata_ws.append(["created_at", datetime.now().isoformat(timespec="seconds")])
 
     if progress_callback:
@@ -2183,7 +1910,6 @@ def generate_working_hour_rollup_file_from_standard_bom(
         "products": int(len(products_seen)),
         "max_level": int(max_level),
         "cycles_skipped": int(cycle_count),
-        "cross_material_expansions": int(cross_material_expansions),
         "total_direct_hours": float(total_direct),
         "total_semi_hours": float(total_semi),
         "total_hours": float(total_direct + total_semi),
@@ -2236,14 +1962,14 @@ SUPPLIER_PLANT_ALIASES = [
 # available to both destinations when the supplier master identifies the site by
 # Plant code instead of the full Unit Name.
 _PLANT_TO_UNIT_NAMES: dict[str, tuple[str, ...]] = {
-    "2670": ("中國常州廠(A9)-IPS", "中國常州廠(A2)-IPS"),
-    "3760": ("中國石碣廠-IPS",),
-    "3775": ("中國石碣廠-IPS",),
+    "2670": ("常州廠(A9)-IPS", "常州廠(A2)-IPS"),
+    "3760": ("廣州石碣廠-IPS",),
+    "3775": ("廣州石碣廠-IPS",),
     "4070": ("泰國廠-IPS",),
     "4270": ("越南海防廠-IPS",),
     "429A": ("越南海防廠-IPS",),
-    "A9": ("中國常州廠(A9)-IPS",),
-    "A2": ("中國常州廠(A2)-IPS",),
+    "A9": ("常州廠(A9)-IPS",),
+    "A2": ("常州廠(A2)-IPS",),
 }
 
 _PLANT_COUNTRY_AREA: dict[str, str] = {
@@ -2304,9 +2030,9 @@ def _site_lookup_keys(value: Any) -> list[str]:
 
     compact = re.sub(r"\s+", "", text).upper()
     alias_matches = {
-        "中國常州廠(A9)-IPS": ("A9", "CHANGZHOUA9"),
-        "中國常州廠(A2)-IPS": ("A2", "CHANGZHOUA2"),
-        "中國石碣廠-IPS": ("廣州", "广州", "石碣", "GUANGZHOU", "SHIJIE"),
+        "常州廠(A9)-IPS": ("A9", "CHANGZHOUA9"),
+        "常州廠(A2)-IPS": ("A2", "CHANGZHOUA2"),
+        "廣州石碣廠-IPS": ("廣州", "广州", "石碣", "GUANGZHOU", "SHIJIE"),
         "泰國廠-IPS": ("泰國", "泰国", "THAILAND", "THAI"),
         "越南海防廠-IPS": ("越南", "海防", "VIETNAM", "VIET NAM", "HAIPHONG", "HAI PHONG"),
     }
@@ -2618,7 +2344,7 @@ def _extract_site_tbc_supplier_map_from_raw_template(wb) -> dict[str, dict[str, 
     Expected Supplier Name (optional) pattern:
         <Transportation Destination>_TBC - TBC
     Example:
-        中國常州廠(A9)-IPS_TBC - TBC
+        常州廠(A9)-IPS_TBC - TBC
 
     The Transportation Origin is read from the same row in Dropdown Values.
     """
@@ -3314,7 +3040,8 @@ def _standard_bom_total_usage_rows(
     # Representative original BOM row lookup for preserving all non-key fields.
     by_source_component: dict[tuple[str, str, str], dict[str, Any]] = {}
     by_component: dict[tuple[str, str], dict[str, Any]] = {}
-    for _, row_dict in bom_df.iterrows():
+    for row in bom_df.itertuples(index=False):
+        row_dict = row._asdict()
         source = _safe_text(row_dict.get("_bom_material"))
         component = _safe_text(row_dict.get("_component"))
         unit = _safe_text(row_dict.get("_uom"))
@@ -3325,28 +3052,25 @@ def _standard_bom_total_usage_rows(
         by_component.setdefault((component, unit), original)
 
     trace_detail = exploded.attrs.get("trace_detail")
-    trace_source: dict[tuple[str, Any, str, str], str] = {}
+    trace_source: dict[tuple[str, str, str], str] = {}
     if isinstance(trace_detail, pd.DataFrame) and not trace_detail.empty:
         for row in trace_detail.itertuples(index=False):
             target = _safe_text(getattr(row, "target_product", ""))
-            target_valid_from = getattr(row, "target_valid_from", None)
             raw = _safe_text(getattr(row, "raw_material", ""))
             unit = _safe_text(getattr(row, "unit", ""))
             source = _safe_text(getattr(row, "source_material", ""))
-            trace_source.setdefault((target, target_valid_from, raw, unit), source)
+            trace_source.setdefault((target, raw, unit), source)
 
     output_rows: list[dict[str, Any]] = []
     if exploded is None or exploded.empty:
         return original_columns, pd.DataFrame(columns=original_columns)
 
-    sort_columns = [c for c in ["target_product", "target_valid_from", "raw_material", "unit"] if c in exploded.columns]
-    work = exploded.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
+    work = exploded.sort_values(["target_product", "raw_material", "unit"], kind="mergesort").reset_index(drop=True)
     for row in work.itertuples(index=False):
         target_product = _safe_text(getattr(row, "target_product", ""))
-        target_valid_from = getattr(row, "target_valid_from", None)
         raw_material = _safe_text(getattr(row, "raw_material", ""))
         unit = _safe_text(getattr(row, "unit", ""))
-        source = trace_source.get((target_product, target_valid_from, raw_material, unit), "")
+        source = trace_source.get((target_product, raw_material, unit), "")
         template = by_source_component.get((source, raw_material, unit)) or by_component.get((raw_material, unit)) or {}
         out = {col: template.get(col, "") for col in original_columns}
 
@@ -3358,7 +3082,7 @@ def _standard_bom_total_usage_rows(
             (unit_col, unit),
             (description_col, _safe_text(getattr(row, "description", ""))),
             (material_group_col, _safe_text(getattr(row, "material_group", ""))),
-            (valid_from_col, getattr(row, "target_valid_from", getattr(row, "valid_from", ""))),
+            (valid_from_col, getattr(row, "valid_from", "")),
             (net_weight_col, getattr(row, "net_weight", "")),
             (gross_weight_col, getattr(row, "gross_weight", "")),
             (weight_uom_col, getattr(row, "weight_uom", "")),
@@ -3448,9 +3172,6 @@ def _write_standard_bom_total_usage_workbook(
         ["BOM 原始列數", int(summary.get("bom_rows_before_dedup", 0) or 0)],
         ["BOM 去重後列數", int(summary.get("bom_rows_after_dedup", 0) or 0)],
         ["重複列移除", int(summary.get("bom_duplicate_rows_removed", 0) or 0)],
-        ["重複 BOM 版本移除", int(summary.get("bom_version_duplicate_groups_removed", 0) or 0)],
-        ["跨 Material 半品展開次數", int(summary.get("cross_material_expansions", 0) or 0)],
-        ["循環路徑略過", int(summary.get("cycles_skipped", 0) or 0)],
         ["成品數", int(summary.get("products", 0) or 0)],
         ["半品數", int(summary.get("semi_finished", 0) or 0)],
         ["最終原物料列數", int(len(output_df))],
@@ -5109,4 +4830,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V27_7_SITE_NAME_STANDARDIZATION"
+BOM_FORMATTER_VERSION = "CMP_V27_3_PLANT_TBC_PRIORITY"
