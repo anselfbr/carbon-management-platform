@@ -497,7 +497,7 @@ def generate_product_activity_bulk_file(
             activity_ws.cell(activity_row, activity_labor_hours_col).value = labor_hours
 
         if activity_labor_hours_unit_col and labor_hours_col:
-            activity_ws.cell(activity_row, activity_labor_hours_unit_col).value = "小時"
+            activity_ws.cell(activity_row, activity_labor_hours_unit_col).value = "hours"
 
         activity_ws.cell(activity_row, 2).number_format = "yyyy/mm/dd"
         activity_ws.cell(activity_row, 3).number_format = "yyyy/mm/dd"
@@ -567,7 +567,7 @@ def generate_product_activity_bulk_files_by_site(
     production_site_col = _find_optional_column(df, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
 
     if production_site_col is None:
-        output_path = output_dir / f"formatted_product_activity_data_bulk_create_{token}.xlsx"
+        output_path = output_dir / f"product_activity_data_bulk_create_{token}.xlsx"
         summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
         return {
             "split_by_production_site": False,
@@ -586,7 +586,7 @@ def generate_product_activity_bulk_files_by_site(
 
     if len(sites) <= 1:
         site = sites[0] if sites else "ALL"
-        output_path = output_dir / f"formatted_product_activity_data_bulk_create_{_sanitize_filename(site)}_{token}.xlsx"
+        output_path = output_dir / f"product_activity_data_bulk_create_{_sanitize_filename(site)}_{token}.xlsx"
         summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
         return {
             "split_by_production_site": False,
@@ -607,7 +607,7 @@ def generate_product_activity_bulk_files_by_site(
             site_df = df[df[production_site_col] == site].copy()
             safe_site = _sanitize_filename(site)
             temp_step1 = tmpdir_path / f"step1_{safe_site}.xlsx"
-            output_path = output_dir / f"formatted_product_activity_data_bulk_create_{safe_site}_{token}.xlsx"
+            output_path = output_dir / f"product_activity_data_bulk_create_{safe_site}_{token}.xlsx"
 
             with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
                 site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
@@ -680,7 +680,7 @@ def generate_product_activity_bulk_files_by_site_zip(
         tmpdir_path = Path(tmpdir)
 
         if production_site_col is None:
-            output_path = tmpdir_path / f"formatted_product_activity_data_bulk_create_ALL_{token}.xlsx"
+            output_path = tmpdir_path / f"product_activity_data_bulk_create_ALL_{token}.xlsx"
             summary = generate_product_activity_bulk_file(
                 step1_output_path,
                 bulk_template_path,
@@ -711,7 +711,7 @@ def generate_product_activity_bulk_files_by_site_zip(
                 site_df = df[df[production_site_col] == site].copy()
                 safe_site = _sanitize_filename(site)
                 temp_step1 = tmpdir_path / f"step1_{safe_site}_{token}.xlsx"
-                output_path = tmpdir_path / f"formatted_product_activity_data_bulk_create_{safe_site}_{token}.xlsx"
+                output_path = tmpdir_path / f"product_activity_data_bulk_create_{safe_site}_{token}.xlsx"
 
                 with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
                     site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
@@ -736,7 +736,7 @@ def generate_product_activity_bulk_files_by_site_zip(
                     "summary": summary,
                 })
 
-        zip_name = f"formatted_product_activity_data_bulk_by_production_site_{token}.zip"
+        zip_name = f"product_activity_data_bulk_by_production_site_{token}.zip"
         zip_path = output_dir / zip_name
 
         report("封裝 Product Activity Bulk ZIP", 0, len(generated_files), 92)

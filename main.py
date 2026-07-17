@@ -57,7 +57,7 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V15_2_SITE_NAME_STANDARDIZATION =====")
+print("===== CMP MAIN VERSION: CMP_V15_3_M1B_FILENAME_HOURS =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -3054,6 +3054,9 @@ def _find_latest_module1b_product_activity_bulk() -> Path | None:
         return MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH
     candidates: list[Path] = []
     for pattern in (
+        "product_activity_data_bulk_by_production_site_*.zip",
+        "product_activity_data_bulk_create_*.xlsx",
+        # Backward compatibility for outputs generated before the M1B filename update.
         "formatted_product_activity_data_bulk_by_production_site_*.zip",
         "formatted_product_activity_data_bulk_create_*.xlsx",
     ):
