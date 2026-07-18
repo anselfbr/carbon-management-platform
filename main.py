@@ -59,7 +59,7 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V15_4_M3A_OFFICIAL_TEMPLATE_UPLOAD =====")
+print("===== CMP MAIN VERSION: CMP_V15_5_M2B_ROLLUP_TOTAL_HOUR_FILTER =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
@@ -483,6 +483,7 @@ def _run_module2b_raw_bulk_job(
     output_dir: Path,
     token: str,
     step1_path: Path,
+    working_hour_rollup_path: Path,
     step1_source: Dict[str, str],
     workspace_id: str = "",
 ) -> None:
@@ -520,6 +521,7 @@ def _run_module2b_raw_bulk_job(
             output_dir=output_dir,
             token=token,
             step1_output_path=step1_path,
+            working_hour_rollup_path=working_hour_rollup_path,
             progress_callback=progress_callback,
         )
         output_path = output_dir / str(summary.get("output_filename", f"raw_material_activity_data_bulk_by_site_{token}.zip"))
@@ -535,6 +537,8 @@ def _run_module2b_raw_bulk_job(
             summary["final_raw_material_template_latest"] = RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.name
             summary["final_raw_material_template_latest_download_url"] = f"/download/{RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH.name}"
         summary["module1_step1_source_filename"] = step1_path.name
+        summary["module2a_working_hour_rollup_filename"] = working_hour_rollup_path.name
+        summary["module2a_working_hour_rollup_download_url"] = f"/download/{working_hour_rollup_path.name}"
         summary["module1_step1_source_download_url"] = f"/download/{step1_path.name}"
         summary["module1_step1_source"] = step1_source
         _set_module2a_job(
@@ -3940,6 +3944,12 @@ async def module2b_raw_material_bulk_job(request: Request):
     total_usage_path = _find_latest_module2a_total_usage()
     if total_usage_path is None:
         return JSONResponse({"ok": False, "message": "尚未找到 Module 2A 標準BOM表總用量，請先完成 Module 2A。"}, status_code=400)
+    working_hour_rollup_path = _find_latest_working_hour_rollup()
+    if working_hour_rollup_path is None:
+        return JSONResponse({
+            "ok": False,
+            "message": "尚未找到 Module 2A working_hour_rollup，請重新完成 Module 2A 後再執行 Module 2B。",
+        }, status_code=400)
 
     token = uuid.uuid4().hex[:10]
     job_id = token
@@ -3962,6 +3972,7 @@ async def module2b_raw_material_bulk_job(request: Request):
         total_rows=0,
         module1_step1_source=step1_source,
         module2a_total_usage_filename=total_usage_path.name,
+        module2a_working_hour_rollup_filename=working_hour_rollup_path.name,
         workspace_id=workspace_id,
     )
     MODULE2B_EXECUTOR.submit(
@@ -3972,6 +3983,7 @@ async def module2b_raw_material_bulk_job(request: Request):
         OUTPUT_DIR,
         token,
         step1_path,
+        working_hour_rollup_path,
         step1_source,
         workspace_id,
     )

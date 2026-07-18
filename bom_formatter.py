@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V27_9_RAW_MATERIAL_SUPPLIER_UNIT_PREFIX"
+BOM_FORMATTER_VERSION = "CMP_V27_10_M2B_ROLLUP_TOTAL_HOUR_FILTER"
 
 
 DEFAULT_MAPPING = {
@@ -1257,6 +1257,103 @@ def _step1_row_is_wip(product_type: Any = "", is_wip: Any = "") -> bool:
     if type_text == "WIP" or "WIP" in type_text or "半品" in type_text:
         return True
     return False
+
+
+def _read_working_hour_rollup_m2b_product_eligibility_map(
+    working_hour_rollup_path: str | Path,
+) -> tuple[dict[str, bool], dict[str, str], Dict[str, Any]]:
+    """Read M2A Working Hour Roll-up and return whether each product is allowed into M2B.
+
+    The roll-up Summary already contains Direct + Semi-finished working hours.
+    M2B must use Total Annual Working Hour from this file so products whose
+    direct hour is zero but semi-finished roll-up hour is positive are retained.
+    """
+    path = Path(working_hour_rollup_path)
+    if not path.exists():
+        return {}, {}, {
+            "m2b_product_filter_applied": False,
+            "m2b_product_filter_reason": f"找不到 M2A working_hour_rollup：{path}",
+            "m2b_product_filter_source": "M2A working_hour_rollup missing",
+            "m2b_excluded_products": 0,
+        }
+
+    try:
+        df = pd.read_excel(path, sheet_name="Summary", dtype=object)
+    except Exception:
+        df = pd.read_excel(path, sheet_name=0, dtype=object)
+
+    material_col = _find_step1_column(df, ["Material Number", "Material", "Product Material Number"])
+    total_hour_col = _find_step1_optional_column(
+        df,
+        ["Total Annual Working Hour", "總年度工時", "年度總工時", "Total working hours"],
+    )
+    type_col = _find_step1_optional_column(df, ["Product Type", "產品類型"])
+    wip_col = _find_step1_optional_column(df, ["Is_WIP", "Is WIP", "WIP"])
+
+    if not total_hour_col:
+        return {}, {}, {
+            "m2b_product_filter_applied": False,
+            "m2b_product_filter_reason": "M2A working_hour_rollup 找不到 Total Annual Working Hour 欄位。",
+            "m2b_product_filter_source": path.name,
+            "m2b_excluded_products": 0,
+        }
+
+    work = df.copy()
+    work["_material_key"] = work[material_col].apply(_normalize_material_key)
+    work["_total_annual_hour"] = work[total_hour_col].apply(_safe_number)
+    work["_product_type"] = work[type_col].apply(_safe_text) if type_col else ""
+    work["_is_wip_text"] = work[wip_col].apply(_safe_text) if wip_col else ""
+    work["_is_wip_bool"] = work.apply(
+        lambda r: _step1_row_is_wip(r.get("_product_type", ""), r.get("_is_wip_text", "")),
+        axis=1,
+    )
+    work = work[work["_material_key"] != ""].copy()
+
+    eligibility: dict[str, bool] = {}
+    reasons: dict[str, str] = {}
+    excluded_wip = 0
+    excluded_zero_hour = 0
+    eligible_count = 0
+
+    for material, group in work.groupby("_material_key", dropna=False):
+        key = str(material or "").strip().upper()
+        if not key:
+            continue
+        non_wip = group[~group["_is_wip_bool"].astype(bool)]
+        if non_wip.empty:
+            eligibility[key] = False
+            reasons[key] = "WIP"
+            excluded_wip += 1
+            continue
+        positive_hour = non_wip[
+            pd.to_numeric(non_wip["_total_annual_hour"], errors="coerce").fillna(0.0) > 0.0
+        ]
+        if positive_hour.empty:
+            eligibility[key] = False
+            reasons[key] = "Total Annual Working Hour=0/空白/非數字"
+            excluded_zero_hour += 1
+            continue
+        eligibility[key] = True
+        eligible_count += 1
+
+    excluded_examples = [
+        {"material": material, "reason": reasons.get(material, "")}
+        for material in sorted(reasons.keys())[:50]
+    ]
+    return eligibility, reasons, {
+        "m2b_product_filter_applied": True,
+        "m2b_product_filter_source": f"M2A working_hour_rollup: {path.name}",
+        "m2b_product_filter_rule": (
+            "Before Module 2B Raw Material Bulk output, exclude WIP products and target products "
+            "whose M2A Total Annual Working Hour (Direct + Semi-finished roll-up) is 0/blank/non-numeric."
+        ),
+        "m2b_products_checked": int(len(eligibility)),
+        "m2b_eligible_products": int(eligible_count),
+        "m2b_excluded_products": int(len(reasons)),
+        "m2b_excluded_wip_products": int(excluded_wip),
+        "m2b_excluded_zero_hour_products": int(excluded_zero_hour),
+        "m2b_excluded_product_examples": excluded_examples,
+    }
 
 
 def _read_step1_m2b_product_eligibility_map(step1_output_path: str | Path) -> tuple[dict[str, bool], dict[str, str], Dict[str, Any]]:
@@ -4088,6 +4185,7 @@ def _stream_module2b_rows_to_site_csv(
     standard_total_usage_path: str | Path,
     step1_output_path: str | Path,
     output_dir: Path,
+    working_hour_rollup_path: str | Path | None = None,
     mapping: dict[str, str | None] | None = None,
     progress_callback=None,
 ) -> tuple[dict[str, Path], dict[str, int], dict[str, Any]]:
@@ -4104,7 +4202,19 @@ def _stream_module2b_rows_to_site_csv(
     m = _resolve_mapping(mapping)
     annual_qty_map, annual_qty_source_summary = _read_step1_annual_quantity_map(step1_output_path)
     site_map, step1_summary = _read_step1_product_master_maps(step1_output_path)
-    product_eligibility_map, product_exclusion_reasons, product_filter_summary = _read_step1_m2b_product_eligibility_map(step1_output_path)
+    if working_hour_rollup_path and Path(working_hour_rollup_path).exists():
+        product_eligibility_map, product_exclusion_reasons, product_filter_summary = (
+            _read_working_hour_rollup_m2b_product_eligibility_map(working_hour_rollup_path)
+        )
+        product_filter_summary["m2b_product_filter_fallback_used"] = False
+    else:
+        product_eligibility_map, product_exclusion_reasons, product_filter_summary = (
+            _read_step1_m2b_product_eligibility_map(step1_output_path)
+        )
+        product_filter_summary["m2b_product_filter_fallback_used"] = True
+        product_filter_summary["m2b_product_filter_fallback_reason"] = (
+            "M2A working_hour_rollup unavailable; fallback to Module 1A direct annual working hour."
+        )
 
     spool_dir = output_dir / f"m2b_spool_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
     spool_dir.mkdir(parents=True, exist_ok=True)
@@ -4415,6 +4525,7 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
     output_dir: str | Path,
     token: str,
     step1_output_path: str | Path,
+    working_hour_rollup_path: str | Path | None = None,
     mapping: dict[str, str | None] | None = None,
     progress_callback=None,
 ) -> Dict[str, Any]:
@@ -4440,6 +4551,7 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
         standard_total_usage_path=standard_total_usage_path,
         step1_output_path=step1_output_path,
         output_dir=output_dir,
+        working_hour_rollup_path=working_hour_rollup_path,
         mapping=mapping,
         progress_callback=progress_callback,
     )
@@ -5190,4 +5302,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V27_9_RAW_MATERIAL_SUPPLIER_UNIT_PREFIX"
+BOM_FORMATTER_VERSION = "CMP_V27_10_M2B_ROLLUP_TOTAL_HOUR_FILTER"
