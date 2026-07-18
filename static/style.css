@@ -3358,3 +3358,108 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* M3/M3A single-action layout + Module 4 single-button resume v1 */
+.module3-combined-form {
+  gap: 18px;
+}
+
+.module3-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.module3-upload-field {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  margin: 0;
+}
+
+.module3-upload-field > span {
+  display: block;
+  min-height: 22px;
+}
+
+.module3-upload-field .form-hint {
+  display: block;
+  margin: 2px 0 0;
+  color: var(--muted, #64748b);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.65;
+}
+
+.module3-combined-run-btn {
+  width: 100%;
+  min-height: 52px;
+  justify-self: stretch;
+  margin-top: 2px;
+}
+
+.module3-stage-result-group {
+  display: grid;
+  gap: 14px;
+  margin-top: 8px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(24, 83, 130, 0.14);
+}
+
+#automated-data-consolidation .automation-m3a-resume-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 32px;
+  padding: 26px 0 4px;
+  border-top: 1px solid rgba(24, 83, 130, 0.18);
+}
+
+#automated-data-consolidation .automation-m3a-resume-panel.hidden {
+  display: none;
+}
+
+#automated-data-consolidation .automation-m3a-resume-panel label {
+  color: var(--navy);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+#automated-data-consolidation .automation-m3a-resume-panel input[type="file"] {
+  width: 100%;
+  min-height: 58px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 9px 12px;
+  background: #f9fbfd;
+  color: var(--navy);
+  font: inherit;
+}
+
+#automated-data-consolidation .automation-m3a-resume-panel input[type="file"]::file-selector-button {
+  height: 38px;
+  margin-right: 12px;
+  padding: 0 15px;
+  border: 1px solid #aeb9c8;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--navy);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#automated-data-consolidation .automation-m3a-resume-panel .form-hint {
+  margin: 4px 0 0;
+  color: var(--muted, #64748b);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+@media (max-width: 820px) {
+  .module3-upload-grid {
+    grid-template-columns: 1fr;
+  }
+}

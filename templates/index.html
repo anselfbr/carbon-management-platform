@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Data Integration Platform (DIP)</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260713-auto-v8" />
+  <link rel="stylesheet" href="/static/style.css?v=20260718-ui-merge-v1" />
 
   <style>
     .rule-import-status {
@@ -400,15 +400,15 @@
                 <label><span data-i18n="reportingYear">Reporting Year</span><input id="autoYear" type="number" placeholder="e.g. 2024" data-i18n-placeholder="yearPlaceholder"></label>
                 <label><span data-i18n="workingHourSource">Working Hour Source</span><select id="autoWorkingHourSource"><option value="direct" data-i18n="directWorkingHour">Direct Working Hour</option><option value="include_semi" data-i18n="includeSemiWorkingHour">Include Semi-finished Working Hour</option></select></label>
               </div>
+
+              <div id="automationM3aResumePanel" class="automation-m3a-resume-panel hidden">
+                <label for="automationOfficialRawTemplate" data-i18n="module3aOfficialTemplateLabel">正式原物料批次檔 Template</label>
+                <input id="automationOfficialRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" />
+                <p class="form-hint" data-i18n="module3aOfficialTemplateHint">於資料中心建立供應商後，下載正式原物料批次檔並上傳</p>
+              </div>
+
               <button id="automationStartBtn" type="submit" class="btn-primary automation-start-btn"><span data-i18n="startAutomatedConsolidation">開始全自動化資料彙整</span></button>
             </form>
-
-            <div id="automationM3aResumePanel" class="form-panel hidden">
-              <label for="automationOfficialRawTemplate" data-i18n="module3aOfficialTemplateLabel">正式原物料批次檔 Template</label>
-              <input id="automationOfficialRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" />
-              <p class="form-hint" data-i18n="module3aOfficialTemplateHint">於資料中心建立供應商後，下載正式原物料批次檔並上傳</p>
-              <button id="automationContinueM3aBtn" type="button" class="btn-primary automation-start-btn" data-i18n="automationContinueM3a">繼續執行 M3A</button>
-            </div>
           </section>
 
           <section class="card automation-status-card">
@@ -418,7 +418,7 @@
                 <h3 data-i18n="automationProgressTitle">執行進度</h3>
                 <p data-i18n="automationProgressHint">每完成一個階段，系統會自動標示勾選並繼續下一階段。</p>
               </div>
-              <span id="automationStageCounter" class="automation-stage-counter">0 / 6</span>
+              <span id="automationStageCounter" class="automation-stage-counter">0 / 7</span>
             </div>
 
             <div id="automationStatus" class="processing-status idle automation-current-status">
@@ -730,61 +730,60 @@
               </div>
               <button class="btn-secondary module3-back-btn" type="button" data-module3-page="factor-selection" data-i18n="backToModule3Menu">返回模組 3 選單</button>
             </div>
-            <form id="module3CclForm" class="module3-action-panel" enctype="multipart/form-data">
+            <form id="module3CclForm" class="module3-action-panel module3-combined-form" enctype="multipart/form-data">
               <div id="module3RawBulkSource" class="module3-source-card">
                 <b>引用 Module 2C Raw Material Bulk</b>
                 <p id="module3RawBulkSourceText">來源：Module 2C Raw Material Bulk 檢查中...</p>
               </div>
 
-              <label data-i18n="module3UploadCclMapping">上傳光寶 CCL 係數組配表</label>
-              <input id="module3CclMappingFile" name="ccl_mapping_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+              <div class="module3-upload-grid">
+                <label class="module3-upload-field" for="module3CclMappingFile">
+                  <span data-i18n="module3UploadCclMapping">上傳光寶 CCL 係數組配表</span>
+                  <input id="module3CclMappingFile" name="ccl_mapping_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+                </label>
 
-              <button type="submit" class="btn-primary module3-run-btn" data-i18n="module3RunCclMapping">執行 CCL 係數對應</button>
+                <label class="module3-upload-field" for="module3aRawTemplateFile">
+                  <span data-i18n="module3aOfficialTemplateLabel">正式原物料批次檔 Template</span>
+                  <input id="module3aRawTemplateFile" name="raw_material_template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
+                  <small class="form-hint" data-i18n="module3aOfficialTemplateHint">於資料中心建立供應商後，下載正式原物料批次檔並上傳</small>
+                </label>
+              </div>
 
-              <div id="module3CclResult" class="processing-status idle module3-ccl-processing-status">
-                <div class="status-header">
-                  <div class="spinner"></div>
-                  <div>
-                    <b id="module3CclStatusTitle" data-i18n="module3CclReadyTitle">待上傳檔案</b>
-                    <p id="module3CclStatusText" data-i18n="module3CclReadyText">系統會依 Material 對應 CCL Item、碳係數與單位，並寫入 Factor 欄位。</p>
+              <button id="module3CombinedRunBtn" type="submit" class="btn-primary module3-run-btn module3-combined-run-btn" data-i18n="module3CombinedRun">開始執行</button>
+
+              <div class="module3-stage-result-group">
+                <div id="module3CclResult" class="processing-status idle module3-ccl-processing-status">
+                  <div class="status-header">
+                    <div class="spinner"></div>
+                    <div>
+                      <b id="module3CclStatusTitle" data-i18n="module3CclReadyTitle">待上傳檔案</b>
+                      <p id="module3CclStatusText" data-i18n="module3CclReadyText">系統會先完成 CCL 係數對應，再套用正式原物料批次檔。</p>
+                    </div>
+                    <span id="module3CclStatusTime" class="status-time">Idle</span>
                   </div>
-                  <span id="module3CclStatusTime" class="status-time">Idle</span>
-                </div>
-                <div class="progress-track">
-                  <div id="module3CclProgressBar" class="progress-bar"></div>
-                </div>
-              </div>
-
-              <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載 M3 係數對應完成檔</span></a>
-              <pre id="module3CclLog" class="rule-log">MODULE 3 is ready.</pre>
-            </form>
-
-            <form id="module3aForm" class="module3-action-panel" enctype="multipart/form-data">
-              <div id="module3aSource" class="module3-source-card">
-                <b data-i18n="module3aSourceTitle">引用 M3 係數對應完成檔</b>
-                <p id="module3aSourceText">來源：等待 M3 完成...</p>
-              </div>
-
-              <label for="module3aRawTemplateFile" data-i18n="module3aOfficialTemplateLabel">正式原物料批次檔 Template</label>
-              <input id="module3aRawTemplateFile" name="raw_material_template_file" type="file" accept=".xlsx,.xls,.xlsm" required />
-              <p class="form-hint" data-i18n="module3aOfficialTemplateHint">於資料中心建立供應商後，下載正式原物料批次檔並上傳</p>
-
-              <button type="submit" class="btn-primary module3-run-btn" data-i18n="module3aRunOfficialTemplate">執行 M3A 正式套版</button>
-
-              <div id="module3aResult" class="processing-status idle module3-ccl-processing-status">
-                <div class="status-header">
-                  <div class="spinner"></div>
-                  <div>
-                    <b id="module3aStatusTitle" data-i18n="module3aReadyTitle">等待正式原物料批次檔</b>
-                    <p id="module3aStatusText" data-i18n="module3aReadyText">請先完成 M3，再上傳資料中心下載的正式原物料批次檔。</p>
+                  <div class="progress-track">
+                    <div id="module3CclProgressBar" class="progress-bar"></div>
                   </div>
-                  <span id="module3aStatusTime" class="status-time">Idle</span>
                 </div>
-                <div class="progress-track"><div id="module3aProgressBar" class="progress-bar"></div></div>
-              </div>
 
-              <a id="module3aDownload" class="download disabled" href="#" data-i18n="module3aDownloadFinalBulk">下載最終原物料 Bulk</a>
-              <pre id="module3aLog" class="rule-log">M3A is ready.</pre>
+                <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載 M3 係數對應完成檔</span></a>
+                <pre id="module3CclLog" class="rule-log">MODULE 3 is ready.</pre>
+
+                <div id="module3aResult" class="processing-status idle module3-ccl-processing-status">
+                  <div class="status-header">
+                    <div class="spinner"></div>
+                    <div>
+                      <b id="module3aStatusTitle" data-i18n="module3aReadyTitle">等待開始執行</b>
+                      <p id="module3aStatusText" data-i18n="module3aReadyText">M3 完成後將自動接續 M3A 正式套版。</p>
+                    </div>
+                    <span id="module3aStatusTime" class="status-time">Idle</span>
+                  </div>
+                  <div class="progress-track"><div id="module3aProgressBar" class="progress-bar"></div></div>
+                </div>
+
+                <a id="module3aDownload" class="download disabled" href="#" data-i18n="module3aDownloadFinalBulk">下載最終原物料 Bulk</a>
+                <pre id="module3aLog" class="rule-log">M3A is ready.</pre>
+              </div>
             </form>
           </section>
         </section>
@@ -1398,6 +1397,7 @@ const module3CclDownload = document.getElementById('module3CclDownload');
 const module3CclLog = document.getElementById('module3CclLog');
 const module3RawBulkSourceText = document.getElementById('module3RawBulkSourceText');
 const module3aForm = document.getElementById('module3aForm');
+const module3CombinedRunBtn = document.getElementById('module3CombinedRunBtn');
 const module3aSourceText = document.getElementById('module3aSourceText');
 const module3aResult = document.getElementById('module3aResult');
 const module3aStatusTitle = document.getElementById('module3aStatusTitle');
@@ -2314,30 +2314,117 @@ function startModule3CclPolling(jobId, startTime) {
   }, 1500);
 }
 
+async function waitForModule3CclJob(jobId) {
+  module3CclEtaTracker = cmpCreateEtaTracker(60);
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const data = await readJsonOrThrow(await fetch(`/module3/ccl-job/${encodeURIComponent(jobId)}`, { cache: 'no-store' }));
+    const job = data.job || {};
+    const progress = Number(job.progress || 0);
+    const processed = Number(job.processed_rows || 0);
+    const total = Number(job.total_rows || 0);
+    const rowText = total ? `Rows: ${processed.toLocaleString()} / ${total.toLocaleString()}` : `Rows: ${processed.toLocaleString()}`;
+    const remaining = cmpUpdateEtaTracker(module3CclEtaTracker, job, 60);
+    const sourceText = job.source_filename ? `來源：${job.source_filename}` : '';
+    if (job.status === 'success') {
+      const summary = job.summary || {};
+      const fileCount = summary.output_file_count ? `｜Files: ${Number(summary.output_file_count).toLocaleString()}` : '';
+      const body = formatDynamic('module3CclSuccessText', '完成：已寫入 {written} 筆，未對應 {unmatched} 筆。', {
+        written: summary.written_rows ?? 0,
+        unmatched: summary.unmatched_rows ?? 0
+      }) + fileCount + (sourceText ? `｜${sourceText}` : '');
+      setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), `${body}｜即將接續 M3A 正式套版。`, cmpT('completed', 'Completed'), 100);
+      if (module3CclLog) module3CclLog.textContent = `Completed.\nJob: ${jobId}\nRows: ${(summary.activity_rows || summary.total_rows || 0).toLocaleString()}\nWritten: ${(summary.written_rows || 0).toLocaleString()}\nUnmatched: ${(summary.unmatched_rows || 0).toLocaleString()}\nDownload: ${summary.output_filename || ''}`;
+      if (module3CclDownload && job.download_url) {
+        module3CclDownload.href = job.download_url;
+        module3CclDownload.classList.remove('disabled');
+      }
+      return job;
+    }
+    if (job.status === 'error') {
+      throw new Error(job.message || cmpT('module3CclFailed', 'CCL 係數對應失敗'));
+    }
+    setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 processing'), `${job.step || cmpT('module3ProcessingText', '正在寫入 CCL 係數欄位，請稍候。')} · ${rowText}${sourceText ? `｜${sourceText}` : ''}`, cmpRemainingText(remaining), progress);
+    if (module3CclLog) module3CclLog.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nEstimated remaining: ${cmpFormatDuration(remaining)}\nLast heartbeat: ${job.updated_at || ''}`;
+  }
+}
+
+async function waitForModule3aJob(jobId) {
+  module3aEtaTracker = cmpCreateEtaTracker(60);
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const data = await readJsonOrThrow(await fetch(`/module3a/job/${encodeURIComponent(jobId)}`, { cache: 'no-store' }));
+    const job = data.job || {};
+    const progress = Number(job.progress || 0);
+    const processed = Number(job.processed_rows || 0);
+    const total = Number(job.total_rows || 0);
+    const rowText = total ? `Rows: ${processed.toLocaleString()} / ${total.toLocaleString()}` : `Rows: ${processed.toLocaleString()}`;
+    const remaining = cmpUpdateEtaTracker(module3aEtaTracker, job, 60);
+    if (job.status === 'success') {
+      setModule3aResult('success', 'M3A 正式套版完成', '已保留正式 Template 的下拉選項、資料驗證、公式與隱藏分頁。', 'Completed', 100);
+      if (module3aDownload && job.download_url) {
+        module3aDownload.href = job.download_url;
+        module3aDownload.classList.remove('disabled');
+      }
+      if (module3aLog) module3aLog.textContent = `Completed.\nJob: ${jobId}\nTemplate: ${job.official_template_filename || ''}\nDownload: ${job.summary?.output_filename || ''}`;
+      return job;
+    }
+    if (job.status === 'error') {
+      throw new Error(job.message || 'M3A 處理失敗');
+    }
+    setModule3aResult('running', 'M3A processing', `${job.step || '正在套用正式原物料批次檔'} · ${rowText}`, cmpRemainingText(remaining), progress);
+    if (module3aLog) module3aLog.textContent = `Job: ${jobId}\nStatus: ${job.status || 'running'}\nStep: ${job.step || ''}\n${rowText}\nEstimated remaining: ${cmpFormatDuration(remaining)}`;
+  }
+}
+
 if (module3CclForm) {
   module3CclForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    clearInterval(module3CclPollTimer);
-    module3CclEtaTracker = cmpCreateEtaTracker(60);
-    if (module3CclDownload) {
-      module3CclDownload.classList.add('disabled');
-      module3CclDownload.href = '#';
+    const cclFile = document.getElementById('module3CclMappingFile')?.files?.[0];
+    const officialTemplate = document.getElementById('module3aRawTemplateFile')?.files?.[0];
+    if (!cclFile || !officialTemplate) {
+      setModule3CclResult('error', '尚未選擇完整檔案', '請同時上傳 CCL 係數組配表與正式原物料批次檔 Template。', 'Error', 0);
+      return;
     }
-    setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 queued'), cmpT('module3ProcessingText', '正在建立 CCL 係數對應工作，請稍候。'), cmpRemainingText(60), 3);
-    if (module3CclLog) module3CclLog.textContent = 'Uploading and creating MODULE 3 job...';
-    await refreshModule3RawBulkSource();
-    refreshBomStep1Source();
-    const fd = new FormData(module3CclForm);
+
+    clearInterval(module3CclPollTimer);
+    clearInterval(module3aPollTimer);
+    if (module3CombinedRunBtn) module3CombinedRunBtn.disabled = true;
+    if (module3CclDownload) { module3CclDownload.classList.add('disabled'); module3CclDownload.href = '#'; }
+    if (module3aDownload) { module3aDownload.classList.add('disabled'); module3aDownload.href = '#'; }
+    setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 queued'), '正在建立 CCL 係數對應工作。', cmpRemainingText(60), 3);
+    setModule3aResult('idle', '等待 M3 完成', 'M3 完成後將自動接續 M3A 正式套版。', 'Idle', 0);
+    if (module3CclLog) module3CclLog.textContent = 'Uploading CCL mapping file and creating MODULE 3 job...';
+    if (module3aLog) module3aLog.textContent = 'Waiting for MODULE 3...';
+
     try {
-      const res = await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: fd });
-      const data = await readJsonOrThrow(res);
-      if (!data.job_id) throw new Error('後端未回傳 job_id。');
-      setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 processing'), cmpT('module3ProcessingText', '背景工作已開始，正在讀取檔案。'), cmpRemainingText(60), 5);
-      if (module3CclLog) module3CclLog.textContent = `Job: ${data.job_id}\nStatus: queued\nStep: 背景工作已開始，正在讀取檔案。\nRows: 0\nEstimated remaining: ${cmpFormatDuration(60)}`;
-      startModule3CclPolling(data.job_id, Date.now());
+      await refreshModule3RawBulkSource();
+      refreshBomStep1Source();
+
+      const m3FormData = new FormData();
+      m3FormData.append('ccl_mapping_file', cclFile);
+      const m3Start = await readJsonOrThrow(await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: m3FormData }));
+      if (!m3Start.job_id) throw new Error('後端未回傳 M3 job_id。');
+      await waitForModule3CclJob(m3Start.job_id);
+
+      setModule3aResult('running', 'M3A queued', '正在上傳正式原物料批次檔並建立 M3A 工作。', cmpRemainingText(60), 3);
+      if (module3aLog) module3aLog.textContent = 'Uploading official Raw Material template...';
+      const m3aFormData = new FormData();
+      m3aFormData.append('raw_material_template_file', officialTemplate);
+      const m3aStart = await readJsonOrThrow(await fetch('/module3a/apply-official-template-job', { method: 'POST', body: m3aFormData }));
+      if (!m3aStart.job_id) throw new Error('後端未回傳 M3A job_id。');
+      await waitForModule3aJob(m3aStart.job_id);
     } catch (err) {
-      setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
-      if (module3CclLog) module3CclLog.textContent = `Error: ${err.message || err}`;
+      const m3Done = module3CclResult?.classList.contains('success');
+      if (m3Done) {
+        setModule3aResult('error', 'M3A 正式套版失敗', err.message, 'Error', 100);
+        if (module3aLog) module3aLog.textContent = `Error: ${err.message || err}`;
+      } else {
+        setModule3CclResult('error', cmpT('module3CclFailed', 'CCL 係數對應失敗'), err.message, cmpT('error', 'Error'), 100);
+        if (module3CclLog) module3CclLog.textContent = `Error: ${err.message || err}`;
+      }
+    } finally {
+      if (module3CombinedRunBtn) module3CombinedRunBtn.disabled = false;
     }
   });
 }
@@ -3759,7 +3846,7 @@ ruleForm.onsubmit = async (e) => {
   const m3aDownload = document.getElementById('automationM3aDownload');
   const m3aResumePanel = document.getElementById('automationM3aResumePanel');
   const officialRawTemplate = document.getElementById('automationOfficialRawTemplate');
-  const continueM3aBtn = document.getElementById('automationContinueM3aBtn');
+  const startBtnText = startBtn ? startBtn.querySelector('span') : null;
   const steps = [
     { code: 'M1A', key: 'automationStepM1a', fallback: '工單資料彙整' },
     { code: 'M2A', key: 'automationStepM2a', fallback: '標準 BOM 總用量' },
@@ -3770,6 +3857,7 @@ ruleForm.onsubmit = async (e) => {
     { code: 'M3A', key: 'automationStepM3a', fallback: '正式原物料 Template 套版與切檔' }
   ];
   let lines = [];
+  let awaitingM3a = false;
 
   function renderSteps(activeIndex=-1, doneCount=0, failedIndex=-1) {
     if (stageCounter) stageCounter.textContent = `${Math.max(0, Math.min(doneCount, steps.length))} / ${steps.length}`;
@@ -3852,15 +3940,68 @@ ruleForm.onsubmit = async (e) => {
     write(`${stageName}：完成`);
     return job;
   }
+  function setAutomationButtonLabel(key, fallback) {
+    if (!startBtnText) return;
+    startBtnText.setAttribute('data-i18n', key);
+    startBtnText.textContent = cmpT(key, fallback);
+  }
+
+  function setAutomationResumeMode(enabled) {
+    awaitingM3a = Boolean(enabled);
+    if (m3aResumePanel) m3aResumePanel.classList.toggle('hidden', !awaitingM3a);
+    if (officialRawTemplate) officialRawTemplate.required = awaitingM3a;
+    if (awaitingM3a) {
+      setAutomationButtonLabel('automationContinueM3a', '繼續執行 M3A');
+    } else {
+      setAutomationButtonLabel('startAutomatedConsolidation', '開始全自動化資料彙整');
+    }
+  }
+
   renderSteps();
+  setAutomationResumeMode(false);
+
   form.addEventListener('submit', async e=>{
-    e.preventDefault(); lines=[]; downloads.classList.add('hidden'); if (m3aResumePanel) m3aResumePanel.classList.add('hidden');
+    e.preventDefault();
+
+    if (awaitingM3a) {
+      const templateFile = officialRawTemplate?.files?.[0];
+      if (!templateFile) {
+        setState('error','M3A 尚未開始','請先上傳資料中心下載的正式原物料批次檔。',(6/steps.length)*100);
+        return;
+      }
+      startBtn.disabled = true;
+      try {
+        const fd = new FormData();
+        fd.append('raw_material_template_file', templateFile);
+        const m3a = await runJob(6, steps[6], '/module3a/apply-official-template-job', fd, id => `/module3a/job/${encodeURIComponent(id)}`, true);
+        m3aDownload.href = m3a.download_url || '#';
+        m3aDownload.classList.toggle('disabled', !m3a.download_url);
+        renderSteps(-1, steps.length);
+        setState('success', cmpT('automationCompleted','Automated consolidation completed'), 'Product Activity Bulk、供應商 Bulk 與最終原物料 Bulk 檔已可下載。', 100);
+        setAutomationResumeMode(false);
+        write('M3A：正式原物料批次檔套版完成。');
+        write(cmpT('automationPipelineCompletedLog','全自動化資料彙整：全部完成。'));
+      } catch (err) {
+        renderSteps(-1,6,6);
+        setState('error','M3A 執行失敗', err.message || String(err), (6/steps.length)*100);
+        write(`M3A：失敗－${err.message || err}`);
+        setAutomationResumeMode(true);
+      } finally {
+        startBtn.disabled = false;
+      }
+      return;
+    }
+
+    lines=[];
+    downloads.classList.add('hidden');
+    setAutomationResumeMode(false);
     [m1bDownload, supplierBulkDownload, m3aDownload].forEach(link => {
       if (!link) return;
       link.href = '#';
       link.classList.add('disabled');
     });
-    startBtn.disabled=true; let current=0;
+    startBtn.disabled=true;
+    let current=0;
     try{
       current=0; let fd=new FormData(); appendFiles(fd,'files','autoProductionFiles'); appendFiles(fd,'labor_files','autoLaborFiles'); fd.append('rule_set',document.getElementById('autoRuleSet').value); fd.append('labor_mode',document.getElementById('autoLaborMode').value); const year=document.getElementById('autoYear').value; if(year)fd.append('year',year);
       await runJob(0, steps[0], '/module1a/process-job', fd, id => `/module1a/process-job/${encodeURIComponent(id)}`);
@@ -3892,43 +4033,21 @@ ruleForm.onsubmit = async (e) => {
       renderSteps(-1,6);
       setState('success','第一階段已完成｜等待正式原物料批次檔','於資料中心建立供應商後，下載正式原物料批次檔並上傳。',(6/steps.length)*100);
       downloads.classList.remove('hidden');
-      if (m3aResumePanel) m3aResumePanel.classList.remove('hidden');
+      setAutomationResumeMode(true);
       write('M3：完成。等待正式原物料批次檔後繼續執行 M3A。');
-    }catch(err){ renderSteps(-1,current,current); const failedStage=steps[current]||steps[0]; setState('error',cmpT('automationFailed','全自動化資料彙整失敗'),`${cmpT(failedStage.key,failedStage.fallback)}：${err.message||String(err)}`,(current/steps.length)*100); write(`${cmpT(failedStage.key,failedStage.fallback)}：失敗－${err.message||err}`); }
-    finally{ startBtn.disabled=false; }
+    }catch(err){
+      renderSteps(-1,current,current);
+      const failedStage=steps[current]||steps[0];
+      setState('error',cmpT('automationFailed','全自動化資料彙整失敗'),`${cmpT(failedStage.key,failedStage.fallback)}：${err.message||String(err)}`,(current/steps.length)*100);
+      write(`${cmpT(failedStage.key,failedStage.fallback)}：失敗－${err.message||err}`);
+      setAutomationResumeMode(false);
+    } finally {
+      startBtn.disabled=false;
+    }
   });
-
-  if (continueM3aBtn) {
-    continueM3aBtn.addEventListener('click', async () => {
-      const templateFile = officialRawTemplate?.files?.[0];
-      if (!templateFile) {
-        setState('error','M3A 尚未開始','請先上傳資料中心下載的正式原物料批次檔。',(6/steps.length)*100);
-        return;
-      }
-      continueM3aBtn.disabled = true;
-      try {
-        const fd = new FormData();
-        fd.append('raw_material_template_file', templateFile);
-        const m3a = await runJob(6, steps[6], '/module3a/apply-official-template-job', fd, id => `/module3a/job/${encodeURIComponent(id)}`, true);
-        m3aDownload.href = m3a.download_url || '#';
-        m3aDownload.classList.toggle('disabled', !m3a.download_url);
-        renderSteps(-1, steps.length);
-        setState('success', cmpT('automationCompleted','Automated consolidation completed'), 'Product Activity Bulk、供應商 Bulk 與最終原物料 Bulk 檔已可下載。', 100);
-        if (m3aResumePanel) m3aResumePanel.classList.add('hidden');
-        write('M3A：正式原物料批次檔套版完成。');
-        write(cmpT('automationPipelineCompletedLog','全自動化資料彙整：全部完成。'));
-      } catch (err) {
-        renderSteps(-1,6,6);
-        setState('error','M3A 執行失敗', err.message || String(err), (6/steps.length)*100);
-        write(`M3A：失敗－${err.message || err}`);
-      } finally {
-        continueM3aBtn.disabled = false;
-      }
-    });
-  }
 })();
 
 </script>
-<script src="/static/i18n.js?v=20260713-auto-v10"></script>
+<script src="/static/i18n.js?v=20260718-ui-merge-v1"></script>
 </body>
 </html>
