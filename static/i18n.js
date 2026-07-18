@@ -1,4 +1,4 @@
-/* DIP i18n MODULE3 stage2 20260703 v14
+/* DIP i18n MODULE3 unified progress + M4 collapse 20260718 v15
    Key-based + dynamic text translation.
    This file does not overwrite existing platform click handlers.
 */
@@ -26,6 +26,10 @@
     "automationRawTemplate": {"en":"Raw Material Bulk Template","zh":"Raw Material Bulk Template"},
     "automationSupplierFiles": {"en":"Supplier Files","zh":"供應商資料"},
     "automationCclFile": {"en":"CCL Mapping File","zh":"CCL 係數組配表"},
+    "automationUploadSectionTitle": {"en":"Uploads and execution settings","zh":"上傳資料與執行設定"},
+    "automationUploadSectionHint": {"en":"Use the control at the upper right to collapse or expand the upload fields.","zh":"可使用右上角按鈕收合或展開上傳欄位。"},
+    "collapseUploadFields": {"en":"Collapse","zh":"收合"},
+    "expandUploadFields": {"en":"Expand","zh":"展開"},
     "startAutomatedConsolidation": {"en":"Start Automated Data Consolidation","zh":"開始全自動化資料彙整"},
     "automationReady": {"en":"Automated workflow ready","zh":"全自動化流程已就緒"},
     "automationReadyHint": {"en":"Select all required files to begin.","zh":"選擇所有必要檔案後即可開始。"},
@@ -319,6 +323,7 @@
     "module3UploadRawBulk": {"en": "Upload raw material bulk file from Module 2", "zh": "上傳 MODULE2 產出的 raw material bulk 檔"},
     "module3UploadCclMapping": {"en": "Upload Lite-On CCL mapping table", "zh": "上傳光寶 CCL 係數組配表"},
     "module3RunCclMapping": {"en": "Run CCL Mapping", "zh": "執行 CCL 係數對應"},
+    "module3CombinedReadyTitle": {"en": "Ready to start", "zh": "等待開始執行"},
     "module3CombinedRun": {"en": "Start", "zh": "開始執行"},
     "module3CclReadyTitle": {"en": "Ready for upload", "zh": "待上傳檔案"},
     "module3CclReadyText": {"en": "The system completes CCL mapping first, then automatically applies the official Raw Material batch template.", "zh": "系統會先完成 CCL 係數對應，再自動套用正式原物料批次檔。"},

@@ -3360,14 +3360,14 @@ select:focus {
 }
 
 
-/* M3/M3A single-action layout + Module 4 single-button resume v1 */
+/* M3/M3A unified progress + Module 4 collapsible uploads v2 */
 .module3-combined-form {
   gap: 18px;
 }
 
 .module3-upload-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -3408,11 +3408,95 @@ select:focus {
   border-top: 1px solid rgba(24, 83, 130, 0.14);
 }
 
+.module3-combined-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+#automated-data-consolidation .automation-upload-section {
+  overflow: hidden;
+  border: 1px solid rgba(24, 83, 130, 0.16);
+  border-radius: 18px;
+  background: rgba(249, 251, 253, 0.72);
+}
+
+#automated-data-consolidation .automation-upload-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  background: rgba(238, 246, 252, 0.74);
+}
+
+#automated-data-consolidation .automation-upload-section-heading > div {
+  min-width: 0;
+}
+
+#automated-data-consolidation .automation-upload-section-heading b {
+  display: block;
+  color: var(--navy);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+#automated-data-consolidation .automation-upload-section-heading p {
+  margin: 4px 0 0;
+  color: var(--muted, #64748b);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+#automated-data-consolidation .automation-upload-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(24, 83, 130, 0.24);
+  border-radius: 11px;
+  background: #fff;
+  color: var(--navy);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+#automated-data-consolidation .automation-upload-toggle:hover {
+  border-color: rgba(14, 135, 204, 0.56);
+  background: #f5fbff;
+}
+
+#automated-data-consolidation .automation-upload-toggle-icon {
+  display: inline-block;
+  transition: transform 160ms ease;
+}
+
+#automated-data-consolidation .automation-upload-section.is-collapsed .automation-upload-toggle-icon {
+  transform: rotate(180deg);
+}
+
+#automated-data-consolidation .automation-upload-fields-body {
+  display: grid;
+  gap: 0;
+  padding: 20px;
+}
+
+#automated-data-consolidation .automation-upload-fields-body.collapsed {
+  display: none;
+}
+
 #automated-data-consolidation .automation-m3a-resume-panel {
   display: grid;
   gap: 12px;
-  margin-top: 32px;
-  padding: 26px 0 4px;
+  margin-top: 28px;
+  padding: 24px 0 4px;
   border-top: 1px solid rgba(24, 83, 130, 0.18);
 }
 
@@ -3461,5 +3545,31 @@ select:focus {
 @media (max-width: 820px) {
   .module3-upload-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+
+@media (max-width: 680px) {
+  #automated-data-consolidation .automation-upload-section-heading {
+    align-items: center;
+    padding: 16px;
+  }
+
+  #automated-data-consolidation .automation-upload-section-heading p {
+    display: none;
+  }
+
+  #automated-data-consolidation .automation-upload-fields-body {
+    padding: 16px;
+  }
+
+  .module3-combined-downloads {
+    align-items: stretch;
+  }
+
+  .module3-combined-downloads .download {
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
   }
 }

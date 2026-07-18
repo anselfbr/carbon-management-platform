@@ -387,25 +387,40 @@
             </div>
 
             <form id="automationForm" class="form-panel automation-form" enctype="multipart/form-data">
-              <div class="automation-input-grid">
-                <label><span data-i18n="automationProductionFiles">生產數量工單</span><input id="autoProductionFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
-                <label><span data-i18n="automationLaborFiles">工時工單</span><input id="autoLaborFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple></label>
-                <label><span data-i18n="automationBomFiles">標準 BOM</span><input id="autoBomFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
-                <label><span data-i18n="automationProductTemplate">Product Activity Bulk Template</span><input id="autoProductTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
-                <label><span data-i18n="automationRawTemplate">Raw Material Bulk Template</span><input id="autoRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
-                <label><span data-i18n="automationSupplierFiles">供應商資料</span><input id="autoSupplierFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
-                <label><span data-i18n="automationCclFile">CCL 係數組配表</span><input id="autoCclFile" type="file" accept=".xlsx,.xls,.xlsm" required></label>
-                <label><span data-i18n="businessUnitRuleSet">Business Unit Rule Set</span><select id="autoRuleSet"><option value="IPS" selected>IPS</option><option value="AE">AE</option><option value="PC_CE">PC&amp;CE</option></select></label>
-                <label><span data-i18n="laborAllocationSource">Labor Allocation Source</span><select id="autoLaborMode"><option value="both" data-i18n="automationLaborBoth" selected>Labor HR.Act + FOH-Others.Act</option><option value="labor_hr" data-i18n="automationLaborHrOnly">Labor HR.Act Only</option><option value="foh" data-i18n="automationFohOnly">FOH-Others.Act Only</option></select></label>
-                <label><span data-i18n="reportingYear">Reporting Year</span><input id="autoYear" type="number" placeholder="e.g. 2024" data-i18n-placeholder="yearPlaceholder"></label>
-                <label><span data-i18n="workingHourSource">Working Hour Source</span><select id="autoWorkingHourSource"><option value="direct" data-i18n="directWorkingHour">Direct Working Hour</option><option value="include_semi" data-i18n="includeSemiWorkingHour">Include Semi-finished Working Hour</option></select></label>
-              </div>
+              <section id="automationUploadSection" class="automation-upload-section">
+                <div class="automation-upload-section-heading">
+                  <div>
+                    <b data-i18n="automationUploadSectionTitle">上傳資料與執行設定</b>
+                    <p data-i18n="automationUploadSectionHint">可使用右上角按鈕收合或展開上傳欄位。</p>
+                  </div>
+                  <button id="automationUploadToggle" class="automation-upload-toggle" type="button" aria-expanded="true" aria-controls="automationUploadFieldsBody">
+                    <span data-i18n="collapseUploadFields">收合</span>
+                    <span class="automation-upload-toggle-icon" aria-hidden="true">⌃</span>
+                  </button>
+                </div>
 
-              <div id="automationM3aResumePanel" class="automation-m3a-resume-panel hidden">
-                <label for="automationOfficialRawTemplate" data-i18n="module3aOfficialTemplateLabel">正式原物料批次檔 Template</label>
-                <input id="automationOfficialRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" />
-                <p class="form-hint" data-i18n="module3aOfficialTemplateHint">於資料中心建立供應商後，下載正式原物料批次檔並上傳</p>
-              </div>
+                <div id="automationUploadFieldsBody" class="automation-upload-fields-body">
+                  <div class="automation-input-grid">
+                    <label><span data-i18n="automationProductionFiles">生產數量工單</span><input id="autoProductionFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                    <label><span data-i18n="automationLaborFiles">工時工單</span><input id="autoLaborFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple></label>
+                    <label><span data-i18n="automationBomFiles">標準 BOM</span><input id="autoBomFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                    <label><span data-i18n="automationProductTemplate">Product Activity Bulk Template</span><input id="autoProductTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                    <label><span data-i18n="automationRawTemplate">Raw Material Bulk Template</span><input id="autoRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                    <label><span data-i18n="automationSupplierFiles">供應商資料</span><input id="autoSupplierFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                    <label><span data-i18n="automationCclFile">CCL 係數組配表</span><input id="autoCclFile" type="file" accept=".xlsx,.xls,.xlsm" required></label>
+                    <label><span data-i18n="businessUnitRuleSet">Business Unit Rule Set</span><select id="autoRuleSet"><option value="IPS" selected>IPS</option><option value="AE">AE</option><option value="PC_CE">PC&amp;CE</option></select></label>
+                    <label><span data-i18n="laborAllocationSource">Labor Allocation Source</span><select id="autoLaborMode"><option value="both" data-i18n="automationLaborBoth" selected>Labor HR.Act + FOH-Others.Act</option><option value="labor_hr" data-i18n="automationLaborHrOnly">Labor HR.Act Only</option><option value="foh" data-i18n="automationFohOnly">FOH-Others.Act Only</option></select></label>
+                    <label><span data-i18n="reportingYear">Reporting Year</span><input id="autoYear" type="number" placeholder="e.g. 2024" data-i18n-placeholder="yearPlaceholder"></label>
+                    <label><span data-i18n="workingHourSource">Working Hour Source</span><select id="autoWorkingHourSource"><option value="direct" data-i18n="directWorkingHour">Direct Working Hour</option><option value="include_semi" data-i18n="includeSemiWorkingHour">Include Semi-finished Working Hour</option></select></label>
+                  </div>
+
+                  <div id="automationM3aResumePanel" class="automation-m3a-resume-panel hidden">
+                    <label for="automationOfficialRawTemplate" data-i18n="module3aOfficialTemplateLabel">正式原物料批次檔 Template</label>
+                    <input id="automationOfficialRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" />
+                    <p class="form-hint" data-i18n="module3aOfficialTemplateHint">於資料中心建立供應商後，下載正式原物料批次檔並上傳</p>
+                  </div>
+                </div>
+              </section>
 
               <button id="automationStartBtn" type="submit" class="btn-primary automation-start-btn"><span data-i18n="startAutomatedConsolidation">開始全自動化資料彙整</span></button>
             </form>
@@ -756,7 +771,7 @@
                   <div class="status-header">
                     <div class="spinner"></div>
                     <div>
-                      <b id="module3CclStatusTitle" data-i18n="module3CclReadyTitle">待上傳檔案</b>
+                      <b id="module3CclStatusTitle" data-i18n="module3CombinedReadyTitle">等待開始執行</b>
                       <p id="module3CclStatusText" data-i18n="module3CclReadyText">系統會先完成 CCL 係數對應，再套用正式原物料批次檔。</p>
                     </div>
                     <span id="module3CclStatusTime" class="status-time">Idle</span>
@@ -766,23 +781,11 @@
                   </div>
                 </div>
 
-                <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載 M3 係數對應完成檔</span></a>
-                <pre id="module3CclLog" class="rule-log">MODULE 3 is ready.</pre>
-
-                <div id="module3aResult" class="processing-status idle module3-ccl-processing-status">
-                  <div class="status-header">
-                    <div class="spinner"></div>
-                    <div>
-                      <b id="module3aStatusTitle" data-i18n="module3aReadyTitle">等待開始執行</b>
-                      <p id="module3aStatusText" data-i18n="module3aReadyText">M3 完成後將自動接續 M3A 正式套版。</p>
-                    </div>
-                    <span id="module3aStatusTime" class="status-time">Idle</span>
-                  </div>
-                  <div class="progress-track"><div id="module3aProgressBar" class="progress-bar"></div></div>
+                <div class="module3-combined-downloads">
+                  <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載 M3 係數對應完成檔</span></a>
+                  <a id="module3aDownload" class="download disabled" href="#" data-i18n="module3aDownloadFinalBulk">下載最終原物料 Bulk</a>
                 </div>
-
-                <a id="module3aDownload" class="download disabled" href="#" data-i18n="module3aDownloadFinalBulk">下載最終原物料 Bulk</a>
-                <pre id="module3aLog" class="rule-log">M3A is ready.</pre>
+                <pre id="module3CombinedLog" class="rule-log">M3 / M3A is ready.</pre>
               </div>
             </form>
           </section>
@@ -1394,18 +1397,19 @@ const module3CclStatusText = document.getElementById('module3CclStatusText');
 const module3CclStatusTime = document.getElementById('module3CclStatusTime');
 const module3CclProgressBar = document.getElementById('module3CclProgressBar');
 const module3CclDownload = document.getElementById('module3CclDownload');
-const module3CclLog = document.getElementById('module3CclLog');
+const module3CombinedLog = document.getElementById('module3CombinedLog');
+const module3CclLog = module3CombinedLog;
 const module3RawBulkSourceText = document.getElementById('module3RawBulkSourceText');
 const module3aForm = document.getElementById('module3aForm');
 const module3CombinedRunBtn = document.getElementById('module3CombinedRunBtn');
 const module3aSourceText = document.getElementById('module3aSourceText');
-const module3aResult = document.getElementById('module3aResult');
-const module3aStatusTitle = document.getElementById('module3aStatusTitle');
-const module3aStatusText = document.getElementById('module3aStatusText');
-const module3aStatusTime = document.getElementById('module3aStatusTime');
-const module3aProgressBar = document.getElementById('module3aProgressBar');
+const module3aResult = module3CclResult;
+const module3aStatusTitle = module3CclStatusTitle;
+const module3aStatusText = module3CclStatusText;
+const module3aStatusTime = module3CclStatusTime;
+const module3aProgressBar = module3CclProgressBar;
 const module3aDownload = document.getElementById('module3aDownload');
-const module3aLog = document.getElementById('module3aLog');
+const module3aLog = module3CombinedLog;
 const module3FactorActivityKeyword = document.getElementById('module3FactorActivityKeyword');
 const module3FactorReferenceKeyword = document.getElementById('module3FactorReferenceKeyword');
 const module3FactorSource = document.getElementById('module3FactorSource');
@@ -2230,12 +2234,13 @@ let module3CclEtaTracker = cmpCreateEtaTracker(60);
 
 function setModule3CclResult(mode, title, text, timeText = 'Idle', progress = 0) {
   if (!module3CclResult) return;
+  const overallProgress = Math.max(0, Math.min(50, Number(progress || 0) * 0.5));
   module3CclResult.classList.remove('idle', 'running', 'success', 'error');
   module3CclResult.classList.add(mode);
-  if (module3CclStatusTitle) module3CclStatusTitle.textContent = title;
-  if (module3CclStatusText) module3CclStatusText.textContent = text;
-  if (module3CclStatusTime) module3CclStatusTime.textContent = cmpStatusTimeText(timeText, mode);
-  if (module3CclProgressBar) module3CclProgressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  if (module3CclStatusTitle) { module3CclStatusTitle.removeAttribute('data-i18n'); module3CclStatusTitle.textContent = title; }
+  if (module3CclStatusText) { module3CclStatusText.removeAttribute('data-i18n'); module3CclStatusText.textContent = text; }
+  if (module3CclStatusTime) module3CclStatusTime.textContent = mode === 'idle' ? cmpStatusTimeText(timeText, mode) : `${Math.round(overallProgress)}%`;
+  if (module3CclProgressBar) module3CclProgressBar.style.width = `${overallProgress}%`;
   cmpApplyI18n();
 }
 
@@ -2393,10 +2398,9 @@ if (module3CclForm) {
     if (module3CclDownload) { module3CclDownload.classList.add('disabled'); module3CclDownload.href = '#'; }
     if (module3aDownload) { module3aDownload.classList.add('disabled'); module3aDownload.href = '#'; }
     setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 queued'), '正在建立 CCL 係數對應工作。', cmpRemainingText(60), 3);
-    setModule3aResult('idle', '等待 M3 完成', 'M3 完成後將自動接續 M3A 正式套版。', 'Idle', 0);
     if (module3CclLog) module3CclLog.textContent = 'Uploading CCL mapping file and creating MODULE 3 job...';
-    if (module3aLog) module3aLog.textContent = 'Waiting for MODULE 3...';
 
+    let module3StageCompleted = false;
     try {
       await refreshModule3RawBulkSource();
       refreshBomStep1Source();
@@ -2406,6 +2410,7 @@ if (module3CclForm) {
       const m3Start = await readJsonOrThrow(await fetch('/module3/apply-ccl-factors-job', { method: 'POST', body: m3FormData }));
       if (!m3Start.job_id) throw new Error('後端未回傳 M3 job_id。');
       await waitForModule3CclJob(m3Start.job_id);
+      module3StageCompleted = true;
 
       setModule3aResult('running', 'M3A queued', '正在上傳正式原物料批次檔並建立 M3A 工作。', cmpRemainingText(60), 3);
       if (module3aLog) module3aLog.textContent = 'Uploading official Raw Material template...';
@@ -2415,8 +2420,7 @@ if (module3CclForm) {
       if (!m3aStart.job_id) throw new Error('後端未回傳 M3A job_id。');
       await waitForModule3aJob(m3aStart.job_id);
     } catch (err) {
-      const m3Done = module3CclResult?.classList.contains('success');
-      if (m3Done) {
+      if (module3StageCompleted) {
         setModule3aResult('error', 'M3A 正式套版失敗', err.message, 'Error', 100);
         if (module3aLog) module3aLog.textContent = `Error: ${err.message || err}`;
       } else {
@@ -2434,14 +2438,15 @@ let module3aPollTimer = null;
 let module3aEtaTracker = cmpCreateEtaTracker(60);
 
 function setModule3aResult(mode, titleText, bodyText, timeText, progress) {
+  const overallProgress = Math.max(50, Math.min(100, 50 + Number(progress || 0) * 0.5));
   if (module3aResult) {
     module3aResult.classList.remove('idle','running','success','error');
     module3aResult.classList.add(mode);
   }
-  if (module3aStatusTitle) module3aStatusTitle.textContent = titleText || '';
-  if (module3aStatusText) module3aStatusText.textContent = bodyText || '';
-  if (module3aStatusTime) module3aStatusTime.textContent = cmpStatusTimeText(timeText, mode);
-  if (module3aProgressBar) module3aProgressBar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
+  if (module3aStatusTitle) { module3aStatusTitle.removeAttribute('data-i18n'); module3aStatusTitle.textContent = titleText || ''; }
+  if (module3aStatusText) { module3aStatusText.removeAttribute('data-i18n'); module3aStatusText.textContent = bodyText || ''; }
+  if (module3aStatusTime) module3aStatusTime.textContent = `${Math.round(overallProgress)}%`;
+  if (module3aProgressBar) module3aProgressBar.style.width = `${overallProgress}%`;
 }
 
 async function refreshModule3aSource() {
@@ -3847,6 +3852,10 @@ ruleForm.onsubmit = async (e) => {
   const m3aResumePanel = document.getElementById('automationM3aResumePanel');
   const officialRawTemplate = document.getElementById('automationOfficialRawTemplate');
   const startBtnText = startBtn ? startBtn.querySelector('span') : null;
+  const uploadSection = document.getElementById('automationUploadSection');
+  const uploadFieldsBody = document.getElementById('automationUploadFieldsBody');
+  const uploadToggle = document.getElementById('automationUploadToggle');
+  const uploadToggleText = uploadToggle ? uploadToggle.querySelector('span[data-i18n]') : null;
   const steps = [
     { code: 'M1A', key: 'automationStepM1a', fallback: '工單資料彙整' },
     { code: 'M2A', key: 'automationStepM2a', fallback: '標準 BOM 總用量' },
@@ -3946,11 +3955,32 @@ ruleForm.onsubmit = async (e) => {
     startBtnText.textContent = cmpT(key, fallback);
   }
 
+  function setAutomationUploadsCollapsed(collapsed) {
+    const isCollapsed = Boolean(collapsed);
+    if (uploadSection) uploadSection.classList.toggle('is-collapsed', isCollapsed);
+    if (uploadFieldsBody) uploadFieldsBody.classList.toggle('collapsed', isCollapsed);
+    if (uploadToggle) uploadToggle.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+    if (uploadToggleText) {
+      const key = isCollapsed ? 'expandUploadFields' : 'collapseUploadFields';
+      const fallback = isCollapsed ? '展開' : '收合';
+      uploadToggleText.setAttribute('data-i18n', key);
+      uploadToggleText.textContent = cmpT(key, fallback);
+    }
+  }
+
+  if (uploadToggle) {
+    uploadToggle.addEventListener('click', () => {
+      const collapsed = uploadFieldsBody ? !uploadFieldsBody.classList.contains('collapsed') : false;
+      setAutomationUploadsCollapsed(collapsed);
+    });
+  }
+
   function setAutomationResumeMode(enabled) {
     awaitingM3a = Boolean(enabled);
     if (m3aResumePanel) m3aResumePanel.classList.toggle('hidden', !awaitingM3a);
     if (officialRawTemplate) officialRawTemplate.required = awaitingM3a;
     if (awaitingM3a) {
+      setAutomationUploadsCollapsed(false);
       setAutomationButtonLabel('automationContinueM3a', '繼續執行 M3A');
     } else {
       setAutomationButtonLabel('startAutomatedConsolidation', '開始全自動化資料彙整');
@@ -3958,6 +3988,7 @@ ruleForm.onsubmit = async (e) => {
   }
 
   renderSteps();
+  setAutomationUploadsCollapsed(false);
   setAutomationResumeMode(false);
 
   form.addEventListener('submit', async e=>{
