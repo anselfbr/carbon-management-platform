@@ -782,7 +782,6 @@
                 </div>
 
                 <div class="module3-combined-downloads">
-                  <a id="module3CclDownload" class="download disabled" href="#"><span data-i18n="module3DownloadFilledBulk">下載 M3 係數對應完成檔</span></a>
                   <a id="module3aDownload" class="download disabled" href="#" data-i18n="module3aDownloadFinalBulk">下載最終原物料 Bulk</a>
                 </div>
                 <pre id="module3CombinedLog" class="rule-log">M3 / M3A is ready.</pre>
@@ -1396,7 +1395,6 @@ const module3CclStatusTitle = document.getElementById('module3CclStatusTitle');
 const module3CclStatusText = document.getElementById('module3CclStatusText');
 const module3CclStatusTime = document.getElementById('module3CclStatusTime');
 const module3CclProgressBar = document.getElementById('module3CclProgressBar');
-const module3CclDownload = document.getElementById('module3CclDownload');
 const module3CombinedLog = document.getElementById('module3CombinedLog');
 const module3CclLog = module3CombinedLog;
 const module3RawBulkSourceText = document.getElementById('module3RawBulkSourceText');
@@ -2295,11 +2293,7 @@ function startModule3CclPolling(jobId, startTime) {
           unmatched: summary.unmatched_rows ?? 0
         }) + fileCount + (sourceText ? `｜${sourceText}` : '');
         setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), `${text}｜等待上傳正式原物料批次檔執行 M3A。`, cmpT('completed', 'Completed'), 100);
-        if (module3CclLog) module3CclLog.textContent = `Completed.\nJob: ${jobId}\nRows: ${(summary.activity_rows || summary.total_rows || 0).toLocaleString()}\nWritten: ${(summary.written_rows || 0).toLocaleString()}\nUnmatched: ${(summary.unmatched_rows || 0).toLocaleString()}\nFinal template: ${summary.final_template_filename || job.final_template_filename || ''}\nDownload: ${summary.output_filename || ''}`;
-        if (module3CclDownload && job.download_url) {
-          module3CclDownload.href = job.download_url;
-          module3CclDownload.classList.remove('disabled');
-        }
+        if (module3CclLog) module3CclLog.textContent = `Completed.\nJob: ${jobId}\nRows: ${(summary.activity_rows || summary.total_rows || 0).toLocaleString()}\nWritten: ${(summary.written_rows || 0).toLocaleString()}\nUnmatched: ${(summary.unmatched_rows || 0).toLocaleString()}\nFinal template: ${summary.final_template_filename || job.final_template_filename || ''}\nInternal handoff: ready`;
         await refreshModule3aSource();
         return;
       }
@@ -2339,11 +2333,7 @@ async function waitForModule3CclJob(jobId) {
         unmatched: summary.unmatched_rows ?? 0
       }) + fileCount + (sourceText ? `｜${sourceText}` : '');
       setModule3CclResult('success', cmpT('module3CclSuccessTitle', 'CCL 係數對應完成'), `${body}｜即將接續 M3A 正式套版。`, cmpT('completed', 'Completed'), 100);
-      if (module3CclLog) module3CclLog.textContent = `Completed.\nJob: ${jobId}\nRows: ${(summary.activity_rows || summary.total_rows || 0).toLocaleString()}\nWritten: ${(summary.written_rows || 0).toLocaleString()}\nUnmatched: ${(summary.unmatched_rows || 0).toLocaleString()}\nDownload: ${summary.output_filename || ''}`;
-      if (module3CclDownload && job.download_url) {
-        module3CclDownload.href = job.download_url;
-        module3CclDownload.classList.remove('disabled');
-      }
+      if (module3CclLog) module3CclLog.textContent = `Completed.\nJob: ${jobId}\nRows: ${(summary.activity_rows || summary.total_rows || 0).toLocaleString()}\nWritten: ${(summary.written_rows || 0).toLocaleString()}\nUnmatched: ${(summary.unmatched_rows || 0).toLocaleString()}\nInternal handoff: ready`;
       return job;
     }
     if (job.status === 'error') {
@@ -2395,7 +2385,6 @@ if (module3CclForm) {
     clearInterval(module3CclPollTimer);
     clearInterval(module3aPollTimer);
     if (module3CombinedRunBtn) module3CombinedRunBtn.disabled = true;
-    if (module3CclDownload) { module3CclDownload.classList.add('disabled'); module3CclDownload.href = '#'; }
     if (module3aDownload) { module3aDownload.classList.add('disabled'); module3aDownload.href = '#'; }
     setModule3CclResult('running', cmpT('module3ProcessingTitle', 'MODULE 3 queued'), '正在建立 CCL 係數對應工作。', cmpRemainingText(60), 3);
     if (module3CclLog) module3CclLog.textContent = 'Uploading CCL mapping file and creating MODULE 3 job...';
