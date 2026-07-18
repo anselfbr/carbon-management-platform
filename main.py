@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from bulk_formatter import generate_product_activity_bulk_file, generate_product_activity_bulk_files_by_site, generate_product_activity_bulk_files_by_site_zip
 from bom_formatter import BOM_FORMATTER_VERSION, generate_raw_material_bulk_file, generate_raw_material_bulk_files_by_site_zip, export_bom_structure_file, generate_working_hour_rollup_file, generate_working_hour_rollup_file_from_standard_bom, generate_standard_bom_total_usage_file, generate_raw_material_bulk_from_standard_total_usage_zip, generate_supplier_mapped_raw_material_bulk_from_zip
-from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, apply_ccl_factors_to_raw_material_bulk_package, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
+from factor_selector import FACTOR_SELECTOR_VERSION, apply_ccl_factors_to_raw_material_bulk, apply_ccl_factors_to_raw_material_bulk_package, apply_final_template_to_factor_filled_package, collect_factor_library_geographies, preload_factor_libraries, search_factor_library
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -40,6 +40,8 @@ MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH = OUTPUT_DIR / "module2b_raw_material
 MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH = OUTPUT_DIR / "module2c_supplier_mapped_raw_material_bulk_latest.zip"
 RAW_MATERIAL_BULK_TEMPLATE_LATEST_PATH = OUTPUT_DIR / "raw_material_bulk_template_latest.xlsx"
 MODULE1B_PRODUCT_ACTIVITY_BULK_LATEST_PATH = OUTPUT_DIR / "module1b_product_activity_bulk_latest.zip"
+MODULE3_CCL_FILLED_LATEST_PATH = OUTPUT_DIR / "module3_ccl_factor_filled_latest.zip"
+MODULE3A_FINAL_BULK_LATEST_PATH = OUTPUT_DIR / "module3a_final_raw_material_bulk_latest.zip"
 
 
 RULE_SET_MAP = {
@@ -57,11 +59,13 @@ RULE_LIBRARY_DIR.mkdir(exist_ok=True)
 FACTOR_LIBRARY_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Annual Output Platform v6", version="6.0.0")
-print("===== CMP MAIN VERSION: CMP_V15_3_M1B_FILENAME_HOURS =====")
+print("===== CMP MAIN VERSION: CMP_V15_4_M3A_OFFICIAL_TEMPLATE_UPLOAD =====")
 print(f"===== BOM FORMATTER VERSION: {BOM_FORMATTER_VERSION} =====")
 
 MODULE3_CCL_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 MODULE3_CCL_JOBS: Dict[str, Dict[str, Any]] = {}
+MODULE3A_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+MODULE3A_JOBS: Dict[str, Dict[str, Any]] = {}
 MODULE1A_EXECUTOR = ThreadPoolExecutor(max_workers=1)
 MODULE1A_JOBS: Dict[str, Dict[str, Any]] = {}
 MODULE1A_JOB_DIR = OUTPUT_DIR / "module1a_jobs"
@@ -186,6 +190,11 @@ def _extract_source_version_date(filename: str) -> Dict[str, str]:
 
 def _set_module3_ccl_job(job_id: str, **updates: Any) -> None:
     job = MODULE3_CCL_JOBS.setdefault(job_id, {})
+    job.update(updates)
+    job["updated_at"] = _cmp_now_iso()
+
+def _set_module3a_job(job_id: str, **updates: Any) -> None:
+    job = MODULE3A_JOBS.setdefault(job_id, {})
     job.update(updates)
     job["updated_at"] = _cmp_now_iso()
 
@@ -665,10 +674,15 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
 
     try:
         report(1, "建立 CCL 係數對應工作", 45)
-        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, progress_callback=report, raw_material_template_path=raw_template_path)
-        summary["app_version"] = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3"
+        summary = apply_ccl_factors_to_raw_material_bulk_package(
+            raw_path, ccl_path, output_path, progress_callback=report, raw_material_template_path=None
+        )
+        summary["app_version"] = "CMP_MODULE3_LIGHTWEIGHT_FACTOR_FILLED_V4"
         if output_path.exists():
             _register_workspace_output(output_path, workspace_id)
+            shutil.copy2(output_path, MODULE3_CCL_FILLED_LATEST_PATH)
+            _register_workspace_output(MODULE3_CCL_FILLED_LATEST_PATH, workspace_id)
+            summary["module3_latest_filename"] = MODULE3_CCL_FILLED_LATEST_PATH.name
             try:
                 summary["output_file_size_bytes"] = output_path.stat().st_size
                 summary["output_file_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
@@ -682,8 +696,10 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
             message="CCL 係數對應完成。",
             remaining_seconds=0,
             summary=summary,
-            final_template_filename=raw_template_path.name if raw_template_path else "",
-            final_template_modified_at=_cmp_mtime_iso(raw_template_path) if raw_template_path else "",
+            final_template_filename="",
+            final_template_modified_at="",
+            stage="M3",
+            awaiting_official_template=True,
             download_url=summary.get("download_url", f"/download/{output_path.name}"),
         )
     except Exception as exc:
@@ -693,6 +709,75 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
             status="error",
             progress=100,
             step="CCL 係數對應失敗",
+            message=str(exc),
+        )
+
+
+def _run_module3a_template_job(
+    job_id: str,
+    m3_output_path: Path,
+    official_template_path: Path,
+    output_path: Path,
+    workspace_id: str = "",
+) -> None:
+    def report(
+        progress: int,
+        step: str,
+        remaining_seconds: int | None = None,
+        *,
+        processed_rows: int | None = None,
+        total_rows: int | None = None,
+    ) -> None:
+        payload: Dict[str, Any] = {
+            "status": "running",
+            "progress": max(0, min(100, int(progress))),
+            "step": step,
+        }
+        if remaining_seconds is not None:
+            payload["remaining_seconds"] = max(0, int(remaining_seconds))
+        if processed_rows is not None:
+            payload["processed_rows"] = max(0, int(processed_rows))
+        if total_rows is not None:
+            payload["total_rows"] = max(0, int(total_rows))
+        _set_module3a_job(job_id, **payload)
+
+    try:
+        report(1, "建立 M3A 正式原物料批次檔套版工作", 60)
+        summary = apply_final_template_to_factor_filled_package(
+            factor_filled_bulk_path=m3_output_path,
+            raw_material_template_path=official_template_path,
+            output_path=output_path,
+            progress_callback=report,
+        )
+        summary["app_version"] = "CMP_MODULE3A_OFFICIAL_TEMPLATE_UPLOAD_V1"
+        if output_path.exists():
+            _register_workspace_output(output_path, workspace_id)
+            shutil.copy2(output_path, MODULE3A_FINAL_BULK_LATEST_PATH)
+            _register_workspace_output(MODULE3A_FINAL_BULK_LATEST_PATH, workspace_id)
+            try:
+                summary["output_file_size_bytes"] = output_path.stat().st_size
+                summary["output_file_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
+            except OSError:
+                pass
+        _set_module3a_job(
+            job_id,
+            status="success",
+            progress=100,
+            step="M3A 正式原物料批次檔已完成",
+            message="M3A 正式原物料批次檔已完成。",
+            remaining_seconds=0,
+            summary=summary,
+            source_filename=m3_output_path.name,
+            official_template_filename=official_template_path.name,
+            download_url=summary.get("download_url", f"/download/{output_path.name}"),
+        )
+    except Exception as exc:
+        traceback.print_exc()
+        _set_module3a_job(
+            job_id,
+            status="error",
+            progress=100,
+            step="M3A 正式套版失敗",
             message=str(exc),
         )
 
@@ -3295,6 +3380,17 @@ def _find_latest_raw_material_bulk_template() -> Path | None:
     return _freshest_path(candidates)
 
 
+def _find_latest_module3_ccl_filled_output() -> Path | None:
+    """Return this workspace's latest completed M3 factor-filled package."""
+    if _is_workspace_fresh(MODULE3_CCL_FILLED_LATEST_PATH):
+        return MODULE3_CCL_FILLED_LATEST_PATH
+    candidates = [
+        path for path in OUTPUT_DIR.glob("module3_ccl_factor_filled_*.zip")
+        if not path.name.startswith("~$") and path.is_file()
+    ]
+    return _freshest_path(candidates)
+
+
 def _find_latest_module2b_raw_material_bulk_zip() -> Path | None:
     """Return the latest Module 2B Raw Material Bulk ZIP for Module 2C."""
     if _is_workspace_fresh(MODULE2B_RAW_MATERIAL_BULK_ZIP_LATEST_PATH):
@@ -3405,7 +3501,6 @@ def module3_raw_material_bulk_source():
             "message": "尚未找到 Module 2C Raw Material Bulk，請先完成 Module 2C。",
         }
     stat = raw_path.stat()
-    raw_template_path = _find_latest_raw_material_bulk_template()
     source_label = _module2_raw_bulk_source_label(raw_path)
     meta = _source_meta_for_path(raw_path, source_label)
     return {
@@ -3417,9 +3512,6 @@ def module3_raw_material_bulk_source():
         "size_bytes": stat.st_size,
         "modified_at": _cmp_mtime_iso(raw_path),
         "download_url": f"/download/{raw_path.name}",
-        "final_template_filename": raw_template_path.name if raw_template_path else "",
-        "final_template_download_url": f"/download/{raw_template_path.name}" if raw_template_path and raw_template_path.parent == OUTPUT_DIR else "",
-        "final_template_modified_at": _cmp_mtime_iso(raw_template_path) if raw_template_path else "",
         **meta,
     }
 
@@ -3441,13 +3533,6 @@ async def module3_apply_ccl_factors_job(
             {"ok": False, "message": "尚未找到 Module 2C Raw Material Bulk，請先完成 Module 2C。"},
             status_code=400,
         )
-    raw_template_path = _find_latest_raw_material_bulk_template()
-    if raw_template_path is None:
-        return JSONResponse(
-            {"ok": False, "message": "尚未找到 Raw Material Bulk Template；請先重新執行 Module 2B 並上傳原始 Bulk Template，M3 才能輸出可上傳第三方平台的正式 Bulk。"},
-            status_code=400,
-        )
-
     filename = str(getattr(ccl_mapping_file, "filename", "") or "")
     if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
         return JSONResponse({"ok": False, "message": "CCL 係數組配表 請上傳 Excel 檔案"}, status_code=400)
@@ -3464,13 +3549,13 @@ async def module3_apply_ccl_factors_job(
         message="CCL 係數對應已開始。",
         source_filename=raw_path.name,
         source_meta=_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)),
-        final_template_filename=raw_template_path.name,
-        final_template_modified_at=_cmp_mtime_iso(raw_template_path),
+        stage="M3",
+        awaiting_official_template=True,
         remaining_seconds=30,
         created_at=_cmp_now_iso(),
         workspace_id=workspace_id,
     )
-    MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path, raw_template_path, workspace_id)
+    MODULE3_CCL_EXECUTOR.submit(_run_module3_ccl_job, job_id, raw_path, ccl_path, output_path, None, workspace_id)
     return {
         "ok": True,
         "job_id": job_id,
@@ -3478,7 +3563,6 @@ async def module3_apply_ccl_factors_job(
         "source_filename": raw_path.name,
         "source_label": _module2_raw_bulk_source_label(raw_path),
         "source_stage": _module2_raw_bulk_source_stage(raw_path),
-        "final_template_filename": raw_template_path.name,
         **_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)),
     }
 
@@ -3488,6 +3572,71 @@ def module3_get_ccl_job(job_id: str):
     job = MODULE3_CCL_JOBS.get(job_id)
     if not job:
         return JSONResponse({"ok": False, "message": "找不到 CCL 對應工作，請重新執行。"}, status_code=404)
+    return {"ok": True, "job": job}
+
+
+
+@app.get("/module3a/source-info")
+def module3a_source_info():
+    m3_path = _find_latest_module3_ccl_filled_output()
+    return {
+        "ok": bool(m3_path),
+        "message": "已找到 M3 係數對應完成檔，可上傳正式原物料批次檔執行 M3A。" if m3_path else "尚未找到 M3 係數對應完成檔，請先完成 M3。",
+        "module3_output": _source_info_for_existing_path(
+            m3_path,
+            "Module 3 CCL factor-filled intermediate",
+            "尚未找到 M3 係數對應完成檔，請先完成 M3。",
+        ),
+    }
+
+
+@app.post("/module3a/apply-official-template-job")
+async def module3a_apply_official_template_job(
+    raw_material_template_file: UploadFile = File(...),
+):
+    token = uuid.uuid4().hex[:10]
+    job_id = token
+    workspace_id = _workspace_id()
+    m3_path = _find_latest_module3_ccl_filled_output()
+    if not m3_path:
+        return JSONResponse(
+            {"ok": False, "message": "尚未找到本工作階段的 M3 係數對應完成檔，請先完成 M3；若已按 F5，請重新執行流程。"},
+            status_code=400,
+        )
+    filename = str(getattr(raw_material_template_file, "filename", "") or "")
+    if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        return JSONResponse({"ok": False, "message": "正式原物料批次檔請上傳 Excel 檔案。"}, status_code=400)
+    template_path = UPLOAD_DIR / f"module3a_official_raw_material_template_{token}_{Path(filename).name}"
+    output_path = OUTPUT_DIR / f"module3a_final_raw_material_bulk_{token}.zip"
+    template_path.write_bytes(await raw_material_template_file.read())
+    _register_workspace_output(template_path, workspace_id)
+    _set_module3a_job(
+        job_id,
+        status="queued",
+        progress=0,
+        step="工作已建立，等待背景處理",
+        message="M3A 正式原物料批次檔套版已開始。",
+        source_filename=m3_path.name,
+        official_template_filename=template_path.name,
+        remaining_seconds=60,
+        created_at=_cmp_now_iso(),
+        workspace_id=workspace_id,
+    )
+    MODULE3A_EXECUTOR.submit(_run_module3a_template_job, job_id, m3_path, template_path, output_path, workspace_id)
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "message": "M3A 正式原物料批次檔套版已開始。",
+        "source_filename": m3_path.name,
+        "official_template_filename": template_path.name,
+    }
+
+
+@app.get("/module3a/job/{job_id}")
+def module3a_get_job(job_id: str):
+    job = MODULE3A_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"ok": False, "message": "找不到 M3A 工作，請重新執行。"}, status_code=404)
     return {"ok": True, "job": job}
 
 
@@ -3503,13 +3652,6 @@ async def module3_apply_ccl_factors(
             {"ok": False, "message": "尚未找到 Module 2C Raw Material Bulk，請先完成 Module 2C。"},
             status_code=400,
         )
-    raw_template_path = _find_latest_raw_material_bulk_template()
-    if raw_template_path is None:
-        return JSONResponse(
-            {"ok": False, "message": "尚未找到 Raw Material Bulk Template；請先重新執行 Module 2B 並上傳原始 Bulk Template，M3 才能輸出可上傳第三方平台的正式 Bulk。"},
-            status_code=400,
-        )
-
     filename = str(getattr(ccl_mapping_file, "filename", "") or "")
     if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
         return JSONResponse({"ok": False, "message": "CCL 係數組配表 請上傳 Excel 檔案"}, status_code=400)
@@ -3519,10 +3661,12 @@ async def module3_apply_ccl_factors(
     ccl_path.write_bytes(await ccl_mapping_file.read())
 
     try:
-        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, raw_material_template_path=raw_template_path)
-        summary["app_version"] = "CMP_MODULE3_COMPACT_TEMPLATE_WRITE_V3"
+        summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, raw_material_template_path=None)
+        summary["app_version"] = "CMP_MODULE3_LIGHTWEIGHT_FACTOR_FILLED_V4"
         if output_path.exists():
             _register_workspace_output(output_path)
+            shutil.copy2(output_path, MODULE3_CCL_FILLED_LATEST_PATH)
+            _register_workspace_output(MODULE3_CCL_FILLED_LATEST_PATH)
             try:
                 summary["output_file_size_bytes"] = output_path.stat().st_size
                 summary["output_file_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
@@ -3531,7 +3675,6 @@ async def module3_apply_ccl_factors(
         summary["source_filename"] = raw_path.name
         summary["source_label"] = _module2_raw_bulk_source_label(raw_path)
         summary["source_stage"] = _module2_raw_bulk_source_stage(raw_path)
-        summary["final_template_filename"] = raw_template_path.name
         summary.update(_source_meta_for_path(raw_path, _module2_raw_bulk_source_label(raw_path)))
     except Exception as exc:
         traceback.print_exc()

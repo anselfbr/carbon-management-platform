@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SHORT_FILENAME_COUNTRY_TBD_MATCHED_ONLY_V3_20260714"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_OFFICIAL_TEMPLATE_UPLOAD_V4_20260718"
 
 
 def _norm(value: Any) -> str:
@@ -1515,7 +1515,7 @@ def apply_ccl_factors_to_raw_material_bulk_package(
                     # can be split into multiple XLSX parts, then flatten those parts
                     # into the final M3 package. The temporary ZIP basename controls
                     # the final split workbook names inside the delivered ZIP.
-                    filled_file = tmpdir_path / f"{concise_base_name}.zip"
+                    filled_file = tmpdir_path / (f"{concise_base_name}.zip" if raw_material_template_path else f"{concise_base_name}.xlsx")
                     with zin.open(info, "r") as src, input_file.open("wb") as dst:
                         shutil.copyfileobj(src, dst, length=1024 * 1024)
 
@@ -1539,7 +1539,7 @@ def apply_ccl_factors_to_raw_material_bulk_package(
                         raw_material_template_path=raw_material_template_path,
                     )
                     flattened_outputs: list[str] = []
-                    if filled_file.exists() and zipfile.is_zipfile(filled_file):
+                    if raw_material_template_path and filled_file.exists() and filled_file.suffix.lower() == ".zip" and zipfile.is_zipfile(filled_file):
                         with zipfile.ZipFile(filled_file, "r") as nested_zip:
                             for nested_info in nested_zip.infolist():
                                 if nested_info.is_dir():
@@ -1587,6 +1587,209 @@ def apply_ccl_factors_to_raw_material_bulk_package(
         "template_strategy": "M2B/M2C/M3 lightweight intermediates; final M3 applies original Raw Material Bulk Template via compact streaming OpenXML package writer" if raw_material_template_path else "write_only workbook; formal bulk columns; no full-template load",
         "compact_template_write": bool(raw_material_template_path),
         "final_template_filename": Path(raw_material_template_path).name if raw_material_template_path else "",
+        **totals,
+    }
+
+
+def _read_factor_map_from_filled_bulk(
+    factor_filled_bulk_path: str | Path,
+    progress_callback: Callable[..., None] | None = None,
+) -> dict[str, Dict[str, Any]]:
+    """Build a compact Material -> factor map from an already completed M3 file.
+
+    M3A uses this map to apply a newly downloaded official Raw Material template
+    without re-reading the original CCL mapping file or re-running M3 matching.
+    """
+    factor_filled_bulk_path = Path(factor_filled_bulk_path)
+    _emit_progress(progress_callback, 8, "讀取 M3 係數對應完成檔", 30, 0, None)
+    wb = load_workbook(factor_filled_bulk_path, read_only=True, data_only=False)
+    try:
+        activity_name = _first_existing_name(wb.sheetnames, ACTIVITY_SHEET_ALIASES)
+        if not activity_name:
+            raise ValueError("M3 係數對應完成檔找不到 Activity Data 分頁。")
+        ws = wb[activity_name]
+        headers = _first_header_rows(ws, DATA_START_ROW - 1)
+        material_col = _find_col_from_header_rows(
+            headers,
+            ["Raw Material Code", "Raw Material Number", "Material", "Material Number", "原物料代碼", "料號"],
+        )
+        factor_name_col = _find_col_from_header_rows(headers, ["Factor Name", "Emission Factor Name", "CCL Item", "係數名稱"], required=False)
+        factor_col = _find_col_from_header_rows(headers, ["Emission Factor", "Carbon Factor", "碳係數"], required=False)
+        mapping: dict[str, Dict[str, Any]] = {}
+        total_rows = max(0, int(ws.max_row or 0) - DATA_START_ROW + 1)
+        for idx, values in enumerate(ws.iter_rows(min_row=DATA_START_ROW, values_only=True), start=1):
+            material = _text(_row_value(values, material_col))
+            if not material:
+                continue
+            factor_name = _text(_row_value(values, factor_name_col)) if factor_name_col else ""
+            factor_value = _row_value(values, factor_col) if factor_col else None
+            if not factor_name and factor_value in (None, ""):
+                continue
+            normalized = _normalize_material_key(material)
+            if normalized and normalized not in mapping:
+                mapping[normalized] = {
+                    "material": material,
+                    "ccl_item": factor_name,
+                    "factor_name": factor_name,
+                    "emission_factor": factor_value,
+                    "unit": "",
+                }
+            if idx == 1 or idx % 5000 == 0:
+                progress = 8 + int(min(12, idx / max(1, total_rows) * 12))
+                _emit_progress(progress_callback, progress, "建立 M3 已完成係數索引", 25, idx, total_rows)
+        return mapping
+    finally:
+        wb.close()
+
+
+def apply_final_template_to_factor_filled_bulk(
+    factor_filled_bulk_path: str | Path,
+    raw_material_template_path: str | Path,
+    output_path: str | Path,
+    progress_callback: Callable[..., None] | None = None,
+) -> Dict[str, Any]:
+    """Apply an official third-party template to one M3 factor-filled workbook."""
+    factor_filled_bulk_path = Path(factor_filled_bulk_path)
+    ccl_map = _read_factor_map_from_filled_bulk(factor_filled_bulk_path, progress_callback=progress_callback)
+    summary = _apply_ccl_factors_to_raw_material_bulk_final_template(
+        raw_material_bulk_path=factor_filled_bulk_path,
+        ccl_mapping_path=factor_filled_bulk_path,  # unused because ccl_map is supplied
+        output_path=output_path,
+        raw_material_template_path=raw_material_template_path,
+        progress_callback=progress_callback,
+        ccl_map=ccl_map,
+    )
+    summary["m3a_source_filename"] = factor_filled_bulk_path.name
+    summary["m3a_reused_completed_factor_mapping"] = True
+    return summary
+
+
+def apply_final_template_to_factor_filled_package(
+    factor_filled_bulk_path: str | Path,
+    raw_material_template_path: str | Path,
+    output_path: str | Path,
+    progress_callback: Callable[..., None] | None = None,
+) -> Dict[str, Any]:
+    """Apply the user-uploaded official template to the latest M3 output package.
+
+    This is the M3A stage. It preserves the official template's dropdown values,
+    validations, formulas and hidden sheets, while reusing M3's completed factor
+    mapping instead of asking the user to upload the CCL file again.
+    """
+    factor_filled_bulk_path = Path(factor_filled_bulk_path)
+    raw_material_template_path = Path(raw_material_template_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not raw_material_template_path.exists():
+        raise FileNotFoundError(f"找不到正式原物料批次檔 Template：{raw_material_template_path}")
+
+    if factor_filled_bulk_path.suffix.lower() != ".zip":
+        return apply_final_template_to_factor_filled_bulk(
+            factor_filled_bulk_path,
+            raw_material_template_path,
+            output_path,
+            progress_callback=progress_callback,
+        )
+
+    _emit_progress(progress_callback, 2, "讀取 M3 係數對應完成 ZIP", 60, 0, None)
+    with zipfile.ZipFile(factor_filled_bulk_path, "r") as zin:
+        all_excel_members = [
+            info for info in zin.infolist()
+            if not info.is_dir()
+            and not Path(info.filename).name.startswith("~$")
+            and Path(info.filename).suffix.lower() in {".xlsx", ".xlsm", ".xls"}
+        ]
+        excel_members = [info for info in all_excel_members if _is_raw_material_bulk_zip_member(info.filename)]
+        skipped_excel_members = [Path(info.filename).name for info in all_excel_members if info not in excel_members]
+        if not excel_members:
+            raise ValueError("M3 ZIP 內找不到已填入係數的原物料 Bulk Excel 檔案。")
+
+        totals = {
+            "matched_rows": 0,
+            "unmatched_rows": 0,
+            "written_rows": 0,
+            "total_rows": 0,
+            "activity_rows": 0,
+            "raw_material_rows": 0,
+        }
+        processed_files: list[dict[str, Any]] = []
+        with tempfile.TemporaryDirectory(prefix="cmp_module3a_template_") as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            total_files = len(excel_members)
+            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+                for file_idx, info in enumerate(excel_members, start=1):
+                    original_name = Path(info.filename).name
+                    input_file = tmpdir_path / f"input_{file_idx}_{original_name}"
+                    concise_base_name = _short_m3_bulk_output_base_name(original_name)
+                    filled_file = tmpdir_path / f"{concise_base_name}.zip"
+                    with zin.open(info, "r") as src, input_file.open("wb") as dst:
+                        shutil.copyfileobj(src, dst, length=1024 * 1024)
+
+                    base_pct = 5 + int((file_idx - 1) / max(1, total_files) * 88)
+                    _emit_progress(progress_callback, base_pct, f"M3A 套用第 {file_idx}/{total_files} 個正式 Template：{original_name}", 60, 0, None)
+
+                    def nested_progress(p: int, step: str, remaining_seconds: int | None = None, *, processed_rows: int | None = None, total_rows: int | None = None) -> None:
+                        file_span = 88 / max(1, total_files)
+                        normalized = max(0, min(1, int(p) / 100))
+                        package_progress = int(5 + ((file_idx - 1) + normalized) * file_span)
+                        _emit_progress(progress_callback, package_progress, f"{step}: {original_name}", remaining_seconds, processed_rows, total_rows)
+
+                    summary = apply_final_template_to_factor_filled_bulk(
+                        input_file,
+                        raw_material_template_path,
+                        filled_file,
+                        progress_callback=nested_progress,
+                    )
+                    flattened_outputs: list[str] = []
+                    if filled_file.exists() and zipfile.is_zipfile(filled_file):
+                        with zipfile.ZipFile(filled_file, "r") as nested_zip:
+                            for nested_info in nested_zip.infolist():
+                                if nested_info.is_dir():
+                                    continue
+                                arcname = Path(nested_info.filename).name
+                                with nested_zip.open(nested_info, "r") as src:
+                                    zout.writestr(arcname, src.read())
+                                flattened_outputs.append(arcname)
+                    elif filled_file.exists():
+                        arcname = f"{concise_base_name}.xlsx"
+                        zout.write(filled_file, arcname=arcname)
+                        flattened_outputs.append(arcname)
+
+                    processed_files.append({
+                        "filename": original_name,
+                        "output_filename": flattened_outputs[0] if len(flattened_outputs) == 1 else "",
+                        "output_files": flattened_outputs,
+                        "split_file_count": summary.get("split_file_count", len(flattened_outputs) or 1),
+                        "split_files": summary.get("split_files", []),
+                        "matched_rows": summary.get("matched_rows", 0),
+                        "unmatched_rows": summary.get("unmatched_rows", 0),
+                        "written_rows": summary.get("written_rows", 0),
+                        "total_rows": summary.get("total_rows", 0),
+                        "activity_rows": summary.get("activity_rows", 0),
+                        "raw_material_rows": summary.get("raw_material_rows", 0),
+                    })
+                    for key in totals:
+                        totals[key] += int(summary.get(key, 0) or 0)
+
+    _emit_progress(progress_callback, 100, "M3A 正式原物料批次檔套版完成", 0, totals.get("activity_rows", 0), totals.get("activity_rows", 0))
+    return {
+        "output_filename": output_path.name,
+        "download_url": f"/download/{output_path.name}",
+        "input_package_filename": factor_filled_bulk_path.name,
+        "final_template_filename": raw_material_template_path.name,
+        "processed_file_count": len(processed_files),
+        "processed_files": processed_files,
+        "split_enabled": True,
+        "split_reason": "third-party upload row limit",
+        "max_upload_total_rows_per_file": int(M3_MAX_UPLOAD_TOTAL_ROWS),
+        "max_activity_data_rows_per_file": int(M3_MAX_UPLOAD_DATA_ROWS),
+        "split_file_count": int(sum(int(item.get("split_file_count", 0) or 0) for item in processed_files)),
+        "skipped_non_raw_material_bulk_files": skipped_excel_members,
+        "factor_selector_version": FACTOR_SELECTOR_VERSION,
+        "large_dataset_mode": True,
+        "template_strategy": "M3A applies user-uploaded official template to completed M3 factor-filled intermediates",
+        "compact_template_write": True,
+        "m3a_reused_completed_factor_mapping": True,
         **totals,
     }
 
@@ -1912,7 +2115,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3_SHORT_FILENAME_COUNTRY_TBD_MATCHED_ONLY_V3_20260714"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_OFFICIAL_TEMPLATE_UPLOAD_V4_20260718"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
