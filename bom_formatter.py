@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V27_10_M2B_ROLLUP_TOTAL_HOUR_FILTER"
+BOM_FORMATTER_VERSION = "CMP_V27_11_M2B_EXCLUDE_BLANK_MATERIAL_GROUP"
 
 
 DEFAULT_MAPPING = {
@@ -641,6 +641,40 @@ def _exclude_zero_usage_rows(exploded: pd.DataFrame) -> tuple[pd.DataFrame, int]
     if excluded_rows:
         work = work.loc[keep_mask].copy().reset_index(drop=True)
     return work, excluded_rows
+
+
+def _exclude_blank_material_group_rows(exploded: pd.DataFrame) -> tuple[pd.DataFrame, int, list[str], list[str]]:
+    """Exclude final BOM leaves whose Standard BOM Material group is blank.
+
+    M2A must retain the complete expanded BOM for traceability. This filter is
+    intentionally applied only when preparing M2B Raw Material Bulk output.
+    Blank includes None/NaN, empty text, half-width spaces and full-width spaces.
+    Text values such as 0, TBC and TBD remain valid Material group values.
+    """
+    if exploded is None or exploded.empty:
+        return exploded.copy() if isinstance(exploded, pd.DataFrame) else pd.DataFrame(), 0, [], []
+
+    work = exploded.copy()
+    if "material_group" not in work.columns:
+        work["material_group"] = ""
+
+    material_group_text = work["material_group"].apply(_safe_text)
+    keep_mask = material_group_text != ""
+    excluded_rows = int((~keep_mask).sum())
+    excluded_raw_materials = sorted({
+        _safe_text(value)
+        for value in work.loc[~keep_mask, "raw_material"].tolist()
+        if _safe_text(value)
+    }) if "raw_material" in work.columns else []
+    excluded_targets = sorted({
+        _safe_text(value)
+        for value in work.loc[~keep_mask, "target_product"].tolist()
+        if _safe_text(value)
+    }) if "target_product" in work.columns else []
+
+    if excluded_rows:
+        work = work.loc[keep_mask].copy().reset_index(drop=True)
+    return work, excluded_rows, excluded_raw_materials, excluded_targets
 
 
 
@@ -3282,7 +3316,14 @@ def generate_raw_material_bulk_file(
     supplier_map, tbc_supplier_map, supplier_summary = _read_supplier_files(supplier_paths)
     exploded, summary = _explode_bom(bom_df)
     exploded, zero_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
+    exploded, blank_material_group_rows_excluded, blank_material_group_raw_materials, blank_material_group_targets = _exclude_blank_material_group_rows(exploded)
     summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
+    summary["blank_material_group_rows_excluded"] = int(blank_material_group_rows_excluded)
+    summary["blank_material_group_raw_materials"] = blank_material_group_raw_materials[:50]
+    summary["blank_material_group_raw_material_count"] = int(len(blank_material_group_raw_materials))
+    summary["blank_material_group_targets"] = blank_material_group_targets[:50]
+    summary["blank_material_group_target_count"] = int(len(blank_material_group_targets))
+    summary["blank_material_group_rule"] = "M2B excludes final BOM rows whose Standard BOM Material group is blank; M2A expanded BOM remains unchanged."
     summary["activity_rows"] = int(len(exploded))
     summary["raw_materials"] = int(exploded["raw_material"].nunique()) if not exploded.empty else 0
     write_summary, expanded = _write_raw_material_bulk_from_exploded(
@@ -3331,9 +3372,16 @@ def generate_raw_material_bulk_files_by_site_zip(
     exploded, zero_annual_usage_rows_excluded = _exclude_zero_usage_rows(exploded)
     total_hour_by_target, working_hour_summary = _calculate_total_working_hour_by_target(step1_output_path=step1_output_path, bom_df=bom_df)
     exploded, zero_total_working_hour_rows_excluded = _exclude_zero_total_working_hour_target_rows(exploded=exploded, total_hour_by_material=total_hour_by_target)
+    exploded, blank_material_group_rows_excluded, blank_material_group_raw_materials, blank_material_group_targets = _exclude_blank_material_group_rows(exploded)
     base_summary["zero_usage_rows_excluded"] = int(zero_usage_rows_excluded)
     base_summary["zero_annual_usage_rows_excluded"] = int(zero_annual_usage_rows_excluded)
     base_summary["zero_total_working_hour_rows_excluded"] = int(zero_total_working_hour_rows_excluded)
+    base_summary["blank_material_group_rows_excluded"] = int(blank_material_group_rows_excluded)
+    base_summary["blank_material_group_raw_materials"] = blank_material_group_raw_materials[:50]
+    base_summary["blank_material_group_raw_material_count"] = int(len(blank_material_group_raw_materials))
+    base_summary["blank_material_group_targets"] = blank_material_group_targets[:50]
+    base_summary["blank_material_group_target_count"] = int(len(blank_material_group_targets))
+    base_summary["blank_material_group_rule"] = "M2B excludes final BOM rows whose Standard BOM Material group is blank; M2A expanded BOM remains unchanged."
     base_summary.update(annual_qty_source_summary)
     base_summary.update(annual_usage_summary)
     base_summary.update(trace_summary)
@@ -4227,6 +4275,9 @@ def _stream_module2b_rows_to_site_csv(
     missing_annual_rows = 0
     zero_usage_rows_excluded = 0
     zero_annual_usage_rows_excluded = 0
+    blank_material_group_rows_excluded = 0
+    blank_material_group_raw_materials: set[str] = set()
+    blank_material_group_targets: set[str] = set()
     m2b_product_filter_rows_excluded = 0
     m2b_product_filter_excluded_targets: set[str] = set()
     m2b_product_filter_reason_counts: dict[str, int] = defaultdict(int)
@@ -4264,6 +4315,10 @@ def _stream_module2b_rows_to_site_csv(
             except StopIteration:
                 continue
             idx = _read_module2a_header_indices(headers, m)
+            if idx.get("material_group") is None:
+                raise ValueError(
+                    "標準BOM表總用量缺少 Material group 欄位；M2B 無法判斷真正原物料，請確認標準 BOM 欄位後重新執行 M2A。"
+                )
             if not used_columns:
                 def header_name(i):
                     return str(headers[i] or "") if i is not None and i < len(headers) else ""
@@ -4284,6 +4339,12 @@ def _stream_module2b_rows_to_site_csv(
                 target_product = _fast_text(_row_get(row, idx["target"]))
                 raw_material = _fast_text(_row_get(row, idx["component"]))
                 if not target_product or not raw_material:
+                    continue
+                material_group = _fast_text(_row_get(row, idx["material_group"]))
+                if not material_group:
+                    blank_material_group_rows_excluded += 1
+                    blank_material_group_raw_materials.add(raw_material)
+                    blank_material_group_targets.add(target_product)
                     continue
                 usage_per_pc = _fast_number(_row_get(row, idx["qty"]))
                 if usage_per_pc == 0:
@@ -4314,7 +4375,7 @@ def _stream_module2b_rows_to_site_csv(
                     "usage": annual_usage,
                     "unit": _fast_text(_row_get(row, idx["unit"])),
                     "description": _fast_text(_row_get(row, idx["description"])),
-                    "material_group": _fast_text(_row_get(row, idx["material_group"])),
+                    "material_group": material_group,
                     "valid_from": _fast_date_iso(_row_get(row, idx["valid_from"])),
                     "net_weight": _fast_number(_row_get(row, idx["net_weight"])) if idx.get("net_weight") is not None else "",
                     "gross_weight": _fast_number(_row_get(row, idx["gross_weight"])) if idx.get("gross_weight") is not None else "",
@@ -4329,6 +4390,7 @@ def _stream_module2b_rows_to_site_csv(
                         processed=rows_read,
                         total=0,
                         progress=10,
+                        blank_material_group_rows_excluded=int(blank_material_group_rows_excluded),
                     )
     finally:
         for fh in csv_files.values():
@@ -4349,6 +4411,12 @@ def _stream_module2b_rows_to_site_csv(
         "annual_finished_product_qty_column_added": False,
         "zero_usage_rows_excluded": int(zero_usage_rows_excluded),
         "zero_annual_usage_rows_excluded": int(zero_annual_usage_rows_excluded),
+        "blank_material_group_rows_excluded": int(blank_material_group_rows_excluded),
+        "blank_material_group_raw_materials": sorted(blank_material_group_raw_materials)[:50],
+        "blank_material_group_raw_material_count": int(len(blank_material_group_raw_materials)),
+        "blank_material_group_targets": sorted(blank_material_group_targets)[:50],
+        "blank_material_group_target_count": int(len(blank_material_group_targets)),
+        "blank_material_group_rule": "M2B excludes final BOM rows whose Standard BOM Material group is blank; M2A expanded BOM remains unchanged.",
         "m2b_product_filter_rows_excluded": int(m2b_product_filter_rows_excluded),
         "m2b_product_filter_excluded_targets": sorted(m2b_product_filter_excluded_targets)[:50],
         "m2b_product_filter_excluded_target_count": int(len(m2b_product_filter_excluded_targets)),
@@ -5302,4 +5370,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V27_10_M2B_ROLLUP_TOTAL_HOUR_FILTER"
+BOM_FORMATTER_VERSION = "CMP_V27_11_M2B_EXCLUDE_BLANK_MATERIAL_GROUP"
