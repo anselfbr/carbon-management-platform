@@ -20,6 +20,8 @@ PRODUCTS_SHEET_NAME = "Input Sheet Products"
 # Data starts from row 3
 DATA_START_ROW = 3
 
+BULK_FORMATTER_VERSION = "CMP_BULK_V8_1_M1B_STRUCTURAL_WIP_FROM_ROLLUP"
+
 
 def _sanitize_filename(value: Any) -> str:
     text = str(value or "Unknown").strip()
@@ -156,6 +158,55 @@ def _build_total_hour_lookup_from_rollup(working_hour_rollup_path: str | Path | 
     return by_site, by_mat
 
 
+def _build_structural_wip_set_from_rollup(working_hour_rollup_path: str | Path | None) -> set[str]:
+    """Read BOM-structural semi-finished materials from an M2A roll-up workbook.
+
+    This is intentionally used only when M1B Working Hour Source is
+    ``include_semi``.  Direct Working Hour mode remains independent of M2A.
+
+    Primary source:
+      - sheet ``Semi Hour per PC`` / column ``Semi Material``
+
+    Backward-compatible source:
+      - sheet ``Roll-up Detail`` / column ``Semi Material``
+
+    An empty, header-only sheet means the enterprise has no structural WIP and
+    therefore returns an empty set.
+    """
+    if not working_hour_rollup_path:
+        return set()
+    path = Path(working_hour_rollup_path)
+    if not path.exists():
+        return set()
+
+    last_error: Exception | None = None
+    for sheet_name in ("Semi Hour per PC", "Roll-up Detail"):
+        try:
+            frame = pd.read_excel(path, sheet_name=sheet_name, dtype=object)
+        except ValueError as exc:
+            last_error = exc
+            continue
+        if frame.empty and len(frame.columns) == 0:
+            continue
+        material_col = _find_optional_column(frame, ["Semi Material", "Semi-finished Material", "WIP Material"])
+        if not material_col:
+            continue
+        return {
+            key
+            for key in frame[material_col].map(_normalize_material).tolist()
+            if key
+        }
+
+    # Current M2A output always includes one of the structural-WIP sheets.
+    # Raising here prevents silently treating every M1A material as a finished
+    # product when Include Semi-finished Working Hour was explicitly selected.
+    detail = f" ({last_error})" if last_error else ""
+    raise ValueError(
+        "Module 2A working_hour_rollup 找不到『Semi Hour per PC』或『Roll-up Detail』的 Semi Material 欄位，"
+        f"無法依標準 BOM 排除結構性半品{detail}"
+    )
+
+
 def _read_latest_bom_structure(bom_structure_path: str | Path | None) -> pd.DataFrame:
     if not bom_structure_path:
         return pd.DataFrame()
@@ -290,9 +341,11 @@ def generate_product_activity_bulk_file(
     semi_hour_by_material: dict[str, float] = {}
     rollup_by_site_material: dict[tuple[str, str], float] = {}
     rollup_by_material: dict[str, float] = {}
+    structural_wip_materials: set[str] = set()
     if working_hour_source == "include_semi":
         if working_hour_rollup_path is not None and Path(working_hour_rollup_path).exists():
             rollup_by_site_material, rollup_by_material = _build_total_hour_lookup_from_rollup(working_hour_rollup_path)
+            structural_wip_materials = _build_structural_wip_set_from_rollup(working_hour_rollup_path)
         elif bom_structure_path is not None and Path(bom_structure_path).exists():
             semi_hour_by_material = _build_semi_hour_per_product(
                 step1_df=df,
@@ -358,6 +411,7 @@ def generate_product_activity_bulk_file(
     activity_row = DATA_START_ROW
     products_row = DATA_START_ROW
     excluded_wip_rows = 0
+    excluded_structural_wip_rows = 0
     skipped_blank_rows = 0
     excluded_zero_labor_hour_rows = 0
     source_valid_rows = 0
@@ -378,18 +432,25 @@ def generate_product_activity_bulk_file(
             skipped_blank_rows += 1
             continue
 
-        product_type = row.get(product_type_col)
-        is_wip = row.get(is_wip_col) if is_wip_col else None
-
-        # 依目前規則：WIP 不寫入 bulk file
-        if _is_wip(product_type, is_wip):
-            excluded_wip_rows += 1
-            continue
-
         product_name = str(raw_product_name).strip()
         product_key = _normalize_material(product_name)
         if not product_key:
             skipped_blank_rows += 1
+            continue
+
+        product_type = row.get(product_type_col)
+        is_wip = row.get(is_wip_col) if is_wip_col else None
+
+        # M1A 明確判定的 WIP 一律不寫入 Bulk。
+        if _is_wip(product_type, is_wip):
+            excluded_wip_rows += 1
+            continue
+
+        # 只有選擇「包含半品工時」時，才使用 M2A working_hour_rollup
+        # 的 Semi Material 清單，依標準 BOM 結構排除中間半品。
+        # Direct Working Hour 模式不讀取 Roll-up，也不套用本條件。
+        if working_hour_source == "include_semi" and product_key in structural_wip_materials:
+            excluded_structural_wip_rows += 1
             continue
 
         year = _as_year(row.get(year_col))
@@ -522,6 +583,10 @@ def generate_product_activity_bulk_file(
         "activity_rows": int(activity_row - DATA_START_ROW),
         "product_rows": int(products_row - DATA_START_ROW),
         "excluded_wip_rows": int(excluded_wip_rows),
+        "excluded_structural_wip_rows": int(excluded_structural_wip_rows),
+        "structural_wip_filter_applied": bool(working_hour_source == "include_semi"),
+        "structural_wip_material_count": int(len(structural_wip_materials)),
+        "structural_wip_materials_sample": sorted(structural_wip_materials)[:50],
         "skipped_blank_rows": int(skipped_blank_rows),
         "excluded_zero_labor_hour_rows": int(excluded_zero_labor_hour_rows),
         "step2_product_name_consolidation_enabled": True,
@@ -537,8 +602,9 @@ def generate_product_activity_bulk_file(
         "labor_hours_unit_written_to_bulk": bool(labor_hours_col and activity_labor_hours_unit_col),
         "labor_hours_unit_template_column": int(activity_labor_hours_unit_col) if activity_labor_hours_unit_col else None,
         "working_hour_source": working_hour_source,
-        "working_hour_rollup_used": bool(rollup_by_site_material or rollup_by_material),
-        "semi_finished_working_hour_products": int(len(semi_hour_by_material)) if isinstance(semi_hour_by_material, dict) else int(len(rollup_by_material)),
+        "working_hour_rollup_used": bool(working_hour_rollup_path and Path(working_hour_rollup_path).exists()),
+        "semi_finished_working_hour_products": int(len(structural_wip_materials) or len(semi_hour_by_material)),
+        "bulk_formatter_version": BULK_FORMATTER_VERSION,
     }
 
 
@@ -623,6 +689,7 @@ def generate_product_activity_bulk_files_by_site(
     total_activity_rows = sum(int(f["summary"].get("activity_rows", 0)) for f in files)
     total_product_rows = sum(int(f["summary"].get("product_rows", 0)) for f in files)
     total_excluded_wip = sum(int(f["summary"].get("excluded_wip_rows", 0)) for f in files)
+    total_excluded_structural_wip = sum(int(f["summary"].get("excluded_structural_wip_rows", 0)) for f in files)
 
     return {
         "split_by_production_site": True,
@@ -630,6 +697,8 @@ def generate_product_activity_bulk_files_by_site(
         "activity_rows": total_activity_rows,
         "product_rows": total_product_rows,
         "excluded_wip_rows": total_excluded_wip,
+        "excluded_structural_wip_rows": total_excluded_structural_wip,
+        "structural_wip_filter_applied": normalize_working_hour_source(working_hour_source) == "include_semi",
         "files": files,
     }
 
@@ -752,6 +821,8 @@ def generate_product_activity_bulk_files_by_site_zip(
             "activity_rows": int(item["summary"].get("activity_rows", 0)),
             "product_rows": int(item["summary"].get("product_rows", 0)),
             "excluded_wip_rows": int(item["summary"].get("excluded_wip_rows", 0)),
+            "excluded_structural_wip_rows": int(item["summary"].get("excluded_structural_wip_rows", 0)),
+            "structural_wip_material_count": int(item["summary"].get("structural_wip_material_count", 0)),
         }
         for item in generated_files
     ]
@@ -765,6 +836,9 @@ def generate_product_activity_bulk_files_by_site_zip(
         "activity_rows": total_activity_rows,
         "product_rows": sum(item["product_rows"] for item in files_summary),
         "excluded_wip_rows": sum(item["excluded_wip_rows"] for item in files_summary),
+        "excluded_structural_wip_rows": sum(item["excluded_structural_wip_rows"] for item in files_summary),
+        "structural_wip_filter_applied": normalize_working_hour_source(working_hour_source) == "include_semi",
+        "structural_wip_material_count": max((item["structural_wip_material_count"] for item in files_summary), default=0),
         "files": files_summary,
         "output_filename": zip_name,
         "download_url": f"/download/{zip_name}",
