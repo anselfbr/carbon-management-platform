@@ -23,7 +23,7 @@ PRODUCTS_SHEET_NAME = "Input Sheet Products"
 # Data starts from row 3
 DATA_START_ROW = 3
 
-BULK_FORMATTER_VERSION = "CMP_BULK_V8_3_M1B_OPENXML_CALCCHAIN_FIX"
+BULK_FORMATTER_VERSION = "CMP_BULK_V8_4_M1B_OPENXML_CELL_ORDER_FIX"
 
 
 def _sanitize_filename(value: Any) -> str:
@@ -375,7 +375,7 @@ def _col_letter(idx: int) -> str:
 
 def _replace_cell_xml(row_xml: bytes, row_idx: int, col_idx: int, kind: str, value: Any = None, formula_cache: str | None = None) -> bytes:
     ref = f"{_col_letter(col_idx)}{row_idx}"
-    pattern = re.compile(rb'<c\b[^>]*\br="' + re.escape(ref.encode()) + rb'"[^>]*(?:/>|>.*?</c>)', re.DOTALL)
+    pattern = re.compile(rb'<c\b[^>]*?\br="' + re.escape(ref.encode()) + rb'"[^>]*?(?:/>|>.*?</c>)', re.DOTALL)
     m = pattern.search(row_xml)
     old = m.group(0) if m else b""
     style_m = re.search(rb'\bs="([^"]+)"', old)
@@ -402,6 +402,32 @@ def _replace_cell_xml(row_xml: bytes, row_idx: int, col_idx: int, kind: str, val
         return row_xml[:m.start()] + new + row_xml[m.end():]
     pos = row_xml.rfind(b'</row>')
     return row_xml[:pos] + new + row_xml[pos:] if pos >= 0 else row_xml
+
+
+def _sort_row_cells_by_column(row_xml: bytes) -> bytes:
+    """Ensure worksheet cells are serialized in ascending column order.
+
+    Excel validates the order of <c> nodes inside each <row>. Third-party importers
+    often resolve cells only by their r= coordinate and therefore tolerate unsorted
+    cells, but desktop Excel repairs/removes those records.
+    """
+    open_m = re.match(rb'(<row\b[^>]*>)', row_xml, re.DOTALL)
+    close_pos = row_xml.rfind(b'</row>')
+    if not open_m or close_pos < 0:
+        return row_xml
+    body = row_xml[open_m.end():close_pos]
+    cell_pattern = re.compile(rb'<c\b[^>]*?\br="([A-Z]+)\d+"[^>]*?(?:/>|>.*?</c>)', re.DOTALL)
+    matches = list(cell_pattern.finditer(body))
+    if len(matches) < 2:
+        return row_xml
+    # Worksheet rows in the official template contain only cell nodes plus whitespace.
+    # Keep leading/trailing whitespace and serialize all cells in schema-valid order.
+    prefix = body[:matches[0].start()]
+    suffix = body[matches[-1].end():]
+    cells = [( _cell_col_index(m.group(1).decode('ascii')), m.group(0)) for m in matches]
+    cells.sort(key=lambda item: item[0])
+    new_body = prefix + b''.join(cell for _, cell in cells) + suffix
+    return row_xml[:open_m.end()] + new_body + row_xml[close_pos:]
 
 
 def _rewrite_product_activity_sheet(template_xml: bytes, rows: list[dict[str, Any]], sheet_kind: str, labor_col: int | None, labor_unit_col: int | None) -> bytes:
@@ -453,6 +479,7 @@ def _rewrite_product_activity_sheet(template_xml: bytes, rows: list[dict[str, An
                     row_xml=_replace_cell_xml(row_xml,row_idx,c,k,v)
                 for c,cache in {22:"CRADLE_TO_GATE",23:"PC",24:"",25:"",26:"",27:"",28:""}.items():
                     row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_cache",formula_cache=cache)
+        row_xml = _sort_row_cells_by_column(row_xml)
         out.append(row_xml)
     if data_count > max(0,max_template_row-DATA_START_ROW+1):
         raise ValueError(f"Product Activity Template 預留列數不足：需要 {data_count} 筆，Template 僅支援 {max_template_row-DATA_START_ROW+1} 筆")
