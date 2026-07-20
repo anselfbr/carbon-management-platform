@@ -23,7 +23,7 @@ PRODUCTS_SHEET_NAME = "Input Sheet Products"
 # Data starts from row 3
 DATA_START_ROW = 3
 
-BULK_FORMATTER_VERSION = "CMP_BULK_V8_2_M1B_OPENXML_TEMPLATE_PRESERVE"
+BULK_FORMATTER_VERSION = "CMP_BULK_V8_3_M1B_OPENXML_CALCCHAIN_FIX"
 
 
 def _sanitize_filename(value: Any) -> str:
@@ -460,6 +460,32 @@ def _rewrite_product_activity_sheet(template_xml: bytes, rows: list[dict[str, An
     return template_xml[:start_m.end()] + new_inside + template_xml[end_m.start():]
 
 
+
+
+def _remove_calc_chain_content_types(data: bytes) -> bytes:
+    return re.sub(rb'<Override\b[^>]*PartName="/xl/calcChain\.xml"[^>]*/>', b"", data)
+
+
+def _remove_calc_chain_rels(data: bytes) -> bytes:
+    return re.sub(rb'<Relationship\b[^>]*(?:calcChain|calcchain)[^>]*/>', b"", data)
+
+
+def _force_full_calc_on_load(data: bytes) -> bytes:
+    """移除舊計算鏈後，要求 Excel 開啟時重新計算保留公式。"""
+    calc_attrs = b' calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"'
+    if b"<calcPr" not in data:
+        return data.replace(b"</workbook>", b"<calcPr" + calc_attrs + b"/></workbook>", 1)
+
+    def repl(match: re.Match[bytes]) -> bytes:
+        tag = match.group(0)
+        for attr in (b"calcMode", b"fullCalcOnLoad", b"forceFullCalc"):
+            tag = re.sub(attr + rb'="[^"]*"', b"", tag)
+        if tag.endswith(b"/>"):
+            return tag[:-2].rstrip() + calc_attrs + b"/>"
+        return tag[:-1].rstrip() + calc_attrs + b">"
+
+    return re.sub(rb"<calcPr\b[^>]*/?>", repl, data, count=1)
+
 def _write_product_activity_openxml(template_path: Path, output_path: Path, rows: list[dict[str, Any]], labor_col: int | None, labor_unit_col: int | None) -> None:
     paths=_xlsx_sheet_paths(template_path)
     activity_path=paths.get(ACTIVITY_SHEET_NAME); products_path=paths.get(PRODUCTS_SHEET_NAME)
@@ -467,13 +493,25 @@ def _write_product_activity_openxml(template_path: Path, output_path: Path, rows
         raise ValueError("Product Activity Bulk Template 缺少必要分頁")
     with zipfile.ZipFile(template_path,'r') as zin, zipfile.ZipFile(output_path,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as zout:
         for item in zin.infolist():
+            name = item.filename
             if item.is_dir():
-                zout.writestr(item,b''); continue
-            data=zin.read(item.filename)
-            if item.filename==activity_path:
+                zout.writestr(item,b'')
+                continue
+            # Products!A3 原本可能是動態陣列公式；M1B 改寫為實際值後，
+            # Template 舊 calcChain 會與工作表公式狀態不一致，Excel 可能判定檔案損壞。
+            if name == 'xl/calcChain.xml':
+                continue
+            data=zin.read(name)
+            if name==activity_path:
                 data=_rewrite_product_activity_sheet(data,rows,'activity',labor_col,labor_unit_col)
-            elif item.filename==products_path:
+            elif name==products_path:
                 data=_rewrite_product_activity_sheet(data,rows,'products',labor_col,labor_unit_col)
+            elif name == '[Content_Types].xml':
+                data = _remove_calc_chain_content_types(data)
+            elif name == 'xl/_rels/workbook.xml.rels':
+                data = _remove_calc_chain_rels(data)
+            elif name == 'xl/workbook.xml':
+                data = _force_full_calc_on_load(data)
             zout.writestr(item,data)
 
 
