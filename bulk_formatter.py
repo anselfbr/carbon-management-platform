@@ -3,6 +3,9 @@ from __future__ import annotations
 import shutil
 import tempfile
 import re
+import zipfile
+import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape as _xml_escape
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Callable
@@ -20,7 +23,7 @@ PRODUCTS_SHEET_NAME = "Input Sheet Products"
 # Data starts from row 3
 DATA_START_ROW = 3
 
-BULK_FORMATTER_VERSION = "CMP_BULK_V8_1_M1B_STRUCTURAL_WIP_FROM_ROLLUP"
+BULK_FORMATTER_VERSION = "CMP_BULK_V8_2_M1B_OPENXML_TEMPLATE_PRESERVE"
 
 
 def _sanitize_filename(value: Any) -> str:
@@ -277,6 +280,203 @@ def _clear_target_cells(ws, start_row: int, columns: list[int]) -> None:
             ws.cell(row_idx, col_idx).value = None
 
 
+
+
+
+def _template_header_columns(template_path: Path, sheet_name: str) -> dict[str, int]:
+    paths = _xlsx_sheet_paths(template_path)
+    sheet_path = paths.get(sheet_name)
+    if not sheet_path:
+        return {}
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(template_path, "r") as zf:
+        shared: list[str] = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for si in root.findall(f"{ns}si"):
+                shared.append("".join(t.text or "" for t in si.iter(f"{ns}t")))
+        sheet = ET.fromstring(zf.read(sheet_path))
+        result: dict[str, int] = {}
+        data = sheet.find(f"{ns}sheetData")
+        if data is None:
+            return result
+        for row in data.findall(f"{ns}row")[:2]:
+            for cell in row.findall(f"{ns}c"):
+                ref = cell.attrib.get("r", "")
+                typ = cell.attrib.get("t")
+                val = ""
+                v = cell.find(f"{ns}v")
+                inline = cell.find(f"{ns}is")
+                if typ == "s" and v is not None and v.text is not None:
+                    try: val = shared[int(v.text)]
+                    except (ValueError, IndexError): val = ""
+                elif typ == "inlineStr" and inline is not None:
+                    val = "".join(t.text or "" for t in inline.iter(f"{ns}t"))
+                elif v is not None:
+                    val = v.text or ""
+                if val:
+                    result[_normalize_header(val)] = _cell_col_index(ref)
+        return result
+
+
+def _find_header_col_map(header_map: dict[str, int], candidates: list[str]) -> int | None:
+    for candidate in candidates:
+        found = header_map.get(_normalize_header(candidate))
+        if found:
+            return found
+    return None
+
+
+def _xlsx_sheet_paths(path: str | Path) -> dict[str, str]:
+    ns_main = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    ns_rel = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    ns_pkg = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    with zipfile.ZipFile(path, "r") as zf:
+        wb = ET.fromstring(zf.read("xl/workbook.xml"))
+        rels_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+        rels = {}
+        for rel in rels_root.findall(f"{ns_pkg}Relationship"):
+            rid = rel.attrib.get("Id")
+            target = rel.attrib.get("Target", "")
+            if not rid:
+                continue
+            if target.startswith("/xl/"):
+                rels[rid] = target.lstrip("/")
+            elif target.startswith("xl/"):
+                rels[rid] = target
+            else:
+                rels[rid] = "xl/" + target.lstrip("/")
+        result = {}
+        sheets = wb.find(f"{ns_main}sheets")
+        if sheets is not None:
+            for sh in sheets.findall(f"{ns_main}sheet"):
+                name = sh.attrib.get("name", "")
+                rid = sh.attrib.get(f"{ns_rel}id")
+                if name and rid in rels:
+                    result[name] = rels[rid]
+        return result
+
+
+def _cell_col_index(ref: str) -> int:
+    value = 0
+    for ch in re.match(r"[A-Z]+", ref or "").group(0):
+        value = value * 26 + ord(ch) - 64
+    return value
+
+
+def _col_letter(idx: int) -> str:
+    out = ""
+    n = int(idx)
+    while n:
+        n, rem = divmod(n - 1, 26)
+        out = chr(65 + rem) + out
+    return out
+
+
+def _replace_cell_xml(row_xml: bytes, row_idx: int, col_idx: int, kind: str, value: Any = None, formula_cache: str | None = None) -> bytes:
+    ref = f"{_col_letter(col_idx)}{row_idx}"
+    pattern = re.compile(rb'<c\b[^>]*\br="' + re.escape(ref.encode()) + rb'"[^>]*(?:/>|>.*?</c>)', re.DOTALL)
+    m = pattern.search(row_xml)
+    old = m.group(0) if m else b""
+    style_m = re.search(rb'\bs="([^"]+)"', old)
+    style = (b' s="' + style_m.group(1) + b'"') if style_m else b""
+    if kind == "blank":
+        new = b'<c r="' + ref.encode() + b'"' + style + b'/>'
+    elif kind == "number":
+        new = b'<c r="' + ref.encode() + b'"' + style + b'><v>' + str(value).encode() + b'</v></c>'
+    elif kind == "text":
+        txt = _xml_escape(str(value or ""), {'"':'&quot;'})
+        new = b'<c r="' + ref.encode() + b'"' + style + b' t="inlineStr"><is><t xml:space="preserve">' + txt.encode('utf-8') + b'</t></is></c>'
+    elif kind == "formula_cache":
+        f_m = re.search(rb'(<f\b[^>]*>.*?</f>)', old, re.DOTALL)
+        formula = f_m.group(1) if f_m else b""
+        cache = _xml_escape(str(formula_cache or ""))
+        new = b'<c r="' + ref.encode() + b'"' + style + b' t="str">' + formula + b'<v>' + cache.encode('utf-8') + b'</v></c>'
+    elif kind == "formula_blank":
+        f_m = re.search(rb'(<f\b[^>]*>.*?</f>)', old, re.DOTALL)
+        formula = f_m.group(1) if f_m else b""
+        new = b'<c r="' + ref.encode() + b'"' + style + b' t="str">' + formula + b'<v></v></c>'
+    else:
+        raise ValueError(kind)
+    if m:
+        return row_xml[:m.start()] + new + row_xml[m.end():]
+    pos = row_xml.rfind(b'</row>')
+    return row_xml[:pos] + new + row_xml[pos:] if pos >= 0 else row_xml
+
+
+def _rewrite_product_activity_sheet(template_xml: bytes, rows: list[dict[str, Any]], sheet_kind: str, labor_col: int | None, labor_unit_col: int | None) -> bytes:
+    start_m = re.search(rb'<sheetData\b[^>]*>', template_xml)
+    end_m = re.search(rb'</sheetData>', template_xml)
+    if not start_m or not end_m:
+        raise ValueError("Product Activity Template worksheet XML 缺少 sheetData")
+    inside = template_xml[start_m.end():end_m.start()]
+    row_pattern = re.compile(rb'<row\b[^>]*\br="(\d+)"[^>]*>.*?</row>', re.DOTALL)
+    out=[]
+    data_count=len(rows)
+    max_template_row=2
+    for m in row_pattern.finditer(inside):
+        row_idx=int(m.group(1)); max_template_row=max(max_template_row,row_idx)
+        row_xml=m.group(0)
+        if row_idx < DATA_START_ROW:
+            out.append(row_xml); continue
+        item = rows[row_idx-DATA_START_ROW] if row_idx-DATA_START_ROW < data_count else None
+        # Official templates already contain blank preallocated rows and formulas.
+        # Leave unused rows byte-for-byte unchanged for speed and compatibility.
+        if item is None:
+            out.append(row_xml)
+            continue
+        if sheet_kind == "activity":
+            visible=[1,2,3,4,5,6,7,8]
+            if labor_col: visible.append(labor_col)
+            if labor_unit_col: visible.append(labor_unit_col)
+            if item is None:
+                for c in visible: row_xml=_replace_cell_xml(row_xml,row_idx,c,"blank")
+                for c in (20,21,22,23,24): row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_blank")
+            else:
+                year=int(item['year'])
+                # Excel 1900 date system serials; 1899-12-30 matches openpyxl/Excel.
+                start_serial=(date(year,1,1)-date(1899,12,30)).days
+                end_serial=(date(year,12,31)-date(1899,12,30)).days
+                vals={1:("text",item['product_name']),2:("number",start_serial),3:("number",end_serial),4:("text","Target Product"),5:("text",item['production_site']),6:("number",item['qty']),7:("text","SAP"),8:("blank",None)}
+                if labor_col: vals[labor_col]=(("number",item['labor_hours']) if item['labor_hours'] is not None else ("blank",None))
+                if labor_unit_col: vals[labor_unit_col]=(("text","hours") if item['labor_hours'] is not None else ("blank",None))
+                for c,(k,v) in vals.items(): row_xml=_replace_cell_xml(row_xml,row_idx,c,k,v)
+                for c,cache in {20:"FINISHED_PRODUCT",21:"SAP",22:"",23:"HOURS",24:""}.items():
+                    row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_cache",formula_cache=cache)
+        else:
+            visible=[1,3,4,6]
+            if item is None:
+                for c in visible: row_xml=_replace_cell_xml(row_xml,row_idx,c,"blank")
+                for c in range(22,29): row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_blank")
+            else:
+                for c,k,v in [(1,"text",item['product_name']),(3,"text",item['product_description']),(4,"text","Cradle-to-Gate"),(6,"text","PC")]:
+                    row_xml=_replace_cell_xml(row_xml,row_idx,c,k,v)
+                for c,cache in {22:"CRADLE_TO_GATE",23:"PC",24:"",25:"",26:"",27:"",28:""}.items():
+                    row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_cache",formula_cache=cache)
+        out.append(row_xml)
+    if data_count > max(0,max_template_row-DATA_START_ROW+1):
+        raise ValueError(f"Product Activity Template 預留列數不足：需要 {data_count} 筆，Template 僅支援 {max_template_row-DATA_START_ROW+1} 筆")
+    new_inside=b''.join(out)
+    return template_xml[:start_m.end()] + new_inside + template_xml[end_m.start():]
+
+
+def _write_product_activity_openxml(template_path: Path, output_path: Path, rows: list[dict[str, Any]], labor_col: int | None, labor_unit_col: int | None) -> None:
+    paths=_xlsx_sheet_paths(template_path)
+    activity_path=paths.get(ACTIVITY_SHEET_NAME); products_path=paths.get(PRODUCTS_SHEET_NAME)
+    if not activity_path or not products_path:
+        raise ValueError("Product Activity Bulk Template 缺少必要分頁")
+    with zipfile.ZipFile(template_path,'r') as zin, zipfile.ZipFile(output_path,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as zout:
+        for item in zin.infolist():
+            if item.is_dir():
+                zout.writestr(item,b''); continue
+            data=zin.read(item.filename)
+            if item.filename==activity_path:
+                data=_rewrite_product_activity_sheet(data,rows,'activity',labor_col,labor_unit_col)
+            elif item.filename==products_path:
+                data=_rewrite_product_activity_sheet(data,rows,'products',labor_col,labor_unit_col)
+            zout.writestr(item,data)
+
+
 def generate_product_activity_bulk_file(
     step1_output_path: str | Path,
     bulk_template_path: str | Path,
@@ -312,9 +512,6 @@ def generate_product_activity_bulk_file(
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # 重要：先完整複製原始 template，再在複製檔上寫入資料
-    shutil.copy2(bulk_template_path, output_path)
 
     df = pd.read_excel(step1_output_path, sheet_name=SOURCE_SHEET_NAME, dtype=object)
     source_total_rows = int(len(df))
@@ -365,51 +562,20 @@ def generate_product_activity_bulk_file(
         except ValueError:
             pass
 
-    # 直接開啟複製後的檔案，只寫入兩個指定分頁
-    wb = load_workbook(output_path)
+    # 直接從 OpenXML 表頭取得欄位位置；不載入或重新儲存整本 Workbook。
+    activity_header_map = _template_header_columns(bulk_template_path, ACTIVITY_SHEET_NAME)
+    product_header_map = _template_header_columns(bulk_template_path, PRODUCTS_SHEET_NAME)
+    if not activity_header_map or not product_header_map:
+        raise ValueError("Product Activity Bulk Template 缺少必要分頁或表頭")
+    activity_labor_hours_col = _find_header_col_map(activity_header_map, [
+        "Working Hour (optional)", "Working Hours (optional)", "Working Hour", "Working Hours",
+        "年度總工時", "Total working hours", "Total Hours", "Labor Hours", "生產工時", "工時", "Hours"
+    ])
+    activity_labor_hours_unit_col = _find_header_col_map(activity_header_map, [
+        "Working Hours Unit (optional)", "Working Hour Unit (optional)", "Working Hours Unit", "Working Hour Unit",
+        "工時單位", "生產工時單位", "Hours Unit", "Hour Unit"
+    ])
 
-    if ACTIVITY_SHEET_NAME not in wb.sheetnames:
-        raise ValueError(f"找不到 bulk template 分頁：{ACTIVITY_SHEET_NAME}")
-
-    if PRODUCTS_SHEET_NAME not in wb.sheetnames:
-        raise ValueError(f"找不到 bulk template 分頁：{PRODUCTS_SHEET_NAME}")
-
-    activity_ws = wb[ACTIVITY_SHEET_NAME]
-    products_ws = wb[PRODUCTS_SHEET_NAME]
-
-    # Optional working-hour target columns in bulk template.
-    # Row 1 system key and row 2 display header are both searched.
-    activity_labor_hours_col = _find_excel_column(
-        activity_ws,
-        [
-            "Working Hour (optional)", "Working Hours (optional)",
-            "Working Hour", "Working Hours",
-            "年度總工時", "Total working hours", "Total Hours",
-            "Labor Hours", "生產工時", "工時", "Hours"
-        ],
-    )
-    activity_labor_hours_unit_col = _find_excel_column(
-        activity_ws,
-        [
-            "Working Hours Unit (optional)", "Working Hour Unit (optional)",
-            "Working Hours Unit", "Working Hour Unit",
-            "工時單位", "生產工時單位", "Hours Unit", "Hour Unit"
-        ],
-    )
-
-    # 只清除要寫入的欄位內容，不碰格式/驗證/公式
-    # Activity Data: A:H + optional working-hour columns
-    activity_clear_cols = [1, 2, 3, 4, 5, 6, 7, 8]
-    for col_idx in [activity_labor_hours_col, activity_labor_hours_unit_col]:
-        if col_idx and col_idx not in activity_clear_cols:
-            activity_clear_cols.append(col_idx)
-    _clear_target_cells(activity_ws, DATA_START_ROW, columns=activity_clear_cols)
-    # Products: A, C, D, F
-    # C 欄 Product Description 新增由 Step1 Output 的 Material Description 帶入
-    _clear_target_cells(products_ws, DATA_START_ROW, columns=[1, 3, 4, 6])
-
-    activity_row = DATA_START_ROW
-    products_row = DATA_START_ROW
     excluded_wip_rows = 0
     excluded_structural_wip_rows = 0
     skipped_blank_rows = 0
@@ -533,55 +699,17 @@ def generate_product_activity_bulk_file(
         })
 
     rows_total = int(len(rows_to_write))
-    for write_index, item in enumerate(rows_to_write, start=1):
-        if write_index == rows_total or write_index % 1000 == 0:
-            write_progress = 52 + int((write_index / max(1, rows_total)) * 38)
-            report("寫入 Product Activity Bulk", write_index, rows_total, write_progress)
-        product_name = item["product_name"]
-        year = int(item["year"])
-        qty = item["qty"]
-        product_description = item["product_description"]
-        production_site = item["production_site"]
-        labor_hours = item["labor_hours"]
-
-        # 分頁 1：Input Sheet Activity Data
-        activity_ws.cell(activity_row, 1).value = product_name
-        activity_ws.cell(activity_row, 2).value = date(year, 1, 1)
-        activity_ws.cell(activity_row, 3).value = date(year, 12, 31)
-        activity_ws.cell(activity_row, 4).value = "Target Product"
-        activity_ws.cell(activity_row, 5).value = production_site
-        activity_ws.cell(activity_row, 6).value = qty
-        activity_ws.cell(activity_row, 7).value = "SAP"
-        activity_ws.cell(activity_row, 8).value = None
-
-        if activity_labor_hours_col and labor_hours_col:
-            activity_ws.cell(activity_row, activity_labor_hours_col).value = labor_hours
-
-        if activity_labor_hours_unit_col and labor_hours_col:
-            activity_ws.cell(activity_row, activity_labor_hours_unit_col).value = "hours"
-
-        activity_ws.cell(activity_row, 2).number_format = "yyyy/mm/dd"
-        activity_ws.cell(activity_row, 3).number_format = "yyyy/mm/dd"
-
-        # 分頁 2：Input Sheet Products
-        # A欄 Product Name 保留公式邏輯，直接引用分頁1的 A欄 Product Name。
-        # 這樣不會把原本 template 的設計改成純文字。
-        products_ws.cell(products_row, 1).value = f"='{ACTIVITY_SHEET_NAME}'!A{activity_row}"
-        products_ws.cell(products_row, 3).value = product_description
-        products_ws.cell(products_row, 4).value = "Cradle-to-Gate"
-        products_ws.cell(products_row, 6).value = "PC"
-
-        activity_row += 1
-        products_row += 1
-
-    report("儲存 Product Activity Bulk", rows_total, rows_total, 95)
-    wb.save(output_path)
+    report("寫入 Product Activity Bulk", 0, rows_total, 55)
+    _write_product_activity_openxml(
+        bulk_template_path, output_path, rows_to_write,
+        activity_labor_hours_col, activity_labor_hours_unit_col,
+    )
     report("Product Activity Bulk 已完成", rows_total, rows_total, 100)
 
     return {
         "source_rows": int(len(df)),
-        "activity_rows": int(activity_row - DATA_START_ROW),
-        "product_rows": int(products_row - DATA_START_ROW),
+        "activity_rows": int(rows_total),
+        "product_rows": int(rows_total),
         "excluded_wip_rows": int(excluded_wip_rows),
         "excluded_structural_wip_rows": int(excluded_structural_wip_rows),
         "structural_wip_filter_applied": bool(working_hour_source == "include_semi"),
@@ -591,10 +719,12 @@ def generate_product_activity_bulk_file(
         "excluded_zero_labor_hour_rows": int(excluded_zero_labor_hour_rows),
         "step2_product_name_consolidation_enabled": True,
         "valid_rows_before_consolidation": int(source_valid_rows),
-        "unique_product_names_after_consolidation": int(activity_row - DATA_START_ROW),
+        "unique_product_names_after_consolidation": int(rows_total),
         "duplicated_product_rows_merged": int(duplicated_product_rows_merged),
         "output_filename": output_path.name,
         "template_copy_mode": True,
+        "openxml_template_preserve_mode": True,
+        "openpyxl_workbook_save_used": False,
         "product_description_from_material_description": True,
         "labor_hours_from_step1": bool(labor_hours_col),
         "labor_hours_written_to_bulk": bool(labor_hours_col and activity_labor_hours_col),
