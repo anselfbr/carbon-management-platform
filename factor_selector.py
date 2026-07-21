@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_OFFICIAL_TEMPLATE_UPLOAD_V4_20260718"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_AA_AG_GENERAL_FORMAT_V5_20260721"
 
 
 def _norm(value: Any) -> str:
@@ -377,6 +377,30 @@ def _rewrite_formula_row_refs(formula_xml: bytes | None, source_row: int, target
     return re.sub(pattern, lambda m: m.group(1) + dst, formula_xml)
 
 
+def _coerce_general_numeric_value(value: Any) -> Any:
+    """Convert numeric-looking helper text to a real Excel number when safe."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    compact = text.replace(",", "")
+    if not re.fullmatch(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", compact):
+        return value
+    unsigned = compact.lstrip("+-")
+    integer_part = unsigned.split(".", 1)[0].split("e", 1)[0].split("E", 1)[0]
+    # Preserve code-like values such as 00123.
+    if len(integer_part) > 1 and integer_part.startswith("0") and not unsigned.startswith("0."):
+        return value
+    try:
+        number = float(compact)
+    except Exception:
+        return value
+    if not math.isfinite(number):
+        return value
+    return int(number) if number.is_integer() and "e" not in compact.lower() and "." not in compact else number
+
+
 def _manual_row_xml(
     row_idx: int,
     values: list[Any],
@@ -386,13 +410,17 @@ def _manual_row_xml(
     template_row_attrs: bytes | None = None,
     template_formula_row: int = DATA_START_ROW,
     emit_empty_styles: bool = False,
+    general_numeric_cols: set[int] | None = None,
 ) -> bytes:
     width = int(width or len(values) or 1)
     style_by_col = style_by_col or {}
     formula_by_col = formula_by_col or {}
+    general_numeric_cols = general_numeric_cols or set()
     cells = []
     for col_idx in range(1, width + 1):
         value = values[col_idx - 1] if col_idx <= len(values) else None
+        if col_idx in general_numeric_cols:
+            value = _coerce_general_numeric_value(value)
         formula_xml = None
         if (value is None or (isinstance(value, str) and value == "")) and col_idx in formula_by_col:
             formula_xml = _rewrite_formula_row_refs(formula_by_col.get(col_idx), template_formula_row, row_idx)
@@ -686,6 +714,7 @@ def _spool_sheet_rows_xml(
     template_row_attrs: bytes | None = None,
     template_formula_row: int = DATA_START_ROW,
     emit_empty_styles: bool = False,
+    general_numeric_cols: set[int] | None = None,
 ) -> tuple[int, int]:
     count = 0
     max_width = int(width or 1)
@@ -705,6 +734,7 @@ def _spool_sheet_rows_xml(
                 template_row_attrs=template_row_attrs,
                 template_formula_row=template_formula_row,
                 emit_empty_styles=emit_empty_styles,
+                general_numeric_cols=general_numeric_cols,
             ))
             if progress_callback and progress_span and (count == 1 or count % 5000 == 0):
                 elapsed = max(0.001, time.perf_counter() - start_time)
@@ -724,6 +754,67 @@ def _first_existing_name(names: Iterable[str], aliases: Iterable[str]) -> str | 
         if found:
             return found
     return None
+
+
+def _style_format_profile(styles_xml: bytes | None) -> tuple[set[str], str]:
+    """Return text-formatted style IDs and an existing General style ID.
+
+    The third-party parser treats AA~AG helper cells formatted as Excel Text as
+    literal text, even when the cells contain formulas or numeric-looking
+    values.  We keep the official template style whenever it is not Text.  For
+    Text styles, we reuse an existing General style from the same workbook so
+    the workbook package and style table remain untouched.
+    """
+    if not styles_xml:
+        return set(), "0"
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    try:
+        root = ET.fromstring(styles_xml)
+    except Exception:
+        return set(), "0"
+
+    custom_formats: dict[int, str] = {}
+    for node in root.findall("m:numFmts/m:numFmt", ns):
+        try:
+            custom_formats[int(node.attrib.get("numFmtId", "-1"))] = str(node.attrib.get("formatCode", ""))
+        except Exception:
+            continue
+
+    text_style_ids: set[str] = set()
+    general_style_id: str | None = None
+    xfs = root.findall("m:cellXfs/m:xf", ns)
+    for idx, xf in enumerate(xfs):
+        try:
+            num_fmt_id = int(xf.attrib.get("numFmtId", "0") or 0)
+        except Exception:
+            num_fmt_id = 0
+        if num_fmt_id == 0 and general_style_id is None:
+            general_style_id = str(idx)
+        format_code = custom_formats.get(num_fmt_id, "")
+        normalized_code = re.sub(r"\s+", "", format_code).strip('"').lower()
+        if num_fmt_id == 49 or normalized_code == "@":
+            text_style_ids.add(str(idx))
+    return text_style_ids, general_style_id or "0"
+
+
+def _normalize_activity_helper_styles(
+    style_by_col: dict[int, str],
+    styles_xml: bytes | None,
+) -> tuple[dict[int, str], dict[str, Any]]:
+    """Keep AA~AG template styles, replacing only Excel Text with General."""
+    normalized = dict(style_by_col or {})
+    text_style_ids, general_style_id = _style_format_profile(styles_xml)
+    replaced: list[str] = []
+    for col_idx in _M3_ACTIVITY_HELPER_FORMULA_COL_RANGE:
+        style_id = str(normalized.get(int(col_idx), "") or "")
+        if style_id in text_style_ids:
+            normalized[int(col_idx)] = general_style_id
+            replaced.append(_xlsx_col_letter(int(col_idx)))
+    return normalized, {
+        "helper_general_style_id": general_style_id,
+        "helper_text_style_ids": sorted(text_style_ids),
+        "helper_text_styles_replaced": replaced,
+    }
 
 
 def _template_row_format(inside_sheetdata: bytes, row_idx: int, width: int) -> tuple[dict[int, str], dict[int, bytes], bytes | None]:
@@ -848,9 +939,14 @@ def _write_template_applied_workbook(
         with zipfile.ZipFile(template_path, "r") as zpeek:
             activity_template_xml_peek = zpeek.read(activity_sheet_path)
             raw_template_xml_peek = zpeek.read(raw_sheet_path)
+            styles_xml_peek = zpeek.read("xl/styles.xml") if "xl/styles.xml" in zpeek.namelist() else None
         _, activity_inside, _, _ = _split_sheet_xml(activity_template_xml_peek)
         _, raw_inside, _, _ = _split_sheet_xml(raw_template_xml_peek)
         activity_style_by_col, activity_formula_by_col, activity_row_attrs = _template_row_format(activity_inside, DATA_START_ROW, activity_width)
+        activity_style_by_col, helper_style_summary = _normalize_activity_helper_styles(
+            activity_style_by_col,
+            styles_xml_peek,
+        )
         # Some production templates may contain AB~AG formulas but have AA3
         # accidentally blank. Rebuild only the official AA document_type helper
         # formula so the hidden key resolves from visible E, matching manual
@@ -870,6 +966,7 @@ def _write_template_applied_workbook(
             formula_by_col=activity_formula_by_col,
             template_row_attrs=activity_row_attrs,
             emit_empty_styles=False,
+            general_numeric_cols=set(_M3_ACTIVITY_HELPER_FORMULA_COL_RANGE),
         )
         raw_count, raw_actual_width = _spool_sheet_rows_xml(
             raw_rows_iter,
@@ -906,7 +1003,12 @@ def _write_template_applied_workbook(
             raw_template_xml = zin.read(raw_sheet_path)
             _write_sheet_part_from_template(zout, activity_sheet_path, activity_template_xml, activity_header_rows, activity_xml_tmp, activity_count, final_activity_width)
             _write_sheet_part_from_template(zout, raw_sheet_path, raw_template_xml, raw_header_rows, raw_xml_tmp, raw_count, final_raw_width)
-    return {"activity_rows": int(activity_count), "raw_material_rows": int(raw_count)}
+    return {
+        "activity_rows": int(activity_count),
+        "raw_material_rows": int(raw_count),
+        "aa_ag_text_styles_replaced": list(helper_style_summary.get("helper_text_styles_replaced", [])),
+        "aa_ag_general_style_id": helper_style_summary.get("helper_general_style_id", "0"),
+    }
 
 
 def _build_source_col_map(
@@ -2115,7 +2217,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_OFFICIAL_TEMPLATE_UPLOAD_V4_20260718"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_AA_AG_GENERAL_FORMAT_V5_20260721"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
