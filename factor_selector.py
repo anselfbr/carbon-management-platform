@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_DYNAMIC_TEMPLATE_HEADERS_V9_20260721"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_NEW_TEMPLATE_N_YES_AB_AI_FORMULAS_V7_20260721"
 
 
 def _norm(value: Any) -> str:
@@ -268,6 +268,7 @@ _ACTIVITY_SOURCE_ALIASES: dict[str, list[str]] = {
         "Calculate Transportation Emissions (Required)",
         "Calculate Transportation Emissions",
         "calculate_transportation_emissions",
+        "is_transportation_emission_calculated",
     ],
     "target_product": ["Product Name", "allocated_target_product_service", "Target Product", "target_product"],
     "comment": ["Comment", "comment"],
@@ -295,12 +296,13 @@ _ACTIVITY_SOURCE_DEFAULT_COLS: dict[str, int] = {
     "weight_unit": 11,
     "data_source": 12,
     "data_source_other": 13,
-    "supplier_name": 14,
-    "transport_origin": 15,
-    "transport_destination": 16,
-    "target_product": 17,
-    "comment": 18,
-    "material_group": 19,
+    "calculate_transportation_emissions": 14,
+    "supplier_name": 15,
+    "transport_origin": 16,
+    "transport_destination": 17,
+    "target_product": 18,
+    "comment": 19,
+    "material_group": 20,
 }
 
 _RAW_SOURCE_DEFAULT_COLS: dict[str, int] = {
@@ -392,7 +394,7 @@ def _manual_cell_xml(
                     )
             except Exception:
                 pass
-        # Formula results in AB~AH are lookup keys/names.  Store them as a
+        # Formula results in AB~AI are lookup keys/names.  Store them as a
         # formula string result (t="str") while the cell number format remains
         # the original/General style.  This is not Excel Text number format.
         return (
@@ -433,7 +435,7 @@ def _rewrite_formula_row_refs(formula_xml: bytes | None, source_row: int, target
     # Adjust simple A3 / $A$3 style references in row-level template formulas.
     src = str(int(source_row)).encode("ascii")
     dst = str(int(target_row)).encode("ascii")
-    pattern = rb'(?<![A-Za-z0-9_])((?:\$?[A-Z]{1,3})\$?)' + src + rb'(?![0-9])'
+    pattern = rb'(?<![A-Za-z0-9_])(\$?[A-Z]{1,3})' + src + rb'(?![0-9])'
     return re.sub(pattern, lambda m: m.group(1) + dst, formula_xml)
 
 
@@ -606,135 +608,68 @@ def _copy_matching_value_to_target(target_row: list[Any], target_col: int | None
 
 
 
-# M3A supports only the revised third-party Raw Material Bulk Template, but it
-# locates both the visible transportation flag and hidden helper formulas by
-# their header keys rather than fixed Excel column letters. This prevents future
-# template insertions/reordering from breaking M3A.
+# M3 final output keeps the revised third-party template helper formulas.
+# Visible data is in A~AA. Hidden helpers are fixed at AB~AI and begin at row 3.
+_M3_ACTIVITY_HELPER_FORMULA_COL_RANGE = range(28, 36)  # AB~AI
+_M3_DOCUMENT_TYPE_HELPER_COL = 28  # AB
 _M3_DOCUMENT_TYPE_HELPER_KEY = "document_type"
-_M3_TRANSPORT_CALC_FIELD_ALIASES = tuple(_ACTIVITY_SOURCE_ALIASES["calculate_transportation_emissions"])
+_M3_DOCUMENT_TYPE_HELPER_FORMULA_XML = b"""<f>IF(E3="","",INDEX('Dropdown Values'!$B$2:$B$5,MATCH(E3,'Dropdown Values'!$A$2:$A$5,0)))</f>"""
 _M3_TRANSPORT_CALC_DEFAULT_VALUE = "Yes"
-_M3_ACTIVITY_HELPER_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("document_type", ("document_type",)),
-    ("activity_data_unit", ("activity_data_unit",)),
-    ("weight_unit", ("weight_unit",)),
-    ("data_source", ("data_source",)),
-    ("supplier_name_resolved", ("supplier_name_resolved",)),
-    ("supplier_code_resolved", ("supplier_code_resolved",)),
-    ("country_area", ("country_area",)),
+_M3_ACTIVITY_HELPER_HEADER_KEYS = (
+    "document_type",
+    "activity_data_unit",
+    "weight_unit",
+    "data_source",
+    "supplier_name_resolved",
+    "supplier_code_resolved",
+    "country_area",
+    "is_transportation_emission_calculated",
 )
 
-
-def _find_internal_header_col(target_activity_headers: list[list[Any]], aliases: Iterable[str]) -> int | None:
-    """Find a hidden/helper field by its internal header key, preferring row 1."""
-    alias_keys = {_norm(alias) for alias in aliases if _text(alias)}
-    if not alias_keys:
-        return None
-    width = _max_header_width(target_activity_headers)
-    row_order = [0] + list(range(1, len(target_activity_headers)))
-    for row_idx in row_order:
-        if row_idx >= len(target_activity_headers):
-            continue
-        row = target_activity_headers[row_idx]
-        for col_idx in range(1, width + 1):
-            if col_idx - 1 < len(row) and _norm(row[col_idx - 1]) in alias_keys:
-                return col_idx
-    return None
-
-
-def _activity_helper_layout(target_activity_headers: list[list[Any]], width: int) -> tuple[tuple[int, ...], int]:
-    """Locate revised-template fields dynamically from their table headers."""
-    transport_col = _find_col_in_header_values(
-        target_activity_headers,
-        list(_M3_TRANSPORT_CALC_FIELD_ALIASES),
-        required=False,
-    )
-    if not transport_col:
-        raise ValueError(
-            "正式 Raw Material Bulk Template 版本不符：缺少欄位 "
-            "Calculate Transportation Emissions (Required)。"
-        )
-
-    helper_cols: list[int] = []
+def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activity_headers: list[list[Any]], width: int) -> set[int]:
+    """Preserve revised-template AB~AI formulas from row 3 onward."""
+    width = int(width or _max_header_width(target_activity_headers) or 1)
     missing_headers: list[str] = []
-    for helper_key, aliases in _M3_ACTIVITY_HELPER_FIELDS:
-        col_idx = _find_internal_header_col(target_activity_headers, aliases)
-        if not col_idx:
-            missing_headers.append(helper_key)
-        else:
-            helper_cols.append(int(col_idx))
-
+    row1 = target_activity_headers[0] if target_activity_headers else []
+    for col_idx, expected_key in zip(_M3_ACTIVITY_HELPER_FORMULA_COL_RANGE, _M3_ACTIVITY_HELPER_HEADER_KEYS):
+        actual = row1[col_idx - 1] if col_idx - 1 < len(row1) else None
+        if _norm(actual) != _norm(expected_key):
+            missing_headers.append(f"{_xlsx_col_letter(col_idx)}={expected_key}")
     if missing_headers:
         raise ValueError(
-            "正式 Raw Material Bulk Template 版本不符：缺少隱藏公式欄位表頭："
+            "正式 Raw Material Bulk Template 版本不符：AB～AI 隱藏欄位表頭不完整："
             + ", ".join(missing_headers)
-            + "。"
         )
-    if len(set(helper_cols)) != len(helper_cols):
-        raise ValueError("正式 Raw Material Bulk Template 版本不符：隱藏公式欄位表頭有重複對應。")
-    if int(transport_col) in set(helper_cols):
-        raise ValueError(
-            "正式 Raw Material Bulk Template 版本不符："
-            "Calculate Transportation Emissions (Required) 與隱藏公式欄位發生欄位衝突。"
-        )
-    if helper_cols and int(width or 0) < max(helper_cols):
-        raise ValueError("正式 Raw Material Bulk Template 版本不符：隱藏公式欄位超出工作表範圍。")
-    return tuple(helper_cols), helper_cols[0]
-
-
-def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activity_headers: list[list[Any]], width: int) -> set[int]:
-    """Require and preserve the seven helper formulas located by header keys."""
-    helper_cols, _document_type_idx = _activity_helper_layout(
-        target_activity_headers,
-        int(width or _max_header_width(target_activity_headers) or 1),
-    )
-    missing: list[str] = []
-    for col_idx in helper_cols:
-        try:
-            value = tpl_activity_ws.cell(DATA_START_ROW, int(col_idx)).value
-        except Exception:
-            value = None
-        if not (isinstance(value, str) and value.startswith("=")):
-            missing.append(_xlsx_col_letter(int(col_idx)))
-    if missing:
-        raise ValueError(
-            "正式 Raw Material Bulk Template 版本不符："
-            "依表頭定位的隱藏欄位必須保留公式，缺少公式欄位："
-            + ", ".join(missing)
-            + "。"
-        )
-    return set(int(col) for col in helper_cols)
+    if width < max(_M3_ACTIVITY_HELPER_FORMULA_COL_RANGE):
+        raise ValueError("正式 Raw Material Bulk Template 版本不符：工作表範圍未延伸至 AI 欄。")
+    return set(int(col) for col in _M3_ACTIVITY_HELPER_FORMULA_COL_RANGE)
 
 
 def _activity_helper_cache_specs(
     template_wb,
     target_activity_cols: dict[str, int | None],
     factor_cols: dict[str, int],
-    helper_cols: Iterable[int],
 ) -> dict[int, tuple[int, dict[str, Any], dict[str, Any]]]:
-    """Map dynamically located helper formulas to their visible source cells."""
+    """Map AB~AI formulas to visible cells and Dropdown lookups in one pass."""
     dropdown_name = _first_existing_name(template_wb.sheetnames, ["Dropdown Values", "Dropdown Value", "Dropdown"])
     if not dropdown_name:
-        raise ValueError("正式 Raw Material Bulk Template 缺少 Dropdown Values 分頁，無法建立隱藏公式快取值。")
+        raise ValueError("正式 Raw Material Bulk Template 缺少 Dropdown Values 分頁，無法建立 AB～AI 公式快取值。")
     ws = template_wb[dropdown_name]
-    helper_cols = tuple(int(col) for col in helper_cols)
-    if len(helper_cols) != 7:
-        raise ValueError(f"正式 Raw Material Bulk Template 隱藏公式欄位數量應為 7，目前偵測為 {len(helper_cols)}。")
     raw_specs = {
-        helper_cols[0]: (target_activity_cols.get("document_type"), 1, 2),
-        helper_cols[1]: (target_activity_cols.get("unit"), 3, 4),
-        helper_cols[2]: (target_activity_cols.get("weight_unit"), 5, 6),
-        helper_cols[3]: (target_activity_cols.get("data_source"), 7, 8),
-        helper_cols[4]: (target_activity_cols.get("supplier_name"), 15, 23),
-        helper_cols[5]: (target_activity_cols.get("supplier_name"), 15, 24),
-        helper_cols[6]: (factor_cols.get("country_area"), 22, 25),
+        28: (target_activity_cols.get("document_type"), 1, 2),
+        29: (target_activity_cols.get("unit"), 3, 4),
+        30: (target_activity_cols.get("weight_unit"), 5, 6),
+        31: (target_activity_cols.get("data_source"), 7, 8),
+        32: (target_activity_cols.get("supplier_name"), 15, 23),
+        33: (target_activity_cols.get("supplier_name"), 15, 24),
+        34: (factor_cols.get("country_area"), 22, 25),
+        35: (target_activity_cols.get("calculate_transportation_emissions"), 13, 14),
     }
     maps: dict[int, tuple[int, dict[str, Any], dict[str, Any], int, int]] = {}
     for helper_col, (source_col, display_col, key_col) in raw_specs.items():
         if source_col:
             maps[int(helper_col)] = (int(source_col), {}, {}, int(display_col), int(key_col))
 
-    # read_only worksheets are optimized for sequential iter_rows. Calling
-    # ws.cell() thousands of times reparses the XML and is prohibitively slow.
     for values in ws.iter_rows(min_row=2, max_col=25, values_only=True):
         for helper_col, (_source_col, exact, normalized, display_col, key_col) in maps.items():
             display = _text(values[display_col - 1] if display_col <= len(values) else None)
@@ -756,7 +691,7 @@ def _apply_preserved_formula_cache_cells(
     cache_specs: dict[int, tuple[int, dict[str, Any], dict[str, Any]]],
     stats: dict[str, Any] | None = None,
 ) -> None:
-    """Keep helper formulas and attach formula-result caches for third-party parsers."""
+    """Keep AB~AI formulas and attach formula-result caches for third-party parsers."""
     if not formula_cols:
         return
     if stats is not None:
@@ -838,6 +773,69 @@ def _sheet_paths_by_name_from_xlsx(path: str | Path) -> dict[str, str]:
                 if name and rid in rels:
                     sheet_paths[name] = rels[rid]
         return sheet_paths
+
+
+def _first_header_rows_from_xlsx(
+    path: str | Path,
+    sheet_name: str,
+    header_row_count: int = DATA_START_ROW - 1,
+) -> list[list[Any]]:
+    """Read real header cells directly from XML, ignoring stale dimension refs."""
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    sheet_paths = _sheet_paths_by_name_from_xlsx(path)
+    sheet_xml_path = sheet_paths.get(sheet_name)
+    if not sheet_xml_path:
+        raise ValueError(f"Raw Material Bulk Template 找不到分頁：{sheet_name}")
+    shared: list[str] = []
+    row_maps: dict[int, dict[int, Any]] = {row: {} for row in range(1, header_row_count + 1)}
+    max_col = 1
+    with zipfile.ZipFile(path) as zf:
+        if "xl/sharedStrings.xml" in zf.namelist():
+            for _event, si in ET.iterparse(zf.open("xl/sharedStrings.xml"), events=("end",)):
+                if si.tag == f"{ns}si":
+                    shared.append("".join(t.text or "" for t in si.iter(f"{ns}t")))
+                    si.clear()
+        for _event, row_el in ET.iterparse(zf.open(sheet_xml_path), events=("end",)):
+            if row_el.tag != f"{ns}row":
+                continue
+            try:
+                row_idx = int(row_el.attrib.get("r", "0") or 0)
+            except Exception:
+                row_idx = 0
+            if row_idx > header_row_count:
+                row_el.clear()
+                break
+            if row_idx in row_maps:
+                for cell in row_el.findall(f"{ns}c"):
+                    ref = cell.attrib.get("r", "")
+                    letters = re.sub(r"[^A-Z]", "", ref.upper())
+                    col_idx = 0
+                    for ch in letters:
+                        col_idx = col_idx * 26 + (ord(ch) - 64)
+                    if col_idx < 1:
+                        continue
+                    max_col = max(max_col, col_idx)
+                    cell_type = cell.attrib.get("t", "")
+                    value: Any = ""
+                    if cell_type == "inlineStr":
+                        value = "".join(t.text or "" for t in cell.iter(f"{ns}t"))
+                    else:
+                        v = cell.find(f"{ns}v")
+                        if v is not None and v.text is not None:
+                            raw = v.text
+                            if cell_type == "s":
+                                try:
+                                    value = shared[int(raw)]
+                                except Exception:
+                                    value = raw
+                            else:
+                                value = raw
+                    row_maps[row_idx][col_idx] = value
+            row_el.clear()
+    return [
+        [row_maps[row_idx].get(col, None) for col in range(1, max_col + 1)]
+        for row_idx in range(1, header_row_count + 1)
+    ]
 
 
 def _split_sheet_xml(sheet_xml: bytes) -> tuple[bytes, bytes, bytes, bytes]:
@@ -955,7 +953,7 @@ def _first_existing_name(names: Iterable[str], aliases: Iterable[str]) -> str | 
 def _style_format_profile(styles_xml: bytes | None) -> tuple[set[str], str]:
     """Return text-formatted style IDs and an existing General style ID.
 
-    The third-party parser treats AB~AH helper cells formatted as Excel Text as
+    The third-party parser treats AB~AI helper cells formatted as Excel Text as
     literal text, even when the cells contain formulas or numeric-looking
     values.  We keep the official template style whenever it is not Text.  For
     Text styles, we reuse an existing General style from the same workbook so
@@ -996,13 +994,12 @@ def _style_format_profile(styles_xml: bytes | None) -> tuple[set[str], str]:
 def _normalize_activity_helper_styles(
     style_by_col: dict[int, str],
     styles_xml: bytes | None,
-    helper_cols: Iterable[int],
 ) -> tuple[dict[int, str], dict[str, Any]]:
-    """Keep helper template styles, replacing only Excel Text with General."""
+    """Keep AB~AI template styles, replacing only Excel Text with General."""
     normalized = dict(style_by_col or {})
     text_style_ids, general_style_id = _style_format_profile(styles_xml)
     replaced: list[str] = []
-    for col_idx in tuple(int(col) for col in helper_cols):
+    for col_idx in _M3_ACTIVITY_HELPER_FORMULA_COL_RANGE:
         style_id = str(normalized.get(int(col_idx), "") or "")
         if style_id in text_style_ids:
             normalized[int(col_idx)] = general_style_id
@@ -1022,9 +1019,8 @@ def _template_row_format(inside_sheetdata: bytes, row_idx: int, width: int) -> t
     row_attrs = open_m.group(1) if open_m else None
     style_by_col: dict[int, str] = {}
     formula_by_col: dict[int, bytes] = {}
-    # Match self-closing cells first. Otherwise an empty AA cell such as
-    # <c r="AA3"/> can be mistaken for the opening tag of the following AB
-    # formula cell, moving AB's formula into AA and corrupting the column layout.
+    # Match self-closing cells first so an empty AA cell cannot consume the
+    # following AB formula cell and shift helper formulas to the wrong column.
     for cell_m in re.finditer(rb'<c\b([^>]*)/>|<c\b([^>]*)>(.*?)</c>', row_xml, flags=re.DOTALL):
         attrs = cell_m.group(1) or cell_m.group(2) or b''
         body = cell_m.group(3) or b''
@@ -1143,19 +1139,19 @@ def _write_template_applied_workbook(
         _, activity_inside, _, _ = _split_sheet_xml(activity_template_xml_peek)
         _, raw_inside, _, _ = _split_sheet_xml(raw_template_xml_peek)
         activity_style_by_col, activity_formula_by_col, activity_row_attrs = _template_row_format(activity_inside, DATA_START_ROW, activity_width)
-        helper_cols, document_type_helper_col = _activity_helper_layout(activity_header_rows, activity_width)
         activity_style_by_col, helper_style_summary = _normalize_activity_helper_styles(
             activity_style_by_col,
             styles_xml_peek,
-            helper_cols,
         )
-        missing_formula_cols = [col for col in helper_cols if col not in activity_formula_by_col]
-        if missing_formula_cols:
-            raise ValueError(
-                "正式 Raw Material Bulk Template 版本不符："
-                "依表頭定位的隱藏欄位必須包含完整公式，缺少："
-                + ", ".join(_xlsx_col_letter(col) for col in missing_formula_cols)
-            )
+        # Some production templates may contain AB~AG formulas but have AA3
+        # accidentally blank. Rebuild only the official AA document_type helper
+        # formula so the hidden key resolves from visible E, matching manual
+        # paste behavior in the third-party template.
+        if (
+            activity_width >= _M3_DOCUMENT_TYPE_HELPER_COL
+            and _M3_DOCUMENT_TYPE_HELPER_COL not in activity_formula_by_col
+        ):
+            activity_formula_by_col[_M3_DOCUMENT_TYPE_HELPER_COL] = _M3_DOCUMENT_TYPE_HELPER_FORMULA_XML
         raw_style_by_col, raw_formula_by_col, raw_row_attrs = _template_row_format(raw_inside, DATA_START_ROW, raw_width)
         activity_count, activity_actual_width = _spool_sheet_rows_xml(
             activity_rows_iter,
@@ -1166,7 +1162,7 @@ def _write_template_applied_workbook(
             formula_by_col=activity_formula_by_col,
             template_row_attrs=activity_row_attrs,
             emit_empty_styles=False,
-            general_numeric_cols=set(helper_cols),
+            general_numeric_cols=set(_M3_ACTIVITY_HELPER_FORMULA_COL_RANGE),
         )
         raw_count, raw_actual_width = _spool_sheet_rows_xml(
             raw_rows_iter,
@@ -1206,11 +1202,8 @@ def _write_template_applied_workbook(
     return {
         "activity_rows": int(activity_count),
         "raw_material_rows": int(raw_count),
-        "activity_helper_text_styles_replaced": list(helper_style_summary.get("helper_text_styles_replaced", [])),
-        "activity_helper_general_style_id": helper_style_summary.get("helper_general_style_id", "0"),
-        # Backward-compatible diagnostic keys retained for callers that already read them.
-        "ab_ah_text_styles_replaced": list(helper_style_summary.get("helper_text_styles_replaced", [])),
-        "ab_ah_general_style_id": helper_style_summary.get("helper_general_style_id", "0"),
+        "ab_ai_text_styles_replaced": list(helper_style_summary.get("helper_text_styles_replaced", [])),
+        "ab_ai_general_style_id": helper_style_summary.get("helper_general_style_id", "0"),
     }
 
 
@@ -1296,8 +1289,8 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
 
         source_activity_headers = _first_header_rows(src_activity_ws, DATA_START_ROW - 1)
         source_raw_headers = _first_header_rows(src_raw_ws, DATA_START_ROW - 1) if src_raw_ws is not None else [[], []]
-        target_activity_headers = _first_header_rows(tpl_activity_ws, DATA_START_ROW - 1)
-        target_raw_headers = _first_header_rows(tpl_raw_ws, DATA_START_ROW - 1)
+        target_activity_headers = _first_header_rows_from_xlsx(raw_material_template_path, tpl_activity_name, DATA_START_ROW - 1)
+        target_raw_headers = _first_header_rows_from_xlsx(raw_material_template_path, tpl_raw_name, DATA_START_ROW - 1)
 
         # Add M3 factor columns only if the third-party template does not already contain them.
         factor_cols: dict[str, int] = {}
@@ -1317,15 +1310,10 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         source_raw_cols = _build_source_col_map(source_raw_headers, _RAW_SOURCE_ALIASES, _RAW_SOURCE_DEFAULT_COLS)
         source_exact = _build_exact_source_lookup(source_activity_headers)
         raw_exact = _build_exact_source_lookup(source_raw_headers)
-        activity_helper_cols, _document_type_helper_col = _activity_helper_layout(
-            target_activity_headers,
-            activity_width,
-        )
         activity_helper_cache_specs = _activity_helper_cache_specs(
             tpl_wb,
             target_activity_cols,
             factor_cols,
-            activity_helper_cols,
         )
         activity_helper_cache_stats: dict[str, Any] = {
             "rows_processed": 0,
@@ -1550,7 +1538,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         "compact_template_write": True,
         "empty_styled_cells_omitted": True,
         "activity_helper_formula_cache": activity_helper_cache_stats,
-        "activity_helper_formula_cache_columns": [_xlsx_col_letter(col) for col in activity_helper_cols],
+        "activity_helper_formula_cache_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],
         "calculate_transportation_emissions_column": target_activity_cols.get("calculate_transportation_emissions"),
         "calculate_transportation_emissions_value": _M3_TRANSPORT_CALC_DEFAULT_VALUE,
         "final_template_filename": raw_material_template_path.name,
@@ -2447,7 +2435,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_DYNAMIC_TEMPLATE_HEADERS_V9_20260721"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_NEW_TEMPLATE_N_YES_AB_AI_FORMULAS_V7_20260721"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
