@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_AA_AG_GENERAL_FORMAT_V5_20260721"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_AA_AG_FORMULA_CACHE_V6_20260721"
 
 
 def _norm(value: Any) -> str:
@@ -332,14 +332,69 @@ def _xlsx_cell_ref(row_idx: int, col_idx: int) -> str:
     return f"{_xlsx_col_letter(col_idx)}{int(row_idx)}"
 
 
-def _manual_cell_xml(row_idx: int, col_idx: int, value: Any, style_id: str | int | None = None, formula_xml: bytes | None = None, emit_empty_style: bool = False) -> bytes:
+_NO_FORMULA_CACHE = object()
+
+
+class _FormulaCachedValue:
+    """Internal marker: keep the template formula and attach its cached result."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any):
+        self.value = value
+
+
+def _xml_escape_value(value: Any) -> bytes:
+    text = _xml_clean_text(value)
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .encode("utf-8")
+    )
+
+
+def _manual_cell_xml(
+    row_idx: int,
+    col_idx: int,
+    value: Any,
+    style_id: str | int | None = None,
+    formula_xml: bytes | None = None,
+    formula_cache_value: Any = _NO_FORMULA_CACHE,
+    emit_empty_style: bool = False,
+) -> bytes:
     ref = _xlsx_cell_ref(row_idx, col_idx)
     style_attr = b""
     if style_id is not None and str(style_id).strip() != "":
         style_attr = f' s="{str(style_id).strip()}"'.encode("utf-8")
-    if value is None or (isinstance(value, str) and value == ""):
-        if formula_xml:
+    if formula_xml:
+        if formula_cache_value is _NO_FORMULA_CACHE:
             return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'>' + formula_xml + b'</c>'
+        cache = formula_cache_value
+        if isinstance(cache, bool):
+            return (
+                b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b' t="b">'
+                + formula_xml + f'<v>{1 if cache else 0}</v></c>'.encode("utf-8")
+            )
+        if isinstance(cache, (int, float)) and not isinstance(cache, bool):
+            try:
+                number = float(cache)
+                if math.isfinite(number):
+                    raw = str(int(number)) if number.is_integer() else repr(number)
+                    return (
+                        b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'>'
+                        + formula_xml + b'<v>' + raw.encode("utf-8") + b'</v></c>'
+                    )
+            except Exception:
+                pass
+        # Formula results in AA~AG are lookup keys/names.  Store them as a
+        # formula string result (t="str") while the cell number format remains
+        # the original/General style.  This is not Excel Text number format.
+        return (
+            b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b' t="str">'
+            + formula_xml + b'<v>' + _xml_escape_value(cache) + b'</v></c>'
+        )
+    if value is None or (isinstance(value, str) and value == ""):
         if emit_empty_style and style_attr:
             return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'/>'
         return b""
@@ -419,17 +474,30 @@ def _manual_row_xml(
     cells = []
     for col_idx in range(1, width + 1):
         value = values[col_idx - 1] if col_idx <= len(values) else None
-        if col_idx in general_numeric_cols:
+        formula_cache_value = _NO_FORMULA_CACHE
+        if isinstance(value, _FormulaCachedValue):
+            formula_cache_value = value.value
+            value = None
+        if col_idx in general_numeric_cols and formula_cache_value is _NO_FORMULA_CACHE:
             value = _coerce_general_numeric_value(value)
         formula_xml = None
-        if (value is None or (isinstance(value, str) and value == "")) and col_idx in formula_by_col:
+        if col_idx in formula_by_col and (
+            formula_cache_value is not _NO_FORMULA_CACHE
+            or value is None
+            or (isinstance(value, str) and value == "")
+        ):
             formula_xml = _rewrite_formula_row_refs(formula_by_col.get(col_idx), template_formula_row, row_idx)
+        if formula_cache_value is not _NO_FORMULA_CACHE and not formula_xml:
+            # Defensive fallback for an unexpected template without a formula.
+            value = formula_cache_value
+            formula_cache_value = _NO_FORMULA_CACHE
         cell = _manual_cell_xml(
             row_idx,
             col_idx,
             value,
             style_id=style_by_col.get(col_idx),
             formula_xml=formula_xml,
+            formula_cache_value=formula_cache_value,
             emit_empty_style=emit_empty_styles,
         )
         if cell:
@@ -589,13 +657,89 @@ def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activit
     return preserve
 
 
-def _clear_preserved_formula_cells(row_values: list[Any], formula_cols: set[int]) -> None:
-    """Clear AA~AG helper cells so _manual_row_xml emits template formulas."""
+def _activity_helper_cache_specs(
+    template_wb,
+    target_activity_cols: dict[str, int | None],
+    factor_cols: dict[str, int],
+) -> dict[int, tuple[int, dict[str, Any], dict[str, Any]]]:
+    """Map AA~AG formulas to visible cells and Dropdown lookups in one pass."""
+    dropdown_name = _first_existing_name(template_wb.sheetnames, ["Dropdown Values", "Dropdown Value", "Dropdown"])
+    if not dropdown_name:
+        raise ValueError("正式 Raw Material Bulk Template 缺少 Dropdown Values 分頁，無法建立 AA～AG 公式快取值。")
+    ws = template_wb[dropdown_name]
+    raw_specs = {
+        27: (target_activity_cols.get("document_type"), 1, 2),   # E -> A:B
+        28: (target_activity_cols.get("unit"), 3, 4),            # H -> C:D
+        29: (target_activity_cols.get("weight_unit"), 5, 6),     # K -> E:F
+        30: (target_activity_cols.get("data_source"), 7, 8),      # L -> G:H
+        31: (target_activity_cols.get("supplier_name"), 15, 23),  # N -> O:W
+        32: (target_activity_cols.get("supplier_name"), 15, 24),  # N -> O:X
+        33: (factor_cols.get("country_area"), 22, 25),            # W -> V:Y
+    }
+    maps: dict[int, tuple[int, dict[str, Any], dict[str, Any], int, int]] = {}
+    for helper_col, (source_col, display_col, key_col) in raw_specs.items():
+        if source_col:
+            maps[int(helper_col)] = (int(source_col), {}, {}, int(display_col), int(key_col))
+
+    # read_only worksheets are optimized for sequential iter_rows. Calling
+    # ws.cell() thousands of times reparses the XML and is prohibitively slow.
+    for values in ws.iter_rows(min_row=2, max_col=25, values_only=True):
+        for helper_col, (_source_col, exact, normalized, display_col, key_col) in maps.items():
+            display = _text(values[display_col - 1] if display_col <= len(values) else None)
+            if not display:
+                continue
+            key = values[key_col - 1] if key_col <= len(values) else None
+            exact.setdefault(display, key)
+            normalized.setdefault(_norm(display), key)
+
+    return {
+        helper_col: (source_col, exact, normalized)
+        for helper_col, (source_col, exact, normalized, _display_col, _key_col) in maps.items()
+    }
+
+
+def _apply_preserved_formula_cache_cells(
+    row_values: list[Any],
+    formula_cols: set[int],
+    cache_specs: dict[int, tuple[int, dict[str, Any], dict[str, Any]]],
+    stats: dict[str, Any] | None = None,
+) -> None:
+    """Keep AA~AG formulas and attach formula-result caches for third-party parsers."""
     if not formula_cols:
         return
-    for col_idx in formula_cols:
-        if 1 <= int(col_idx) <= len(row_values):
-            row_values[int(col_idx) - 1] = None
+    if stats is not None:
+        stats["rows_processed"] = int(stats.get("rows_processed", 0)) + 1
+    for col_idx in sorted(int(c) for c in formula_cols):
+        while len(row_values) < col_idx:
+            row_values.append(None)
+        existing = row_values[col_idx - 1]
+        cache_value: Any = ""
+        source_display = ""
+        spec = cache_specs.get(col_idx)
+        if spec:
+            source_col, exact, normalized = spec
+            source_raw = row_values[source_col - 1] if 1 <= source_col <= len(row_values) else None
+            source_display = _text(source_raw)
+            if source_display:
+                if source_display in exact:
+                    cache_value = exact[source_display]
+                else:
+                    cache_value = normalized.get(_norm(source_display), "")
+        # If an upstream intermediate already carries a non-formula helper value,
+        # retain it as a safe fallback when the official dropdown has no match.
+        if (cache_value is None or _text(cache_value) == "") and existing is not None:
+            existing_text = _text(existing)
+            if existing_text and not existing_text.startswith("="):
+                cache_value = existing
+        if stats is not None:
+            col_name = _xlsx_col_letter(col_idx)
+            if source_display and (cache_value is None or _text(cache_value) == ""):
+                misses = stats.setdefault("misses_by_column", {})
+                misses[col_name] = int(misses.get(col_name, 0)) + 1
+            elif cache_value is not None and _text(cache_value) != "":
+                hits = stats.setdefault("hits_by_column", {})
+                hits[col_name] = int(hits.get(col_name, 0)) + 1
+        row_values[col_idx - 1] = _FormulaCachedValue(cache_value if cache_value is not None else "")
 
 
 def _force_full_calc_on_load(data: bytes) -> bytes:
@@ -1114,6 +1258,16 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         source_raw_cols = _build_source_col_map(source_raw_headers, _RAW_SOURCE_ALIASES, _RAW_SOURCE_DEFAULT_COLS)
         source_exact = _build_exact_source_lookup(source_activity_headers)
         raw_exact = _build_exact_source_lookup(source_raw_headers)
+        activity_helper_cache_specs = _activity_helper_cache_specs(
+            tpl_wb,
+            target_activity_cols,
+            factor_cols,
+        )
+        activity_helper_cache_stats: dict[str, Any] = {
+            "rows_processed": 0,
+            "hits_by_column": {},
+            "misses_by_column": {},
+        }
 
         total_activity_rows = max(0, int(src_activity_ws.max_row or 0) - DATA_START_ROW + 1)
         max_data_rows_per_file = int(M3_MAX_UPLOAD_DATA_ROWS)
@@ -1237,7 +1391,12 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 else:
                     unmatched += 1
 
-                _clear_preserved_formula_cells(out, activity_helper_formula_cols_to_preserve)
+                _apply_preserved_formula_cache_cells(
+                    out,
+                    activity_helper_formula_cols_to_preserve,
+                    activity_helper_cache_specs,
+                    activity_helper_cache_stats,
+                )
                 activity_chunk.append(out)
                 written_rows += 1
                 if normalized_material and normalized_material not in material_keys_seen:
@@ -1323,6 +1482,8 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         "template_strategy": "M3 final output split into third-party-uploadable workbooks; each part preserves original Raw Material Bulk Template headers/sheets",
         "compact_template_write": True,
         "empty_styled_cells_omitted": True,
+        "activity_helper_formula_cache": activity_helper_cache_stats,
+        "activity_helper_formula_cache_columns": ["AA", "AB", "AC", "AD", "AE", "AF", "AG"],
         "final_template_filename": raw_material_template_path.name,
         "split_enabled": True,
         "split_reason": "third-party upload row limit",
@@ -2217,7 +2378,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_AA_AG_GENERAL_FORMAT_V5_20260721"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_AA_AG_FORMULA_CACHE_V6_20260721"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
