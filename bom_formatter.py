@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V27_11_M2B_EXCLUDE_BLANK_MATERIAL_GROUP"
+BOM_FORMATTER_VERSION = "CMP_V27_12_M2C_EQUAL_SUPPLIER_USAGE_SPLIT"
 
 
 DEFAULT_MAPPING = {
@@ -1668,6 +1668,10 @@ def generate_raw_material_bulk_files_by_site_zip(
                 "filename": file_path.name,
                 "activity_rows": int(write_summary.get("activity_rows", 0)),
                 "raw_materials": int(write_summary.get("raw_materials", 0)),
+                "supplier_usage_split_source_rows": int(write_summary.get("supplier_usage_split_source_rows", 0)),
+                "supplier_usage_split_output_rows": int(write_summary.get("supplier_usage_split_output_rows", 0)),
+                "supplier_usage_total_before_split": float(write_summary.get("supplier_usage_total_before_split", 0.0) or 0.0),
+                "supplier_usage_total_after_split": float(write_summary.get("supplier_usage_total_after_split", 0.0) or 0.0),
             })
 
     unassigned_rows = int((work["_production_site"] == "Unassigned").sum()) if not work.empty else 0
@@ -2955,6 +2959,19 @@ def _select_supplier_name_option(options: list[str], destination: Any, vendor_co
     return suffix_matches[0] if suffix_matches else candidates[0]
 
 
+def _split_usage_evenly_by_supplier_count(value: Any, supplier_count: int) -> float:
+    """Return one supplier row's equal share of the original usage.
+
+    Supplier mapping expands one raw-material activity row into one row per
+    unique supplier.  The original activity quantity must be conserved rather
+    than copied to every expanded row.  A single supplier (including TBC
+    fallback) keeps the original quantity unchanged.
+    """
+    usage = _safe_number(value)
+    count = max(int(supplier_count or 0), 1)
+    return usage / count
+
+
 def _apply_supplier_mapping_to_exploded(
     exploded: pd.DataFrame,
     supplier_map: dict[str, list[dict[str, str]]],
@@ -2971,6 +2988,10 @@ def _apply_supplier_mapping_to_exploded(
     supplier_name_matched = 0
     supplier_name_missing = 0
     tbc_fallback_rows = 0
+    supplier_usage_split_source_rows = 0
+    supplier_usage_split_output_rows = 0
+    supplier_usage_total_before_split = 0.0
+    supplier_usage_total_after_split = 0.0
     output_rows: list[dict[str, Any]] = []
 
     if work.empty:
@@ -2982,6 +3003,10 @@ def _apply_supplier_mapping_to_exploded(
             "supplier_dropdown_matched_rows": 0,
             "supplier_dropdown_missing_rows": 0,
             "tbc_fallback_rows": 0,
+            "supplier_usage_split_source_rows": 0,
+            "supplier_usage_split_output_rows": 0,
+            "supplier_usage_total_before_split": 0.0,
+            "supplier_usage_total_after_split": 0.0,
         }
 
     # If a raw material does not match a material-level supplier row, prefer the
@@ -3014,8 +3039,16 @@ def _apply_supplier_mapping_to_exploded(
             output_rows.append(fallback_row)
             continue
         matched_source_rows += 1
+        supplier_count = len(suppliers)
+        usage_per_supplier = _split_usage_evenly_by_supplier_count(original.get("usage"), supplier_count)
+        if supplier_count > 1:
+            supplier_usage_split_source_rows += 1
+            supplier_usage_split_output_rows += supplier_count
+            supplier_usage_total_before_split += _safe_number(original.get("usage"))
+            supplier_usage_total_after_split += usage_per_supplier * supplier_count
         for info in suppliers:
             new_row = dict(original)
+            new_row["usage"] = usage_per_supplier
             # Supplier logic only reads destination. It never clears or overwrites it.
             new_row["transport_destination"] = destination
             supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
@@ -3060,6 +3093,11 @@ def _apply_supplier_mapping_to_exploded(
         "supplier_dropdown_matched_rows": int(supplier_name_matched),
         "supplier_dropdown_missing_rows": int(supplier_name_missing),
         "tbc_fallback_rows": int(tbc_fallback_rows),
+        "supplier_usage_split_source_rows": int(supplier_usage_split_source_rows),
+        "supplier_usage_split_output_rows": int(supplier_usage_split_output_rows),
+        "supplier_usage_total_before_split": float(supplier_usage_total_before_split),
+        "supplier_usage_total_after_split": float(supplier_usage_total_after_split),
+        "supplier_usage_split_rule": "equal_share_original_usage_divided_by_unique_supplier_count",
     }
 
 
@@ -3409,6 +3447,10 @@ def generate_raw_material_bulk_files_by_site_zip(
     supplier_expanded_total = 0
     supplier_name_matched_total = 0
     supplier_name_missing_total = 0
+    supplier_usage_split_source_total = 0
+    supplier_usage_split_output_total = 0
+    supplier_usage_total_before_split = 0.0
+    supplier_usage_total_after_split = 0.0
     supplier_options_total = 0
     zip_filename = f"raw_material_activity_data_bulk_by_site_{token}.zip"
     zip_path = output_dir / zip_filename
@@ -3431,6 +3473,10 @@ def generate_raw_material_bulk_files_by_site_zip(
             supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
             supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
             supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
+            supplier_usage_split_source_total += int(write_summary.get("supplier_usage_split_source_rows", 0))
+            supplier_usage_split_output_total += int(write_summary.get("supplier_usage_split_output_rows", 0))
+            supplier_usage_total_before_split += float(write_summary.get("supplier_usage_total_before_split", 0.0) or 0.0)
+            supplier_usage_total_after_split += float(write_summary.get("supplier_usage_total_after_split", 0.0) or 0.0)
             supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
             zf.write(file_path, arcname=file_path.name)
             generated_files.append({
@@ -3463,6 +3509,11 @@ def generate_raw_material_bulk_files_by_site_zip(
         "supplier_expanded_rows": int(supplier_expanded_total),
         "supplier_name_matched_rows": int(supplier_name_matched_total),
         "supplier_name_missing_rows": int(supplier_name_missing_total),
+        "supplier_usage_split_source_rows": int(supplier_usage_split_source_total),
+        "supplier_usage_split_output_rows": int(supplier_usage_split_output_total),
+        "supplier_usage_total_before_split": float(supplier_usage_total_before_split),
+        "supplier_usage_total_after_split": float(supplier_usage_total_after_split),
+        "supplier_usage_split_rule": "equal_share_original_usage_divided_by_unique_supplier_count",
         "supplier_dropdown_matched_rows": int(supplier_name_matched_total),
         "supplier_dropdown_missing_rows": int(supplier_name_missing_total),
         "supplier_name_options": int(supplier_options_total),
@@ -4956,8 +5007,11 @@ def _supplier_rows_for_activity_row(row: dict[str, Any], supplier_map: dict[str,
         out["supplier_address"] = uploaded_address or "TBC"
         yield out, False, True, True
         return
+    supplier_count = len(suppliers)
+    usage_per_supplier = _split_usage_evenly_by_supplier_count(row.get("usage"), supplier_count)
     for info in suppliers:
         out = dict(row)
+        out["usage"] = usage_per_supplier
         out["transport_destination"] = destination
         supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
         supplier_code = info.get("supplier_code", "") or info.get("vendor_code", "")
@@ -5045,6 +5099,10 @@ def _write_supplier_mapped_bulk_streaming(
     supplier_name_matched = 0
     supplier_name_missing = 0
     tbc_fallback_rows = 0
+    supplier_usage_split_source_rows = 0
+    supplier_usage_split_output_rows = 0
+    supplier_usage_total_before_split = 0.0
+    supplier_usage_total_after_split = 0.0
     raw_seen: set[str] = set()
     raw_descriptions: dict[str, str] = {}
     supplier_unique: set[tuple[str, str, str, str, str]] = set()
@@ -5066,6 +5124,14 @@ def _write_supplier_mapped_bulk_streaming(
         excel_row_idx = DATA_START_ROW - 1
         for base_row in _iter_activity_rows_streaming(source_file, activity_cols, description_map):
             input_rows += 1
+            source_supplier_count = len(supplier_map.get(_normalize_material_key(base_row.get("raw_material"))) or [])
+            if source_supplier_count > 1:
+                source_usage = _safe_number(base_row.get("usage"))
+                split_usage = _split_usage_evenly_by_supplier_count(source_usage, source_supplier_count)
+                supplier_usage_split_source_rows += 1
+                supplier_usage_split_output_rows += source_supplier_count
+                supplier_usage_total_before_split += source_usage
+                supplier_usage_total_after_split += split_usage * source_supplier_count
             for mapped_row, matched, name_ok, used_tbc in _supplier_rows_for_activity_row(base_row, supplier_map, supplier_options, tbc_supplier_map):
                 if matched:
                     matched_source_rows += 1
@@ -5131,6 +5197,14 @@ def _write_supplier_mapped_bulk_streaming(
             raw_ws.append(header_row)
         for base_row in _iter_activity_rows_streaming(source_file, activity_cols, description_map):
             input_rows += 1
+            source_supplier_count = len(supplier_map.get(_normalize_material_key(base_row.get("raw_material"))) or [])
+            if source_supplier_count > 1:
+                source_usage = _safe_number(base_row.get("usage"))
+                split_usage = _split_usage_evenly_by_supplier_count(source_usage, source_supplier_count)
+                supplier_usage_split_source_rows += 1
+                supplier_usage_split_output_rows += source_supplier_count
+                supplier_usage_total_before_split += source_usage
+                supplier_usage_total_after_split += split_usage * source_supplier_count
             for mapped_row, matched, name_ok, used_tbc in _supplier_rows_for_activity_row(base_row, supplier_map, supplier_options, tbc_supplier_map):
                 if matched:
                     matched_source_rows += 1
@@ -5183,6 +5257,11 @@ def _write_supplier_mapped_bulk_streaming(
         "supplier_dropdown_matched_rows": int(supplier_name_matched),
         "supplier_dropdown_missing_rows": int(supplier_name_missing),
         "tbc_fallback_rows": int(tbc_fallback_rows),
+        "supplier_usage_split_source_rows": int(supplier_usage_split_source_rows),
+        "supplier_usage_split_output_rows": int(supplier_usage_split_output_rows),
+        "supplier_usage_total_before_split": float(supplier_usage_total_before_split),
+        "supplier_usage_total_after_split": float(supplier_usage_total_after_split),
+        "supplier_usage_split_rule": "equal_share_original_usage_divided_by_unique_supplier_count",
         "supplier_name_options": int(len(supplier_options)),
         "site_tbc_supplier_count": int(len({id(v) for v in tbc_supplier_map.values()})),
         "tbc_fallback_policy": "prefer_uploaded_plant_tbc_then_system_fallback",
@@ -5270,6 +5349,10 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     supplier_expanded_total = 0
     supplier_name_matched_total = 0
     supplier_name_missing_total = 0
+    supplier_usage_split_source_total = 0
+    supplier_usage_split_output_total = 0
+    supplier_usage_total_before_split = 0.0
+    supplier_usage_total_after_split = 0.0
     supplier_options_total = 0
     combined_supplier_rows: set[tuple[str, str, str, str, str]] = set()
 
@@ -5316,6 +5399,10 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
                 supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
                 supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
                 supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
+                supplier_usage_split_source_total += int(write_summary.get("supplier_usage_split_source_rows", 0))
+                supplier_usage_split_output_total += int(write_summary.get("supplier_usage_split_output_rows", 0))
+                supplier_usage_total_before_split += float(write_summary.get("supplier_usage_total_before_split", 0.0) or 0.0)
+                supplier_usage_total_after_split += float(write_summary.get("supplier_usage_total_after_split", 0.0) or 0.0)
                 supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
                 out_zip.write(output_path, arcname=output_path.name)
                 generated_files.append({
@@ -5327,6 +5414,10 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
                     "supplier_matched_rows": int(write_summary.get("supplier_matched_rows", 0)),
                     "supplier_expanded_rows": int(write_summary.get("supplier_expanded_rows", 0)),
                     "supplier_name_missing_rows": int(write_summary.get("supplier_name_missing_rows", 0)),
+                    "supplier_usage_split_source_rows": int(write_summary.get("supplier_usage_split_source_rows", 0)),
+                    "supplier_usage_split_output_rows": int(write_summary.get("supplier_usage_split_output_rows", 0)),
+                    "supplier_usage_total_before_split": float(write_summary.get("supplier_usage_total_before_split", 0.0) or 0.0),
+                    "supplier_usage_total_after_split": float(write_summary.get("supplier_usage_total_after_split", 0.0) or 0.0),
                 })
 
             supplier_bulk_summary: Dict[str, Any] = {}
@@ -5344,7 +5435,7 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
         "output_filename": zip_filename,
         "download_url": f"/download/{zip_filename}",
         "module2b_raw_bulk_source_filename": source_zip.name,
-        "module2c_rule": "Read Module 2B ZIP -> stream supplier mapping -> write supplier-mapped Raw Material Bulk ZIP; usage quantities are not recalculated.",
+        "module2c_rule": "Read Module 2B ZIP -> stream supplier mapping -> expand one row per unique supplier -> divide original usage equally by supplier count.",
         "module2c_large_dataset_mode": True,
         "module2c_template_policy": "Headers and sheet names are preserved from Module 2B workbooks; styles/dropdowns/validations/formulas are intentionally not copied in M2C Large Dataset Mode.",
         "input_files": int(input_files),
@@ -5355,6 +5446,11 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
         "supplier_expanded_rows": int(supplier_expanded_total),
         "supplier_name_matched_rows": int(supplier_name_matched_total),
         "supplier_name_missing_rows": int(supplier_name_missing_total),
+        "supplier_usage_split_source_rows": int(supplier_usage_split_source_total),
+        "supplier_usage_split_output_rows": int(supplier_usage_split_output_total),
+        "supplier_usage_total_before_split": float(supplier_usage_total_before_split),
+        "supplier_usage_total_after_split": float(supplier_usage_total_after_split),
+        "supplier_usage_split_rule": "equal_share_original_usage_divided_by_unique_supplier_count",
         "supplier_dropdown_matched_rows": int(supplier_name_matched_total),
         "supplier_dropdown_missing_rows": int(supplier_name_missing_total),
         "supplier_name_options": int(supplier_options_total),
@@ -5370,4 +5466,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V27_11_M2B_EXCLUDE_BLANK_MATERIAL_GROUP"
+BOM_FORMATTER_VERSION = "CMP_V27_12_M2C_EQUAL_SUPPLIER_USAGE_SPLIT"
