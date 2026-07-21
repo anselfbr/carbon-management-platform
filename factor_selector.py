@@ -23,7 +23,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_NEW_TEMPLATE_AB_AH_ONLY_V8_20260721"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_DYNAMIC_TEMPLATE_HEADERS_V9_20260721"
 
 
 def _norm(value: Any) -> str:
@@ -606,42 +606,83 @@ def _copy_matching_value_to_target(target_row: list[Any], target_col: int | None
 
 
 
-# M3A supports only the revised third-party Raw Material Bulk Template.
-# The visible required transportation flag is fixed at AA, and the seven hidden
-# helper formulas are fixed at AB~AH. Legacy AA~AG templates are intentionally
-# rejected so outputs cannot silently use an obsolete column layout.
-_M3_TRANSPORT_CALC_COL = 27  # AA
-_M3_ACTIVITY_HELPER_FORMULA_COLS = tuple(range(28, 35))  # AB~AH
+# M3A supports only the revised third-party Raw Material Bulk Template, but it
+# locates both the visible transportation flag and hidden helper formulas by
+# their header keys rather than fixed Excel column letters. This prevents future
+# template insertions/reordering from breaking M3A.
 _M3_DOCUMENT_TYPE_HELPER_KEY = "document_type"
 _M3_TRANSPORT_CALC_FIELD_ALIASES = tuple(_ACTIVITY_SOURCE_ALIASES["calculate_transportation_emissions"])
 _M3_TRANSPORT_CALC_DEFAULT_VALUE = "Yes"
+_M3_ACTIVITY_HELPER_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("document_type", ("document_type",)),
+    ("activity_data_unit", ("activity_data_unit",)),
+    ("weight_unit", ("weight_unit",)),
+    ("data_source", ("data_source",)),
+    ("supplier_name_resolved", ("supplier_name_resolved",)),
+    ("supplier_code_resolved", ("supplier_code_resolved",)),
+    ("country_area", ("country_area",)),
+)
+
+
+def _find_internal_header_col(target_activity_headers: list[list[Any]], aliases: Iterable[str]) -> int | None:
+    """Find a hidden/helper field by its internal header key, preferring row 1."""
+    alias_keys = {_norm(alias) for alias in aliases if _text(alias)}
+    if not alias_keys:
+        return None
+    width = _max_header_width(target_activity_headers)
+    row_order = [0] + list(range(1, len(target_activity_headers)))
+    for row_idx in row_order:
+        if row_idx >= len(target_activity_headers):
+            continue
+        row = target_activity_headers[row_idx]
+        for col_idx in range(1, width + 1):
+            if col_idx - 1 < len(row) and _norm(row[col_idx - 1]) in alias_keys:
+                return col_idx
+    return None
 
 
 def _activity_helper_layout(target_activity_headers: list[list[Any]], width: int) -> tuple[tuple[int, ...], int]:
-    """Validate and return the revised AA + AB~AH template layout only."""
+    """Locate revised-template fields dynamically from their table headers."""
     transport_col = _find_col_in_header_values(
         target_activity_headers,
-        _M3_TRANSPORT_CALC_FIELD_ALIASES,
+        list(_M3_TRANSPORT_CALC_FIELD_ALIASES),
         required=False,
     )
     if not transport_col:
         raise ValueError(
             "正式 Raw Material Bulk Template 版本不符：缺少欄位 "
-            "Calculate Transportation Emissions (Required)。目前僅支援新版 Template，"
-            "不再支援隱藏欄位為 AA～AG 的舊版。"
+            "Calculate Transportation Emissions (Required)。"
         )
-    if int(transport_col) != _M3_TRANSPORT_CALC_COL:
+
+    helper_cols: list[int] = []
+    missing_headers: list[str] = []
+    for helper_key, aliases in _M3_ACTIVITY_HELPER_FIELDS:
+        col_idx = _find_internal_header_col(target_activity_headers, aliases)
+        if not col_idx:
+            missing_headers.append(helper_key)
+        else:
+            helper_cols.append(int(col_idx))
+
+    if missing_headers:
+        raise ValueError(
+            "正式 Raw Material Bulk Template 版本不符：缺少隱藏公式欄位表頭："
+            + ", ".join(missing_headers)
+            + "。"
+        )
+    if len(set(helper_cols)) != len(helper_cols):
+        raise ValueError("正式 Raw Material Bulk Template 版本不符：隱藏公式欄位表頭有重複對應。")
+    if int(transport_col) in set(helper_cols):
         raise ValueError(
             "正式 Raw Material Bulk Template 版本不符："
-            "Calculate Transportation Emissions (Required) 必須位於 AA 欄。"
+            "Calculate Transportation Emissions (Required) 與隱藏公式欄位發生欄位衝突。"
         )
-    if int(width or 0) < _M3_ACTIVITY_HELPER_FORMULA_COLS[-1]:
-        raise ValueError("正式 Raw Material Bulk Template 版本不符：必須包含 AB～AH 七個隱藏公式欄位。")
-    return _M3_ACTIVITY_HELPER_FORMULA_COLS, _M3_ACTIVITY_HELPER_FORMULA_COLS[0]
+    if helper_cols and int(width or 0) < max(helper_cols):
+        raise ValueError("正式 Raw Material Bulk Template 版本不符：隱藏公式欄位超出工作表範圍。")
+    return tuple(helper_cols), helper_cols[0]
 
 
 def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activity_headers: list[list[Any]], width: int) -> set[int]:
-    """Require and preserve all seven revised-template formulas in AB~AH."""
+    """Require and preserve the seven helper formulas located by header keys."""
     helper_cols, _document_type_idx = _activity_helper_layout(
         target_activity_headers,
         int(width or _max_header_width(target_activity_headers) or 1),
@@ -657,7 +698,9 @@ def _activity_helper_formula_columns_to_preserve(tpl_activity_ws, target_activit
     if missing:
         raise ValueError(
             "正式 Raw Material Bulk Template 版本不符："
-            f"新版 Template 的 AB～AH 必須保留公式，缺少公式欄位：{', '.join(missing)}。"
+            "依表頭定位的隱藏欄位必須保留公式，缺少公式欄位："
+            + ", ".join(missing)
+            + "。"
         )
     return set(int(col) for col in helper_cols)
 
@@ -668,10 +711,10 @@ def _activity_helper_cache_specs(
     factor_cols: dict[str, int],
     helper_cols: Iterable[int],
 ) -> dict[int, tuple[int, dict[str, Any], dict[str, Any]]]:
-    """Map revised AB~AH formulas to visible cells."""
+    """Map dynamically located helper formulas to their visible source cells."""
     dropdown_name = _first_existing_name(template_wb.sheetnames, ["Dropdown Values", "Dropdown Value", "Dropdown"])
     if not dropdown_name:
-        raise ValueError("正式 Raw Material Bulk Template 缺少 Dropdown Values 分頁，無法建立 AB～AH 公式快取值。")
+        raise ValueError("正式 Raw Material Bulk Template 缺少 Dropdown Values 分頁，無法建立隱藏公式快取值。")
     ws = template_wb[dropdown_name]
     helper_cols = tuple(int(col) for col in helper_cols)
     if len(helper_cols) != 7:
@@ -1110,7 +1153,7 @@ def _write_template_applied_workbook(
         if missing_formula_cols:
             raise ValueError(
                 "正式 Raw Material Bulk Template 版本不符："
-                "AB～AH 必須包含完整公式，缺少："
+                "依表頭定位的隱藏欄位必須包含完整公式，缺少："
                 + ", ".join(_xlsx_col_letter(col) for col in missing_formula_cols)
             )
         raw_style_by_col, raw_formula_by_col, raw_row_attrs = _template_row_format(raw_inside, DATA_START_ROW, raw_width)
@@ -1163,6 +1206,9 @@ def _write_template_applied_workbook(
     return {
         "activity_rows": int(activity_count),
         "raw_material_rows": int(raw_count),
+        "activity_helper_text_styles_replaced": list(helper_style_summary.get("helper_text_styles_replaced", [])),
+        "activity_helper_general_style_id": helper_style_summary.get("helper_general_style_id", "0"),
+        # Backward-compatible diagnostic keys retained for callers that already read them.
         "ab_ah_text_styles_replaced": list(helper_style_summary.get("helper_text_styles_replaced", [])),
         "ab_ah_general_style_id": helper_style_summary.get("helper_general_style_id", "0"),
     }
@@ -2401,7 +2447,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_NEW_TEMPLATE_AB_AH_ONLY_V8_20260721"
+FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_DYNAMIC_TEMPLATE_HEADERS_V9_20260721"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
