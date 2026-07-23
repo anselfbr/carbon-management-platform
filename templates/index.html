@@ -444,8 +444,6 @@
 
             <div id="automationM3aActionMount" class="automation-m3a-action-mount hidden"></div>
 
-            <div id="automationSteps" class="automation-step-list"></div>
-
             <details class="automation-log-panel automation-stage-log-panel" open>
               <summary data-i18n="automationExecutionLog">執行紀錄</summary>
               <div class="automation-stage-log-scroll">
@@ -3875,6 +3873,8 @@ ruleForm.onsubmit = async (e) => {
 
   function renderSteps(activeIndex=-1, doneCount=0, failedIndex=-1) {
     if (stageCounter) stageCounter.textContent = `${Math.max(0, Math.min(doneCount, steps.length))} / ${steps.length}`;
+    // The legacy stage-card progress list was removed; execution progress is now shown in the stage log table.
+    if (!stepsBox) return;
     const stateKeys = {
       idle: ['automationStageWaiting', '待執行'],
       running: ['automationStageRunning', '執行中'],

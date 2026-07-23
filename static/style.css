@@ -3594,3 +3594,10 @@ select:focus {
 .automation-stage-log-summary{display:flex;justify-content:center;padding:13px 16px;border:1px solid #dce6f2;border-top:0;border-radius:0 0 12px 12px;background:#f7fbff;font-weight:700;color:#17365d}
 .automation-raw-log{margin-top:12px;max-height:150px;font-size:12px;opacity:.85}
 @media(max-width:900px){.automation-m3a-action-mount{grid-template-columns:1fr}.automation-m3a-action-mount .automation-start-btn{min-height:60px}}
+
+/* 2026-07-23: remove the legacy Module 4 stage-card progress block.
+   Execution status, row counts and elapsed time are provided by the stage log table. */
+#automated-data-consolidation .automation-step-list {
+  display: none !important;
+}
+
