@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from template_header_resolver import aliases as _profile_aliases
+from dropdown_value_resolver import DropdownValuesCache
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
@@ -24,7 +25,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "DIP_V28_4_TEMPLATE_FORMAT_PRESERVE_20260723"
+BOM_FORMATTER_VERSION = "DIP_V28_5_DROPDOWN_CACHE_LOCALIZED_20260723"
 M2_MAX_ACTIVITY_DATA_ROWS = 50000
 M2_ACTIVITY_HELPER_FORMULA_COLS = tuple(range(28, 36))  # AB~AI
 
@@ -427,25 +428,15 @@ def _localized_dropdown_display(value: Any, mapping: dict[str, str], default: st
     return mapping.get(text.upper(), text)
 
 
-def _document_type_for_template(wb) -> str:
+def _document_type_for_template(wb, dropdown_cache: DropdownValuesCache | None = None) -> str:
     """Return the template-localized visible value whose internal key is BOM."""
-    return _localized_dropdown_display("BOM", _dropdown_display_map(wb, 1, 2), "Bill of Materials (BOM)")
+    cache = dropdown_cache or DropdownValuesCache.from_workbook(wb)
+    return cache.display("document_type", "BOM", "Bill of Materials (BOM)")
 
-def _transport_calculation_yes_for_template(wb) -> str:
-    """Return the template-localized visible value whose internal key is YES.
-
-    English templates display ``Yes`` while Chinese templates display ``是``.
-    Writing the localized display value keeps the visible dropdown valid and
-    lets the hidden AI formula resolve to the common key ``YES``.
-    """
-    if "Dropdown Values" in getattr(wb, "sheetnames", []):
-        ws = wb["Dropdown Values"]
-        for row_idx in range(2, min(int(getattr(ws, "max_row", 0) or 0), 100) + 1):
-            display = str(ws.cell(row_idx, 13).value or "").strip()  # M
-            key = str(ws.cell(row_idx, 14).value or "").strip().upper()  # N
-            if key == "YES" and display:
-                return display
-    return "Yes"
+def _transport_calculation_yes_for_template(wb, dropdown_cache: DropdownValuesCache | None = None) -> str:
+    """Return the localized visible dropdown value whose internal key is YES."""
+    cache = dropdown_cache or DropdownValuesCache.from_workbook(wb)
+    return cache.display("calculate_transportation_emissions", "YES", "Yes")
 
 def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None) -> tuple[pd.DataFrame, dict[str, str]]:
     df = _read_excel_first_sheet(bom_path)
@@ -1150,7 +1141,11 @@ def _write_raw_material_bulk_from_exploded(
         "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
     }
 
-    document_type_value = _document_type_for_template(wb)
+    dropdown_cache = DropdownValuesCache.from_workbook(wb)
+    document_type_value = _document_type_for_template(wb, dropdown_cache)
+    activity_unit_display_map = dropdown_cache.input_to_display_map("activity_data_unit")
+    weight_unit_display_map = dropdown_cache.input_to_display_map("weight_unit")
+    data_source_display_map = dropdown_cache.input_to_display_map("data_source")
 
     _clear_template_columns(activity_ws, DATA_START_ROW, list(activity_cols.values()))
     _clear_template_columns(raw_ws, DATA_START_ROW, list(raw_cols.values()))
@@ -3480,11 +3475,12 @@ def _write_raw_material_bulk_from_exploded(
         "description": _find_template_column(raw_ws, RAW_MATERIAL_DESC_ALIASES, 6),
     }
 
-    document_type_value = _document_type_for_template(wb)
-    transport_calculation_yes_value = _transport_calculation_yes_for_template(wb)
-    activity_unit_display_map = _dropdown_display_map(wb, 3, 4)
-    weight_unit_display_map = _dropdown_display_map(wb, 5, 6)
-    data_source_display_map = _dropdown_display_map(wb, 7, 8)
+    dropdown_cache = DropdownValuesCache.from_workbook(wb)
+    document_type_value = _document_type_for_template(wb, dropdown_cache)
+    transport_calculation_yes_value = _transport_calculation_yes_for_template(wb, dropdown_cache)
+    activity_unit_display_map = dropdown_cache.input_to_display_map("activity_data_unit")
+    weight_unit_display_map = dropdown_cache.input_to_display_map("weight_unit")
+    data_source_display_map = dropdown_cache.input_to_display_map("data_source")
     supplier_options = _extract_supplier_name_options_from_raw_template(wb)
     expanded, supplier_write_summary = _apply_supplier_mapping_to_exploded(
         exploded,
@@ -4501,8 +4497,9 @@ def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Pat
         }
         activity_header_rows = _ensure_bulk_visible_header_row(activity_header_rows, activity_cols, _ACTIVITY_VISIBLE_HEADERS)
         raw_header_rows = _ensure_bulk_visible_header_row(raw_header_rows, raw_cols, _RAW_VISIBLE_HEADERS)
-        document_type_value = _document_type_for_template(wb)
-        transport_calculation_yes_value = _transport_calculation_yes_for_template(wb)
+        dropdown_cache = DropdownValuesCache.from_workbook(wb, required=True)
+        document_type_value = _document_type_for_template(wb, dropdown_cache)
+        transport_calculation_yes_value = _transport_calculation_yes_for_template(wb, dropdown_cache)
         missing_formula_cols = [col for col in M2_ACTIVITY_HELPER_FORMULA_COLS if col not in activity_formula_templates]
         if missing_formula_cols:
             missing_letters = ", ".join(_xlsx_index_to_col_letter(col) for col in missing_formula_cols)
@@ -4510,9 +4507,13 @@ def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Pat
         activity_number_formats = _xlsx_row3_number_formats(raw_material_template_path, ACTIVITY_SHEET_NAME)
         raw_number_formats = _xlsx_row3_number_formats(raw_material_template_path, RAW_MATERIAL_SHEET_NAME)
         dropdown_maps = {
-            "activity_unit": _dropdown_display_map(wb, 3, 4),
-            "weight_unit": _dropdown_display_map(wb, 5, 6),
-            "data_source": _dropdown_display_map(wb, 7, 8),
+            "activity_unit": dropdown_cache.input_to_display_map("activity_data_unit"),
+            "weight_unit": dropdown_cache.input_to_display_map("weight_unit"),
+            "data_source": dropdown_cache.input_to_display_map("data_source"),
+            "country_area": dropdown_cache.input_to_display_map("country_area"),
+            "document_type": dropdown_cache.input_to_display_map("document_type"),
+            "calculate_transportation_emissions": dropdown_cache.input_to_display_map("calculate_transportation_emissions"),
+            "_cache_summary": dropdown_cache.summary(),
         }
         return activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value, transport_calculation_yes_value, activity_formula_templates, activity_number_formats, raw_number_formats, dropdown_maps
     finally:
@@ -4955,7 +4956,7 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         _set_row_value(activity_row, activity_cols["raw_code"], raw_material)
         _set_row_value(activity_row, activity_cols["start_date"], start_date_value)
         _set_row_value(activity_row, activity_cols["end_date"], end_date_value)
-        _set_row_value(activity_row, activity_cols["document_type"], document_type_value)
+        _set_row_value(activity_row, activity_cols["document_type"], row_data.get("document_type", "") or document_type_value)
         _set_row_value(activity_row, activity_cols["document_number"], "")
         _set_row_value(activity_row, activity_cols["usage"], usage_value)
         _set_row_value(activity_row, activity_cols["unit"], _localized_dropdown_display(row_data.get("unit", ""), dropdown_maps.get("activity_unit", {})))
@@ -5074,6 +5075,7 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         "supplier_status": "Deferred to Module 2C",
         "m2b_writer": f"large_dataset_{writer_name}_template_number_formats_plus_AB_AI_formulas",
         "calculate_transportation_emissions_value": transport_calculation_yes_value,
+        "dropdown_values_cache": dropdown_maps.get("_cache_summary", {}),
         "helper_formula_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],
         "helper_formula_rows": int(actual_data_rows),
     }
@@ -5417,6 +5419,8 @@ def _iter_activity_rows_streaming(path: str | Path, activity_cols: dict[str, int
                 "level": 0,
                 "transport_destination": _safe_cell_text(_row_get(row, activity_cols["transport_destination"] - 1)),
                 "transport_origin": _safe_cell_text(_row_get(row, activity_cols["transport_origin"] - 1)),
+                "document_type": _safe_cell_text(_row_get(row, activity_cols["document_type"] - 1)),
+                "data_source": _safe_cell_text(_row_get(row, activity_cols["data_source"] - 1)),
                 "calculate_transportation_emissions": _safe_cell_text(_row_get(row, activity_cols["calculate_transportation_emissions"] - 1)),
                 "supplier_name": _safe_cell_text(_row_get(row, activity_cols["supplier_name"] - 1)),
                 "net_weight": _fast_number(_row_get(row, activity_cols["net_weight"] - 1)) if activity_cols.get("net_weight") else "",
@@ -5489,11 +5493,14 @@ def _build_supplier_activity_row(row_data: dict[str, Any], activity_headers: lis
     _set_row_value(activity_row, activity_cols["raw_code"], raw_material)
     _set_row_value(activity_row, activity_cols["start_date"], start_date_value)
     _set_row_value(activity_row, activity_cols["end_date"], end_date_value)
-    _set_row_value(activity_row, activity_cols["document_type"], document_type_value)
+    _set_row_value(
+        activity_row, activity_cols["document_type"],
+        row_data.get("document_type", "") or document_type_value,
+    )
     _set_row_value(activity_row, activity_cols["document_number"], "")
     _set_row_value(activity_row, activity_cols["usage"], _fast_number(row_data.get("usage")))
     _set_row_value(activity_row, activity_cols["unit"], row_data.get("unit", ""))
-    _set_row_value(activity_row, activity_cols["data_source"], "SAP")
+    _set_row_value(activity_row, activity_cols["data_source"], row_data.get("data_source", "") or "SAP")
     _set_row_value(activity_row, activity_cols["data_source_other"], "")
     _set_row_value(
         activity_row, activity_cols["calculate_transportation_emissions"],
@@ -5920,4 +5927,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "DIP_V28_4_TEMPLATE_FORMAT_PRESERVE_20260723"
+BOM_FORMATTER_VERSION = "DIP_V28_5_DROPDOWN_CACHE_LOCALIZED_20260723"

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
 from template_header_resolver import aliases as _profile_aliases
+from dropdown_value_resolver import DropdownValuesCache
 
 import pandas as pd
 from openpyxl import load_workbook, Workbook
@@ -25,7 +26,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "DIP_MODULE3A_TEMPLATE_FORMAT_PRESERVE_V3_20260723"
+FACTOR_SELECTOR_VERSION = "DIP_MODULE3A_DROPDOWN_CACHE_LOCALIZED_V4_20260723"
 
 
 def _norm(value: Any) -> str:
@@ -631,31 +632,37 @@ _M3_DOCUMENT_TYPE_HELPER_KEY = "document_type"
 _M3_DOCUMENT_TYPE_HELPER_FORMULA_XML = b"""<f>IF(E3="","",INDEX('Dropdown Values'!$B$2:$B$5,MATCH(E3,'Dropdown Values'!$A$2:$A$5,0)))</f>"""
 _M3_TRANSPORT_CALC_DEFAULT_VALUE = "Yes"
 
-def _transport_calculation_yes_for_template(template_wb) -> str:
+def _transport_calculation_yes_for_template(
+    template_wb,
+    dropdown_cache: DropdownValuesCache | None = None,
+) -> str:
     """Return the localized visible dropdown value whose key is YES."""
-    dropdown_name = _first_existing_name(template_wb.sheetnames, ["Dropdown Values", "Dropdown Value", "Dropdown"])
-    if dropdown_name:
-        ws = template_wb[dropdown_name]
-        for values in ws.iter_rows(min_row=2, max_row=min(int(ws.max_row or 0), 100), min_col=13, max_col=14, values_only=True):
-            display = _text(values[0] if len(values) > 0 else None)
-            key = _text(values[1] if len(values) > 1 else None).upper()
-            if key == "YES" and display:
-                return display
-    return _M3_TRANSPORT_CALC_DEFAULT_VALUE
+    cache = dropdown_cache or DropdownValuesCache.from_workbook(template_wb)
+    return cache.display(
+        "calculate_transportation_emissions",
+        "YES",
+        _M3_TRANSPORT_CALC_DEFAULT_VALUE,
+    )
 
 
-def _template_dropdown_display_map(template_wb, display_col: int, key_col: int) -> dict[str, str]:
-    result: dict[str, str] = {}
-    dropdown_name = _first_existing_name(template_wb.sheetnames, ["Dropdown Values", "Dropdown Value", "Dropdown"])
-    if not dropdown_name:
-        return result
-    ws = template_wb[dropdown_name]
-    for values in ws.iter_rows(min_row=2, max_row=min(int(ws.max_row or 0), 20000), min_col=display_col, max_col=key_col, values_only=True):
-        display = _text(values[0] if values else None)
-        key = _text(values[key_col - display_col] if len(values) > key_col - display_col else None)
-        if display and key:
-            result[key.upper()] = display
-    return result
+def _template_dropdown_display_map(
+    template_wb,
+    display_col: int,
+    key_col: int,
+    dropdown_cache: DropdownValuesCache | None = None,
+) -> dict[str, str]:
+    """Backward-compatible lookup helper backed by the one-pass cache."""
+    cache = dropdown_cache or DropdownValuesCache.from_workbook(template_wb)
+    pair_to_field = {
+        (1, 2): "document_type",
+        (3, 4): "activity_data_unit",
+        (5, 6): "weight_unit",
+        (7, 8): "data_source",
+        (13, 14): "calculate_transportation_emissions",
+        (22, 25): "country_area",
+    }
+    field = pair_to_field.get((int(display_col), int(key_col)))
+    return cache.key_to_display_map(field) if field else {}
 
 
 def _template_localized_display(value: Any, mapping: dict[str, str], default: str = "") -> str:
@@ -696,40 +703,27 @@ def _activity_helper_cache_specs(
     template_wb,
     target_activity_cols: dict[str, int | None],
     factor_cols: dict[str, int],
+    dropdown_cache: DropdownValuesCache | None = None,
 ) -> dict[int, tuple[int, dict[str, Any], dict[str, Any]]]:
-    """Map AB~AI formulas to visible cells and Dropdown lookups in one pass."""
-    dropdown_name = _first_existing_name(template_wb.sheetnames, ["Dropdown Values", "Dropdown Value", "Dropdown"])
-    if not dropdown_name:
-        raise ValueError("正式 Raw Material Bulk Template 缺少 Dropdown Values 分頁，無法建立 AB～AI 公式快取值。")
-    ws = template_wb[dropdown_name]
+    """Map AB~AI formulas to visible cells using the shared one-pass cache."""
+    cache = dropdown_cache or DropdownValuesCache.from_workbook(template_wb, required=True)
     raw_specs = {
-        28: (target_activity_cols.get("document_type"), 1, 2),
-        29: (target_activity_cols.get("unit"), 3, 4),
-        30: (target_activity_cols.get("weight_unit"), 5, 6),
-        31: (target_activity_cols.get("data_source"), 7, 8),
-        32: (target_activity_cols.get("supplier_name"), 15, 23),
-        33: (target_activity_cols.get("supplier_name"), 15, 24),
-        34: (factor_cols.get("country_area"), 22, 25),
-        35: (target_activity_cols.get("calculate_transportation_emissions"), 13, 14),
+        28: (target_activity_cols.get("document_type"), "document_type"),
+        29: (target_activity_cols.get("unit"), "activity_data_unit"),
+        30: (target_activity_cols.get("weight_unit"), "weight_unit"),
+        31: (target_activity_cols.get("data_source"), "data_source"),
+        32: (target_activity_cols.get("supplier_name"), "supplier_name_resolved"),
+        33: (target_activity_cols.get("supplier_name"), "supplier_code_resolved"),
+        34: (factor_cols.get("country_area"), "country_area"),
+        35: (target_activity_cols.get("calculate_transportation_emissions"), "calculate_transportation_emissions"),
     }
-    maps: dict[int, tuple[int, dict[str, Any], dict[str, Any], int, int]] = {}
-    for helper_col, (source_col, display_col, key_col) in raw_specs.items():
-        if source_col:
-            maps[int(helper_col)] = (int(source_col), {}, {}, int(display_col), int(key_col))
-
-    for values in ws.iter_rows(min_row=2, max_col=25, values_only=True):
-        for helper_col, (_source_col, exact, normalized, display_col, key_col) in maps.items():
-            display = _text(values[display_col - 1] if display_col <= len(values) else None)
-            if not display:
-                continue
-            key = values[key_col - 1] if key_col <= len(values) else None
-            exact.setdefault(display, key)
-            normalized.setdefault(_norm(display), key)
-
-    return {
-        helper_col: (source_col, exact, normalized)
-        for helper_col, (source_col, exact, normalized, _display_col, _key_col) in maps.items()
-    }
+    result: dict[int, tuple[int, dict[str, Any], dict[str, Any]]] = {}
+    for helper_col, (source_col, field) in raw_specs.items():
+        if not source_col:
+            continue
+        exact, normalized = cache.display_to_key_maps(field)
+        result[int(helper_col)] = (int(source_col), exact, normalized)
+    return result
 
 
 def _apply_preserved_formula_cache_cells(
@@ -1311,11 +1305,13 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
     _emit_progress(progress_callback, 34, "讀取 M3 輕量中繼檔與最終 Bulk Template", 60, 0, None)
     src_wb = load_workbook(raw_material_bulk_path, read_only=True, data_only=False)
     tpl_wb = load_workbook(raw_material_template_path, read_only=True, data_only=False)
-    transport_calculation_yes_value = _transport_calculation_yes_for_template(tpl_wb)
-    document_type_display_map = _template_dropdown_display_map(tpl_wb, 1, 2)
-    activity_unit_display_map = _template_dropdown_display_map(tpl_wb, 3, 4)
-    weight_unit_display_map = _template_dropdown_display_map(tpl_wb, 5, 6)
-    data_source_display_map = _template_dropdown_display_map(tpl_wb, 7, 8)
+    dropdown_cache = DropdownValuesCache.from_workbook(tpl_wb, required=True)
+    transport_calculation_yes_value = _transport_calculation_yes_for_template(tpl_wb, dropdown_cache)
+    document_type_display_map = dropdown_cache.key_to_display_map("document_type")
+    activity_unit_display_map = dropdown_cache.key_to_display_map("activity_data_unit")
+    weight_unit_display_map = dropdown_cache.key_to_display_map("weight_unit")
+    data_source_display_map = dropdown_cache.key_to_display_map("data_source")
+    country_area_display_map = dropdown_cache.key_to_display_map("country_area")
     matched = 0
     unmatched = 0
     written_rows = 0
@@ -1366,6 +1362,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
             tpl_wb,
             target_activity_cols,
             factor_cols,
+            dropdown_cache=dropdown_cache,
         )
         activity_helper_cache_stats: dict[str, Any] = {
             "rows_processed": 0,
@@ -1474,18 +1471,18 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                     _copy_matching_value_to_target(out, tgt_col, values, source_activity_cols, key)
                 if target_activity_cols.get("document_type"):
                     col = int(target_activity_cols["document_type"]) - 1
-                    out[col] = _template_localized_display(out[col], document_type_display_map, "BOM")
+                    out[col] = dropdown_cache.display("document_type", out[col] or "BOM", "BOM")
                 if target_activity_cols.get("data_source"):
                     col = int(target_activity_cols["data_source"]) - 1
-                    out[col] = _template_localized_display(out[col], data_source_display_map, "SAP")
+                    out[col] = dropdown_cache.display("data_source", out[col] or "SAP", "SAP")
                 if target_activity_cols.get("unit"):
                     col = int(target_activity_cols["unit"]) - 1
                     current = out[col] or _row_value(values, source_activity_cols.get("unit")) or "PC"
-                    out[col] = _template_localized_display(current, activity_unit_display_map, "PC")
+                    out[col] = dropdown_cache.display("activity_data_unit", current, "PC")
                 if target_activity_cols.get("weight_unit"):
                     col = int(target_activity_cols["weight_unit"]) - 1
                     if out[col] not in (None, ""):
-                        out[col] = _template_localized_display(out[col], weight_unit_display_map)
+                        out[col] = dropdown_cache.display("weight_unit", out[col])
                 transport_calc_col = target_activity_cols.get("calculate_transportation_emissions")
                 if transport_calc_col:
                     out[int(transport_calc_col) - 1] = transport_calculation_yes_value
@@ -1494,7 +1491,9 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 out[factor_cols["country_area"] - 1] = None
                 item = ccl_map.get(normalized_material)
                 if item:
-                    out[factor_cols["country_area"] - 1] = "TBD"
+                    out[factor_cols["country_area"] - 1] = dropdown_cache.display(
+                        "country_area", "TBD", "TBD"
+                    )
                     out[factor_cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
                     out[factor_cols["emission_factor"] - 1] = item.get("emission_factor")
                     out[factor_cols["factor_source"] - 1] = "Ecoinvent"
@@ -1602,6 +1601,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         "activity_helper_formula_cache_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],
         "calculate_transportation_emissions_column": target_activity_cols.get("calculate_transportation_emissions"),
         "calculate_transportation_emissions_value": transport_calculation_yes_value,
+        "dropdown_values_cache": dropdown_cache.summary(),
         "final_template_filename": raw_material_template_path.name,
         "split_enabled": True,
         "split_reason": "third-party upload row limit",
@@ -2496,7 +2496,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "DIP_MODULE3A_TEMPLATE_FORMAT_PRESERVE_V3_20260723"
+FACTOR_SELECTOR_VERSION = "DIP_MODULE3A_DROPDOWN_CACHE_LOCALIZED_V4_20260723"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
