@@ -681,7 +681,7 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
         summary = apply_ccl_factors_to_raw_material_bulk_package(
             raw_path, ccl_path, output_path, progress_callback=report, raw_material_template_path=None
         )
-        summary["app_version"] = "CMP_MODULE3_LIGHTWEIGHT_FACTOR_FILLED_V4"
+        summary["app_version"] = "DIP_MODULE3_LIGHTWEIGHT_INTERMEDIATE_PERF_V5"
         if output_path.exists():
             _register_workspace_output(output_path, workspace_id)
             shutil.copy2(output_path, MODULE3_CCL_FILLED_LATEST_PATH)
@@ -696,8 +696,8 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
             job_id,
             status="success",
             progress=100,
-            step="CCL 係數對應完成",
-            message="CCL 係數對應完成。",
+            step="M3 CCL 係數對應與輕量中繼檔完成",
+            message="M3 已完成 CCL 係數對應；請於 M3A 上傳正式原物料 Template 產出最終 Bulk。",
             remaining_seconds=0,
             summary=summary,
             final_template_filename="",
@@ -753,7 +753,7 @@ def _run_module3a_template_job(
             output_path=output_path,
             progress_callback=report,
         )
-        summary["app_version"] = "CMP_MODULE3A_OFFICIAL_TEMPLATE_UPLOAD_V1"
+        summary["app_version"] = "DIP_MODULE3A_FINAL_TEMPLATE_PERF_V2"
         if output_path.exists():
             _register_workspace_output(output_path, workspace_id)
             shutil.copy2(output_path, MODULE3A_FINAL_BULK_LATEST_PATH)
@@ -3666,7 +3666,7 @@ async def module3_apply_ccl_factors(
 
     try:
         summary = apply_ccl_factors_to_raw_material_bulk_package(raw_path, ccl_path, output_path, raw_material_template_path=None)
-        summary["app_version"] = "CMP_MODULE3_LIGHTWEIGHT_FACTOR_FILLED_V4"
+        summary["app_version"] = "DIP_MODULE3_LIGHTWEIGHT_INTERMEDIATE_PERF_V5"
         if output_path.exists():
             _register_workspace_output(output_path)
             shutil.copy2(output_path, MODULE3_CCL_FILLED_LATEST_PATH)

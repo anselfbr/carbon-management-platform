@@ -26,7 +26,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "DIP_MODULE3A_DROPDOWN_CACHE_LOCALIZED_V4_20260723"
+FACTOR_SELECTOR_VERSION = "DIP_M3_LIGHTWEIGHT_M3A_FINAL_TEMPLATE_PERF_V5_20260723"
 
 
 def _norm(value: Any) -> str:
@@ -1277,6 +1277,24 @@ def _build_exact_source_lookup(header_rows: list[list[Any]]) -> dict[str, int]:
     return lookup
 
 
+def _build_copy_plan(
+    target_header_rows: list[list[Any]],
+    source_exact_lookup: dict[str, int],
+) -> list[tuple[int, int]]:
+    """Precompute target/source column pairs once; avoid per-row header matching."""
+    plan: list[tuple[int, int]] = []
+    width = _max_header_width(target_header_rows)
+    for target_col in range(1, width + 1):
+        source_col = None
+        for label in _header_labels(target_header_rows, target_col):
+            source_col = source_exact_lookup.get(_norm(label))
+            if source_col:
+                break
+        if source_col:
+            plan.append((target_col - 1, int(source_col)))
+    return plan
+
+
 def _apply_ccl_factors_to_raw_material_bulk_final_template(
     raw_material_bulk_path: str | Path,
     ccl_mapping_path: str | Path,
@@ -1358,6 +1376,8 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         source_raw_cols = _build_source_col_map(source_raw_headers, _RAW_SOURCE_ALIASES, _RAW_SOURCE_DEFAULT_COLS)
         source_exact = _build_exact_source_lookup(source_activity_headers)
         raw_exact = _build_exact_source_lookup(source_raw_headers)
+        activity_copy_plan = _build_copy_plan(target_activity_headers, source_exact)
+        raw_copy_plan = _build_copy_plan(target_raw_headers, raw_exact)
         activity_helper_cache_specs = _activity_helper_cache_specs(
             tpl_wb,
             target_activity_cols,
@@ -1385,12 +1405,8 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 if not raw_key_text:
                     continue
                 out = [None] * raw_width
-                for tgt_col in range(1, raw_width + 1):
-                    for label in _header_labels(target_raw_headers, tgt_col):
-                        src_col = raw_exact.get(_norm(label))
-                        if src_col:
-                            out[tgt_col - 1] = _row_value(values, src_col)
-                            break
+                for target_idx, source_col in raw_copy_plan:
+                    out[target_idx] = _row_value(values, source_col)
                 for key, tgt_col in target_raw_cols.items():
                     src_col = source_raw_cols.get(key)
                     if tgt_col and src_col:
@@ -1456,17 +1472,8 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 material_rows += 1
                 normalized_material = _normalize_material_key(material)
                 out = [None] * activity_width
-                # First copy columns with identical labels where possible.
-                for tgt_col in range(1, activity_width + 1):
-                    copied = False
-                    for label in _header_labels(target_activity_headers, tgt_col):
-                        src_col = source_exact.get(_norm(label))
-                        if src_col:
-                            out[tgt_col - 1] = _row_value(values, src_col)
-                            copied = True
-                            break
-                    if copied:
-                        continue
+                for target_idx, source_col in activity_copy_plan:
+                    out[target_idx] = _row_value(values, source_col)
                 for key, tgt_col in target_activity_cols.items():
                     _copy_matching_value_to_target(out, tgt_col, values, source_activity_cols, key)
                 if target_activity_cols.get("document_type"):
@@ -1522,7 +1529,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                     rate = written_rows / elapsed
                     remaining = int(max(1, (total_activity_rows - written_rows) / rate + 25)) if rate > 0 and total_activity_rows else 60
                     progress = 40 + int(min(45, written_rows / max(1, total_activity_rows) * 45))
-                    _emit_progress(progress_callback, progress, "M3 係數對應並準備 5 萬列切檔", remaining, written_rows, total_activity_rows)
+                    _emit_progress(progress_callback, progress, "M3A 組裝正式 Template 資料列", remaining, written_rows, total_activity_rows)
 
                 if len(activity_chunk) >= max_data_rows_per_file:
                     part_idx += 1
@@ -1545,7 +1552,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
             force_zip = output_path.suffix.lower() == ".zip" or total_parts > 1
             if force_zip:
                 actual_output_path = output_path if output_path.suffix.lower() == ".zip" else output_path.with_suffix(".zip")
-                with zipfile.ZipFile(actual_output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+                with zipfile.ZipFile(actual_output_path, "w", compression=zipfile.ZIP_STORED) as zout:
                     for idx, part_path in enumerate(generated_paths, start=1):
                         arcname = make_part_name(idx, total_parts)
                         zout.write(part_path, arcname=arcname)
@@ -1666,6 +1673,8 @@ def apply_ccl_factors_to_raw_material_bulk(
     non_empty_material_rows = 0
     copied_other_rows = 0
     total_activity_rows = 0
+    processed_activity_rows = 0
+    skipped_template_support_sheets: list[str] = []
 
     try:
         src_ws = src_wb[ACTIVITY_SHEET_NAME]
@@ -1685,13 +1694,14 @@ def apply_ccl_factors_to_raw_material_bulk(
         }
         output_width = max(max(len(r) for r in header_rows), max(c for c in cols.values() if c))
 
-        _emit_progress(progress_callback, 38, "建立正式 Raw Material Bulk 欄位結構", 45, 0, total_activity_rows)
+        _emit_progress(progress_callback, 38, "建立 M3 輕量係數中繼欄位", 45, 0, total_activity_rows)
         out_ws = out_wb.create_sheet(title=ACTIVITY_SHEET_NAME)
         for hrow in header_rows:
             out_ws.append(_pad_row(list(hrow), output_width))
 
         t0 = time.perf_counter()
         for idx, values in enumerate(src_ws.iter_rows(min_row=DATA_START_ROW, max_row=src_ws.max_row, values_only=True), start=1):
+            processed_activity_rows = idx
             row_values = _pad_row(list(values or []), output_width)
             material = _text(row_values[cols["material"] - 1] if len(row_values) >= cols["material"] else None)
             if material:
@@ -1721,7 +1731,7 @@ def apply_ccl_factors_to_raw_material_bulk(
                 _emit_progress(
                     progress_callback,
                     progress,
-                    "比對原物料並串流寫入 CCL 係數欄位",
+                    "M3 批次比對 Material 與 CCL 係數",
                     remaining,
                     idx,
                     total_activity_rows,
@@ -1729,15 +1739,18 @@ def apply_ccl_factors_to_raw_material_bulk(
         perf["stream_map_and_write_activity"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        _emit_progress(progress_callback, 89, "複製 Raw Material Bulk 其他分頁", 20, total_activity_rows, total_activity_rows)
-        for sheet_name in src_wb.sheetnames:
-            if sheet_name == ACTIVITY_SHEET_NAME:
-                continue
-            copied_other_rows += _copy_non_activity_sheet_streaming(src_wb[sheet_name], out_wb)
-        perf["copy_other_sheets"] = time.perf_counter() - t0
+        _emit_progress(progress_callback, 89, "複製 M3A 必要的 Raw Material 主檔分頁", 20, total_activity_rows, total_activity_rows)
+        raw_sheet_name = _first_existing_name(src_wb.sheetnames, RAW_MATERIAL_SHEET_ALIASES)
+        skipped_template_support_sheets = [
+            name for name in src_wb.sheetnames
+            if name not in {ACTIVITY_SHEET_NAME, raw_sheet_name}
+        ]
+        if raw_sheet_name and raw_sheet_name != ACTIVITY_SHEET_NAME:
+            copied_other_rows += _copy_non_activity_sheet_streaming(src_wb[raw_sheet_name], out_wb)
+        perf["copy_required_raw_material_sheet"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        _emit_progress(progress_callback, 94, "儲存已填入係數的正式 Bulk 檔", 15, total_activity_rows, total_activity_rows)
+        _emit_progress(progress_callback, 94, "儲存 M3 輕量係數中繼檔", 15, total_activity_rows, total_activity_rows)
         out_wb.save(output_path)
         perf["save_writeonly_workbook"] = time.perf_counter() - t0
     finally:
@@ -1745,7 +1758,8 @@ def apply_ccl_factors_to_raw_material_bulk(
 
     total_time = time.perf_counter() - perf_start
     perf["total"] = total_time
-    _emit_progress(progress_callback, 100, "CCL 係數對應完成", 0, total_activity_rows, total_activity_rows)
+    effective_activity_rows = max(int(total_activity_rows or 0), int(processed_activity_rows or 0))
+    _emit_progress(progress_callback, 100, "M3 CCL 係數對應與輕量中繼檔完成", 0, effective_activity_rows, effective_activity_rows)
 
     return {
         "output_filename": output_path.name,
@@ -1755,12 +1769,13 @@ def apply_ccl_factors_to_raw_material_bulk(
         "unmatched_rows": unmatched,
         "written_rows": written_rows,
         "total_rows": non_empty_material_rows,
-        "activity_rows": total_activity_rows,
-        "copied_other_sheet_rows": copied_other_rows,
+        "activity_rows": effective_activity_rows,
+        "copied_required_raw_material_rows": copied_other_rows,
+        "skipped_template_support_sheets": skipped_template_support_sheets,
         "performance_seconds": {k: round(v, 3) for k, v in perf.items()},
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         "large_dataset_mode": True,
-        "template_strategy": "write_only workbook; preserve formal sheet names/headers; append missing factor columns; no full-template load",
+        "template_strategy": "M3 lightweight write-only intermediate; Activity Data + required Raw Material master only; no Dropdown Values/template styles",
     }
 
 
@@ -1886,7 +1901,7 @@ def apply_ccl_factors_to_raw_material_bulk_package(
         with tempfile.TemporaryDirectory(prefix="cmp_module3_zip_") as tmpdir:
             tmpdir_path = Path(tmpdir)
             total_files = len(excel_members)
-            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1) as zout:
                 for file_idx, info in enumerate(excel_members, start=1):
                     original_name = Path(info.filename).name
                     input_file = tmpdir_path / f"input_{file_idx}_{original_name}"
@@ -1927,8 +1942,10 @@ def apply_ccl_factors_to_raw_material_bulk_package(
                                     continue
                                 nested_name = Path(nested_info.filename).name
                                 arcname = nested_name
-                                with nested_zip.open(nested_info, "r") as src:
-                                    zout.writestr(arcname, src.read())
+                                staged_part = tmpdir_path / f"staged_{file_idx}_{arcname}"
+                                with nested_zip.open(nested_info, "r") as src, staged_part.open("wb") as dst:
+                                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+                                zout.write(staged_part, arcname=arcname)
                                 flattened_outputs.append(arcname)
                     elif filled_file.exists():
                         zout.write(filled_file, arcname=filled_name)
@@ -2097,7 +2114,7 @@ def apply_final_template_to_factor_filled_package(
         with tempfile.TemporaryDirectory(prefix="cmp_module3a_template_") as tmpdir:
             tmpdir_path = Path(tmpdir)
             total_files = len(excel_members)
-            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
+            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_STORED) as zout:
                 for file_idx, info in enumerate(excel_members, start=1):
                     original_name = Path(info.filename).name
                     input_file = tmpdir_path / f"input_{file_idx}_{original_name}"
@@ -2128,8 +2145,10 @@ def apply_final_template_to_factor_filled_package(
                                 if nested_info.is_dir():
                                     continue
                                 arcname = Path(nested_info.filename).name
-                                with nested_zip.open(nested_info, "r") as src:
-                                    zout.writestr(arcname, src.read())
+                                staged_part = tmpdir_path / f"staged_{file_idx}_{arcname}"
+                                with nested_zip.open(nested_info, "r") as src, staged_part.open("wb") as dst:
+                                    shutil.copyfileobj(src, dst, length=1024 * 1024)
+                                zout.write(staged_part, arcname=arcname)
                                 flattened_outputs.append(arcname)
                     elif filled_file.exists():
                         arcname = f"{concise_base_name}.xlsx"
@@ -2170,6 +2189,8 @@ def apply_final_template_to_factor_filled_package(
         "large_dataset_mode": True,
         "template_strategy": "M3A applies user-uploaded official template to completed M3 factor-filled intermediates",
         "compact_template_write": True,
+        "precomputed_copy_plan": True,
+        "outer_zip_strategy": "ZIP_STORED because XLSX parts are already compressed",
         "m3a_reused_completed_factor_mapping": True,
         **totals,
     }
@@ -2496,7 +2517,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "DIP_MODULE3A_DROPDOWN_CACHE_LOCALIZED_V4_20260723"
+FACTOR_SELECTOR_VERSION = "DIP_M3_LIGHTWEIGHT_M3A_FINAL_TEMPLATE_PERF_V5_20260723"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 
