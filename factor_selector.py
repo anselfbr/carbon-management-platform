@@ -11,6 +11,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
+from template_header_resolver import aliases as _profile_aliases
+
 import pandas as pd
 from openpyxl import load_workbook, Workbook
 
@@ -23,7 +25,7 @@ M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1)
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_NEW_TEMPLATE_N_YES_AB_AI_FORMULAS_V7_20260721"
+FACTOR_SELECTOR_VERSION = "DIP_MODULE3A_TEMPLATE_FORMAT_PRESERVE_V3_20260723"
 
 
 def _norm(value: Any) -> str:
@@ -281,6 +283,11 @@ _RAW_SOURCE_ALIASES: dict[str, list[str]] = {
     "description": ["Raw Material Description (Optional)", "Raw Material Description", "raw_material_description", "description"],
 }
 
+for _field_key in list(_ACTIVITY_SOURCE_ALIASES):
+    _ACTIVITY_SOURCE_ALIASES[_field_key] = _profile_aliases("raw_material_activity", _field_key, _ACTIVITY_SOURCE_ALIASES[_field_key])
+for _field_key in list(_RAW_SOURCE_ALIASES):
+    _RAW_SOURCE_ALIASES[_field_key] = _profile_aliases("raw_material_master", _field_key, _RAW_SOURCE_ALIASES[_field_key])
+
 
 _ACTIVITY_SOURCE_DEFAULT_COLS: dict[str, int] = {
     "raw_name": 1,
@@ -402,9 +409,17 @@ def _manual_cell_xml(
             + formula_xml + b'<v>' + _xml_escape_value(cache) + b'</v></c>'
         )
     if value is None or (isinstance(value, str) and value == ""):
-        if emit_empty_style and style_attr:
+        if emit_empty_style and style_attr and str(style_id or "0") != "0":
             return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'/>'
         return b""
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        # Store a real Excel date serial. The template style supplies the
+        # display format (for example mm-dd-yy); writing an inline string under
+        # a date style is not reliably recognized by third-party importers.
+        serial = (value - date(1899, 12, 30)).days
+        return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'><v>' + str(serial).encode("ascii") + b'</v></c>'
     if isinstance(value, bool):
         return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + f' t="b"><v>{1 if value else 0}</v></c>'.encode("utf-8")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -417,7 +432,7 @@ def _manual_cell_xml(
             pass
     text = _xml_clean_text(value)
     if text == "":
-        if emit_empty_style and style_attr:
+        if emit_empty_style and style_attr and str(style_id or "0") != "0":
             return b'<c r="' + ref.encode("utf-8") + b'"' + style_attr + b'/>'
         return b""
     escaped = (
@@ -615,6 +630,38 @@ _M3_DOCUMENT_TYPE_HELPER_COL = 28  # AB
 _M3_DOCUMENT_TYPE_HELPER_KEY = "document_type"
 _M3_DOCUMENT_TYPE_HELPER_FORMULA_XML = b"""<f>IF(E3="","",INDEX('Dropdown Values'!$B$2:$B$5,MATCH(E3,'Dropdown Values'!$A$2:$A$5,0)))</f>"""
 _M3_TRANSPORT_CALC_DEFAULT_VALUE = "Yes"
+
+def _transport_calculation_yes_for_template(template_wb) -> str:
+    """Return the localized visible dropdown value whose key is YES."""
+    dropdown_name = _first_existing_name(template_wb.sheetnames, ["Dropdown Values", "Dropdown Value", "Dropdown"])
+    if dropdown_name:
+        ws = template_wb[dropdown_name]
+        for values in ws.iter_rows(min_row=2, max_row=min(int(ws.max_row or 0), 100), min_col=13, max_col=14, values_only=True):
+            display = _text(values[0] if len(values) > 0 else None)
+            key = _text(values[1] if len(values) > 1 else None).upper()
+            if key == "YES" and display:
+                return display
+    return _M3_TRANSPORT_CALC_DEFAULT_VALUE
+
+
+def _template_dropdown_display_map(template_wb, display_col: int, key_col: int) -> dict[str, str]:
+    result: dict[str, str] = {}
+    dropdown_name = _first_existing_name(template_wb.sheetnames, ["Dropdown Values", "Dropdown Value", "Dropdown"])
+    if not dropdown_name:
+        return result
+    ws = template_wb[dropdown_name]
+    for values in ws.iter_rows(min_row=2, max_row=min(int(ws.max_row or 0), 20000), min_col=display_col, max_col=key_col, values_only=True):
+        display = _text(values[0] if values else None)
+        key = _text(values[key_col - display_col] if len(values) > key_col - display_col else None)
+        if display and key:
+            result[key.upper()] = display
+    return result
+
+
+def _template_localized_display(value: Any, mapping: dict[str, str], default: str = "") -> str:
+    text = _text(value) or _text(default)
+    return mapping.get(text.upper(), text) if text else ""
+
 _M3_ACTIVITY_HELPER_HEADER_KEYS = (
     "document_type",
     "activity_data_unit",
@@ -1032,15 +1079,15 @@ def _template_row_format(inside_sheetdata: bytes, row_idx: int, width: int) -> t
         for ch in col_letters:
             col_idx = col_idx * 26 + (ord(ch) - ord("A") + 1)
         s_m = re.search(rb'\bs="([^"]*)"', attrs)
-        if s_m:
-            style_by_col[col_idx] = s_m.group(1).decode("utf-8", "ignore")
+        # Missing s= means Excel style 0. Record it explicitly so the style
+        # from a preceding text/date cell is never propagated into another
+        # column (for example Raw Material A -> B:L).
+        style_by_col[col_idx] = s_m.group(1).decode("utf-8", "ignore") if s_m else "0"
         f_m = re.search(rb'(<f\b[^>]*>.*?</f>)', body, flags=re.DOTALL)
         if f_m:
             formula_by_col[col_idx] = f_m.group(1)
-    if style_by_col:
-        last_style = style_by_col[max(style_by_col)]
-        for col in range(1, int(width or 1) + 1):
-            style_by_col.setdefault(col, style_by_col.get(col - 1, last_style))
+    for col in range(1, int(width or 1) + 1):
+        style_by_col.setdefault(col, "0")
     return style_by_col, formula_by_col, row_attrs
 
 
@@ -1161,7 +1208,7 @@ def _write_template_applied_workbook(
             style_by_col=activity_style_by_col,
             formula_by_col=activity_formula_by_col,
             template_row_attrs=activity_row_attrs,
-            emit_empty_styles=False,
+            emit_empty_styles=True,
             general_numeric_cols=set(_M3_ACTIVITY_HELPER_FORMULA_COL_RANGE),
         )
         raw_count, raw_actual_width = _spool_sheet_rows_xml(
@@ -1172,7 +1219,7 @@ def _write_template_applied_workbook(
             style_by_col=raw_style_by_col,
             formula_by_col=raw_formula_by_col,
             template_row_attrs=raw_row_attrs,
-            emit_empty_styles=False,
+            emit_empty_styles=True,
         )
         final_activity_width = max(int(activity_width), int(activity_actual_width))
         final_raw_width = max(int(raw_width), int(raw_actual_width))
@@ -1264,6 +1311,11 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
     _emit_progress(progress_callback, 34, "讀取 M3 輕量中繼檔與最終 Bulk Template", 60, 0, None)
     src_wb = load_workbook(raw_material_bulk_path, read_only=True, data_only=False)
     tpl_wb = load_workbook(raw_material_template_path, read_only=True, data_only=False)
+    transport_calculation_yes_value = _transport_calculation_yes_for_template(tpl_wb)
+    document_type_display_map = _template_dropdown_display_map(tpl_wb, 1, 2)
+    activity_unit_display_map = _template_dropdown_display_map(tpl_wb, 3, 4)
+    weight_unit_display_map = _template_dropdown_display_map(tpl_wb, 5, 6)
+    data_source_display_map = _template_dropdown_display_map(tpl_wb, 7, 8)
     matched = 0
     unmatched = 0
     written_rows = 0
@@ -1420,15 +1472,23 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                         continue
                 for key, tgt_col in target_activity_cols.items():
                     _copy_matching_value_to_target(out, tgt_col, values, source_activity_cols, key)
-                if target_activity_cols.get("document_type") and not out[target_activity_cols["document_type"] - 1]:
-                    out[target_activity_cols["document_type"] - 1] = "Bill of Materials (BOM)"
-                if target_activity_cols.get("data_source") and not out[target_activity_cols["data_source"] - 1]:
-                    out[target_activity_cols["data_source"] - 1] = "SAP"
-                if target_activity_cols.get("unit") and not out[target_activity_cols["unit"] - 1]:
-                    out[target_activity_cols["unit"] - 1] = _row_value(values, source_activity_cols.get("unit")) or "PC"
+                if target_activity_cols.get("document_type"):
+                    col = int(target_activity_cols["document_type"]) - 1
+                    out[col] = _template_localized_display(out[col], document_type_display_map, "BOM")
+                if target_activity_cols.get("data_source"):
+                    col = int(target_activity_cols["data_source"]) - 1
+                    out[col] = _template_localized_display(out[col], data_source_display_map, "SAP")
+                if target_activity_cols.get("unit"):
+                    col = int(target_activity_cols["unit"]) - 1
+                    current = out[col] or _row_value(values, source_activity_cols.get("unit")) or "PC"
+                    out[col] = _template_localized_display(current, activity_unit_display_map, "PC")
+                if target_activity_cols.get("weight_unit"):
+                    col = int(target_activity_cols["weight_unit"]) - 1
+                    if out[col] not in (None, ""):
+                        out[col] = _template_localized_display(out[col], weight_unit_display_map)
                 transport_calc_col = target_activity_cols.get("calculate_transportation_emissions")
                 if transport_calc_col:
-                    out[int(transport_calc_col) - 1] = _M3_TRANSPORT_CALC_DEFAULT_VALUE
+                    out[int(transport_calc_col) - 1] = transport_calculation_yes_value
                 # Country/Area is populated only when the CCL factor is matched.
                 # Clear any upstream/source value first so unmatched rows remain blank.
                 out[factor_cols["country_area"] - 1] = None
@@ -1536,11 +1596,12 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         "large_dataset_mode": True,
         "template_strategy": "M3 final output split into third-party-uploadable workbooks; each part preserves original Raw Material Bulk Template headers/sheets",
         "compact_template_write": True,
-        "empty_styled_cells_omitted": True,
+        "template_number_formats_preserved": True,
+        "empty_non_general_styles_preserved": True,
         "activity_helper_formula_cache": activity_helper_cache_stats,
         "activity_helper_formula_cache_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],
         "calculate_transportation_emissions_column": target_activity_cols.get("calculate_transportation_emissions"),
-        "calculate_transportation_emissions_value": _M3_TRANSPORT_CALC_DEFAULT_VALUE,
+        "calculate_transportation_emissions_value": transport_calculation_yes_value,
         "final_template_filename": raw_material_template_path.name,
         "split_enabled": True,
         "split_reason": "third-party upload row limit",
@@ -2435,7 +2496,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "CMP_MODULE3A_NEW_TEMPLATE_N_YES_AB_AI_FORMULAS_V7_20260721"
+FACTOR_SELECTOR_VERSION = "DIP_MODULE3A_TEMPLATE_FORMAT_PRESERVE_V3_20260723"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 

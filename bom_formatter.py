@@ -11,6 +11,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict
 
+from template_header_resolver import aliases as _profile_aliases
+
 import pandas as pd
 from openpyxl import Workbook, load_workbook
 try:
@@ -22,7 +24,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "CMP_V27_13_M2_NEW_TEMPLATE_N_YES_AB_AI_FORMULAS"
+BOM_FORMATTER_VERSION = "DIP_V28_4_TEMPLATE_FORMAT_PRESERVE_20260723"
 M2_MAX_ACTIVITY_DATA_ROWS = 50000
 M2_ACTIVITY_HELPER_FORMULA_COLS = tuple(range(28, 36))  # AB~AI
 
@@ -340,29 +342,32 @@ def _clear_template_columns(ws, start_row: int, columns: list[int]) -> None:
     if unique_columns:
         _clear_target_cells(ws, start_row, unique_columns)
 
-RAW_MATERIAL_NAME_ALIASES = ["raw_material_name", "Raw Material Name", "原物料名稱", "原料名稱"]
-RAW_MATERIAL_CODE_ALIASES = ["raw_material_code", "Raw Material Code", "Raw Material ID", "Raw Material Number", "原物料代碼", "原料代碼"]
+RAW_MATERIAL_NAME_ALIASES = _profile_aliases("raw_material_activity", "raw_name", ["原料名稱"])
+RAW_MATERIAL_CODE_ALIASES = _profile_aliases("raw_material_activity", "raw_code", ["Raw Material ID", "Raw Material Number", "原料代碼"])
 RAW_MATERIAL_DESC_ALIASES = ["raw_material_description", "Raw Material Description (Optional)", "Raw Material Description", "Description", "原物料描述", "品名"]
-DOC_START_DATE_ALIASES = ["doc_start_date", "Doc. Start Date", "Document Start Date", "開始日期"]
-DOC_END_DATE_ALIASES = ["doc_end_date", "Doc. End Date", "Document End Date", "結束日期"]
-DOCUMENT_TYPE_ALIASES = ["document_type", "Document Type", "文件類型"]
-DOCUMENT_NUMBER_ALIASES = ["document_number", "Document Number (optional)", "Document Number", "文件號碼"]
-USAGE_ALIASES = ["usage", "Usage", "用量"]
-ACTIVITY_DATA_UNIT_ALIASES = ["activity_data_unit", "Activity Data Unit", "活動數據單位", "單位"]
-DATA_SOURCE_ALIASES = ["data_source", "Data Source", "資料來源"]
-DATA_SOURCE_OTHER_ALIASES = ["data_source_other", "Data Source Other", "其他資料來源"]
-CALCULATE_TRANSPORTATION_EMISSIONS_ALIASES = [
-    "Calculate Transportation Emissions (Required)",
-    "Calculate Transportation Emissions",
+DOC_START_DATE_ALIASES = _profile_aliases("raw_material_activity", "doc_start", ["Document Start Date"])
+DOC_END_DATE_ALIASES = _profile_aliases("raw_material_activity", "doc_end", ["Document End Date"])
+DOCUMENT_TYPE_ALIASES = _profile_aliases("raw_material_activity", "document_type", ["文件類型"])
+DOCUMENT_NUMBER_ALIASES = _profile_aliases("raw_material_activity", "document_number", ["Document Number", "文件號碼"])
+USAGE_ALIASES = _profile_aliases("raw_material_activity", "usage")
+ACTIVITY_DATA_UNIT_ALIASES = _profile_aliases("raw_material_activity", "unit", ["單位"])
+DATA_SOURCE_ALIASES = _profile_aliases("raw_material_activity", "data_source")
+DATA_SOURCE_OTHER_ALIASES = _profile_aliases("raw_material_activity", "data_source_other", ["其他資料來源"])
+CALCULATE_TRANSPORTATION_EMISSIONS_ALIASES = _profile_aliases(
+    "raw_material_activity",
     "calculate_transportation_emissions",
-    "is_transportation_emission_calculated",
-]
-TRANSPORT_ORIGIN_ALIASES = ["transportation_origin", "Transportation Origin", "運輸起點"]
-TRANSPORT_DESTINATION_ALIASES = ["transportation_destination", "Transportation Destination", "運輸終點"]
-SUPPLIER_NAME_ALIASES = ["supplier_name", "Supplier Name (optional)", "Supplier Name", "供應商名稱"]
-PRODUCT_LINK_ALIASES = ["allocated_target_product_service", "Allocated Target Product/Service", "Target Product", "Product Code", "Product Name", "產品代碼", "產品名稱"]
-COMMENT_ALIASES = ["comment", "Comment (optional)", "Comment", "備註"]
-MATERIAL_GROUP_ALIASES = ["material_group", "Material Group", "Material group", "物料群組"]
+    [
+        "Calculate Transportation Emissions",
+        "calculate_transportation_emissions",
+        "is_transportation_emission_calculated",
+    ],
+)
+TRANSPORT_ORIGIN_ALIASES = _profile_aliases("raw_material_activity", "transport_origin")
+TRANSPORT_DESTINATION_ALIASES = _profile_aliases("raw_material_activity", "transport_destination", ["運輸終點"])
+SUPPLIER_NAME_ALIASES = _profile_aliases("raw_material_activity", "supplier_name")
+PRODUCT_LINK_ALIASES = _profile_aliases("raw_material_activity", "target_product", ["Target Product", "Product Code", "Product Name", "產品代碼", "產品名稱"])
+COMMENT_ALIASES = _profile_aliases("raw_material_activity", "comment", ["Comment"])
+MATERIAL_GROUP_ALIASES = _profile_aliases("raw_material_activity", "material_group", ["Material group"])
 NET_WEIGHT_ALIASES = ["net_weight", "Net Weight (optional)", "Net Weight", "Net weight", "淨重"]
 GROSS_WEIGHT_ALIASES = ["gross_weight", "Gross Weight (optional)", "Gross Weight", "Gross weight", "毛重"]
 WEIGHT_UNIT_ALIASES = ["weight_unit", "Weight Unit (optional)", "Weight Unit", "Weight UoM", "Weight UOM", "重量單位"]
@@ -395,14 +400,52 @@ def _sheet_has_dropdown_label(wb, dropdown_column_name: str, label: str) -> bool
     return False
 
 
-def _document_type_for_template(wb) -> str:
-    """Return the visible Document Type value used by downstream templates.
+def _dropdown_display_map(wb, display_col: int, key_col: int) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if "Dropdown Values" not in getattr(wb, "sheetnames", []):
+        return result
+    ws = wb["Dropdown Values"]
+    start_col = min(int(display_col), int(key_col))
+    end_col = max(int(display_col), int(key_col))
+    display_offset = int(display_col) - start_col
+    key_offset = int(key_col) - start_col
+    max_row = min(int(getattr(ws, "max_row", 0) or 0), 20000)
+    for values in ws.iter_rows(min_row=2, max_row=max_row, min_col=start_col, max_col=end_col, values_only=True):
+        display = str(values[display_offset] or "").strip() if len(values) > display_offset else ""
+        key = str(values[key_offset] or "").strip() if len(values) > key_offset else ""
+        if display and key:
+            result[key.upper()] = display
+    return result
 
-    Module 2B/2C may generate intermediate bulk files before the formal
-    template dropdown sheet is present. Always write the visible label so
-    Module 3 can match the final Raw Material Bulk Template dropdown option.
+
+def _localized_dropdown_display(value: Any, mapping: dict[str, str], default: str = "") -> str:
+    text = str(value or "").strip()
+    if not text:
+        text = str(default or "").strip()
+    if not text:
+        return ""
+    return mapping.get(text.upper(), text)
+
+
+def _document_type_for_template(wb) -> str:
+    """Return the template-localized visible value whose internal key is BOM."""
+    return _localized_dropdown_display("BOM", _dropdown_display_map(wb, 1, 2), "Bill of Materials (BOM)")
+
+def _transport_calculation_yes_for_template(wb) -> str:
+    """Return the template-localized visible value whose internal key is YES.
+
+    English templates display ``Yes`` while Chinese templates display ``是``.
+    Writing the localized display value keeps the visible dropdown valid and
+    lets the hidden AI formula resolve to the common key ``YES``.
     """
-    return "Bill of Materials (BOM)"
+    if "Dropdown Values" in getattr(wb, "sheetnames", []):
+        ws = wb["Dropdown Values"]
+        for row_idx in range(2, min(int(getattr(ws, "max_row", 0) or 0), 100) + 1):
+            display = str(ws.cell(row_idx, 13).value or "").strip()  # M
+            key = str(ws.cell(row_idx, 14).value or "").strip().upper()  # N
+            if key == "YES" and display:
+                return display
+    return "Yes"
 
 def _read_bom(bom_path: str | Path, mapping: dict[str, str | None] | None = None) -> tuple[pd.DataFrame, dict[str, str]]:
     df = _read_excel_first_sheet(bom_path)
@@ -1129,8 +1172,8 @@ def _write_raw_material_bulk_from_exploded(
         _write_template_value(activity_ws, row_idx, activity_cols["document_type"], document_type_value)
         _write_template_value(activity_ws, row_idx, activity_cols["document_number"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["usage"], usage_value)
-        _write_template_value(activity_ws, row_idx, activity_cols["unit"], r["unit"])
-        _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
+        _write_template_value(activity_ws, row_idx, activity_cols["unit"], _localized_dropdown_display(r["unit"], activity_unit_display_map))
+        _write_template_value(activity_ws, row_idx, activity_cols["data_source"], _localized_dropdown_display("SAP", data_source_display_map, "SAP"))
         _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], "")
         _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], r.get("transport_destination", ""))
@@ -1140,7 +1183,7 @@ def _write_raw_material_bulk_from_exploded(
         _write_template_value(activity_ws, row_idx, activity_cols["material_group"], r["material_group"])
         _write_template_value(activity_ws, row_idx, activity_cols.get("net_weight"), r.get("net_weight", ""))
         _write_template_value(activity_ws, row_idx, activity_cols.get("gross_weight"), r.get("gross_weight", ""))
-        _write_template_value(activity_ws, row_idx, activity_cols.get("weight_unit"), r.get("weight_uom", ""))
+        _write_template_value(activity_ws, row_idx, activity_cols.get("weight_unit"), _localized_dropdown_display(r.get("weight_uom", ""), weight_unit_display_map))
 
         activity_ws.cell(row_idx, activity_cols["start_date"]).number_format = "yyyy/mm/dd"
         activity_ws.cell(row_idx, activity_cols["end_date"]).number_format = "yyyy/mm/dd"
@@ -2364,11 +2407,11 @@ SUPPLIER_VENDOR_NAME2_ALIASES = [
     "Vendor Name-2", "Vendor Name 2", "Vendor Name_2", "Vendor Name2", "VendorName2",
     "Vendor Name - 2", "供應商名稱2", "廠商名稱2",
 ]
-SUPPLIER_BULK_NAME_ALIASES = ["Supplier Name", "Supplier Name (optional)", "Supplier Name(optional)", "供應商名稱"]
-SUPPLIER_BULK_CODE_ALIASES = ["Supplier Code", "Supplier Code (optional)", "Vendor", "Vendor Code", "供應商代碼"]
-SUPPLIER_BULK_COUNTRY_ALIASES = ["Country/Area", "Country / Area", "Country", "Country Area", "國家/地區", "國家"]
-SUPPLIER_BULK_ADDRESS_ALIASES = ["Supplier Address", "Supplier Address (optional)", "Supplier Address1", "供應商地址"]
-SUPPLIER_BULK_UNIT_ALIASES = ["Unit Name", "Unit", "Transportation Destination", "Production Site", "單位名稱", "廠區"]
+SUPPLIER_BULK_NAME_ALIASES = _profile_aliases("supplier_bulk", "supplier_name", ["Supplier Name (optional)", "Supplier Name(optional)"])
+SUPPLIER_BULK_CODE_ALIASES = _profile_aliases("supplier_bulk", "supplier_code", ["Supplier Code (optional)", "Vendor", "Vendor Code"])
+SUPPLIER_BULK_COUNTRY_ALIASES = _profile_aliases("supplier_bulk", "country_area", ["Country / Area", "Country", "Country Area", "國家"])
+SUPPLIER_BULK_ADDRESS_ALIASES = _profile_aliases("supplier_bulk", "supplier_address", ["Supplier Address", "Supplier Address1", "供應商地址"])
+SUPPLIER_BULK_UNIT_ALIASES = _profile_aliases("supplier_bulk", "unit_name", ["Unit", "Transportation Destination", "Production Site", "廠區"])
 SUPPLIER_PLANT_ALIASES = [
     "Plant", "Plant Code", "Production Plant", "Production Site", "Site", "Factory",
     "工廠", "工廠代碼", "廠別", "廠區", "廠區代碼", "生產廠區",
@@ -3177,6 +3220,168 @@ def _normalize_supplier_bulk_rows(
     return sorted(selected.values(), key=lambda row: (row[4], row[1], row[0], row[3]))
 
 
+
+def _supplier_col_letter(idx: int) -> str:
+    out = ""
+    n = int(idx)
+    while n:
+        n, rem = divmod(n - 1, 26)
+        out = chr(65 + rem) + out
+    return out
+
+
+def _supplier_replace_cell_xml(row_xml: bytes, row_idx: int, col_idx: int, value: Any = None, formula_cache: Any = None) -> bytes:
+    ref = f"{_supplier_col_letter(col_idx)}{row_idx}"
+    pattern = re.compile(rb'<c\b[^>]*?\br="' + re.escape(ref.encode()) + rb'"[^>]*?(?:/>|>.*?</c>)', re.DOTALL)
+    match = pattern.search(row_xml)
+    old = match.group(0) if match else b""
+    style_match = re.search(rb'\bs="([^"]+)"', old)
+    style = (b' s="' + style_match.group(1) + b'"') if style_match else b""
+    if formula_cache is not None:
+        formula_match = re.search(rb'(<f\b[^>]*>.*?</f>)', old, re.DOTALL)
+        formula = formula_match.group(1) if formula_match else b""
+        cache = str(formula_cache or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        new = b'<c r="' + ref.encode() + b'"' + style + b' t="str">' + formula + b'<v>' + cache.encode("utf-8") + b'</v></c>'
+    elif value in (None, ""):
+        new = b'<c r="' + ref.encode() + b'"' + style + b'/>'
+    else:
+        text = str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+        new = b'<c r="' + ref.encode() + b'"' + style + b' t="inlineStr"><is><t xml:space="preserve">' + text.encode("utf-8") + b'</t></is></c>'
+    if match:
+        return row_xml[:match.start()] + new + row_xml[match.end():]
+    pos = row_xml.rfind(b"</row>")
+    return row_xml[:pos] + new + row_xml[pos:] if pos >= 0 else row_xml
+
+
+def _supplier_sort_row_cells(row_xml: bytes) -> bytes:
+    open_match = re.match(rb'(<row\b[^>]*>)', row_xml, re.DOTALL)
+    close_pos = row_xml.rfind(b"</row>")
+    if not open_match or close_pos < 0:
+        return row_xml
+    body = row_xml[open_match.end():close_pos]
+    pattern = re.compile(rb'<c\b[^>]*?\br="([A-Z]+)\d+"[^>]*?(?:/>|>.*?</c>)', re.DOTALL)
+    matches = list(pattern.finditer(body))
+    if len(matches) < 2:
+        return row_xml
+    def idx(letters: bytes) -> int:
+        n = 0
+        for ch in letters.decode("ascii"):
+            n = n * 26 + ord(ch) - 64
+        return n
+    prefix = body[:matches[0].start()]
+    suffix = body[matches[-1].end():]
+    cells = sorted(((idx(m.group(1)), m.group(0)) for m in matches), key=lambda x: x[0])
+    return row_xml[:open_match.end()] + prefix + b"".join(c for _, c in cells) + suffix + row_xml[close_pos:]
+
+
+def _supplier_dropdown_country_maps(template_path: str | Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Return target-template country display->key and key->display maps."""
+    display_to_key: dict[str, str] = {}
+    key_to_display: dict[str, str] = {}
+    wb = load_workbook(template_path, read_only=True, data_only=True)
+    try:
+        if "Dropdown Values" not in wb.sheetnames:
+            return display_to_key, key_to_display
+        ws = wb["Dropdown Values"]
+        for display, key in ws.iter_rows(min_row=2, max_col=2, values_only=True):
+            display_text = _safe_text(display)
+            if not display_text:
+                continue
+            key_text = _safe_text(key) or display_text
+            display_to_key[_normalize_template_header(display_text)] = key_text
+            key_to_display.setdefault(key_text.upper(), display_text)
+    finally:
+        wb.close()
+    return display_to_key, key_to_display
+
+
+def _supplier_localized_country(country_area: Any, unit_name: Any, display_to_key: dict[str, str], key_to_display: dict[str, str]) -> tuple[str, str]:
+    """Resolve a country to the uploaded Supplier Template language and internal key."""
+    original = _safe_text(country_area)
+    english = _country_area_for_unit_name(unit_name, uploaded_country=original)
+    chinese = _country_area_zh_for_tbc(unit_name, uploaded_country=original)
+    candidates = [original, english, chinese]
+    key = ""
+    for candidate in candidates:
+        normalized = _normalize_template_header(candidate)
+        if normalized and normalized in display_to_key:
+            key = display_to_key[normalized]
+            break
+    if not key:
+        known = {
+            "CHINA": "CN", "PRC": "CN", "PEOPLESREPUBLICOFCHINA": "CN", "中國": "CN", "中国": "CN",
+            "THAILAND": "TH", "泰國": "TH", "泰国": "TH",
+            "VIETNAM": "VN", "VIETNAM": "VN", "VIET NAM": "VN", "越南": "VN",
+            "TBD": "TBD",
+        }
+        for candidate in candidates:
+            compact = re.sub(r"[^A-Z0-9一-龥]", "", _safe_text(candidate).upper())
+            if compact in known:
+                key = known[compact]
+                break
+    if not key:
+        key = original
+    display = key_to_display.get(_safe_text(key).upper()) or original or english or chinese
+    return display, key
+
+
+def _write_supplier_bulk_openxml(rows: list[tuple[str, str, str, str, str]], template_path: str | Path, output_path: str | Path, cols: dict[str, int]) -> None:
+    template_path = Path(template_path)
+    output_path = Path(output_path)
+    sheet_paths = _xlsx_sheet_paths_by_name(template_path)
+    sheet_path = sheet_paths.get(SUPPLIER_BULK_SHEET_NAME) or next(iter(sheet_paths.values()), None)
+    if not sheet_path:
+        raise ValueError("Supplier Bulk Template 缺少 Input Sheet")
+    country_display_to_key, country_key_to_display = _supplier_dropdown_country_maps(template_path)
+    hidden_cols = {"country": cols.get("country_hidden", 15), "industry": cols.get("industry_hidden", 16), "tier": cols.get("tier_hidden", 17)}
+    with zipfile.ZipFile(template_path, "r") as zin:
+        template_xml = zin.read(sheet_path)
+        start = re.search(rb'<sheetData\b[^>]*>', template_xml)
+        end = re.search(rb'</sheetData>', template_xml)
+        if not start or not end:
+            raise ValueError("Supplier Bulk Template worksheet XML 缺少 sheetData")
+        inside = template_xml[start.end():end.start()]
+        row_pattern = re.compile(rb'<row\b[^>]*\br="(\d+)"[^>]*>.*?</row>', re.DOTALL)
+        out_rows: list[bytes] = []
+        max_template_row = 2
+        for match in row_pattern.finditer(inside):
+            row_idx = int(match.group(1)); max_template_row = max(max_template_row, row_idx)
+            row_xml = match.group(0)
+            if row_idx < DATA_START_ROW:
+                out_rows.append(row_xml); continue
+            offset = row_idx - DATA_START_ROW
+            if offset < len(rows):
+                supplier_name, supplier_code, country_area, supplier_address, unit_name = rows[offset]
+                country_display, country_key = _supplier_localized_country(
+                    country_area, unit_name, country_display_to_key, country_key_to_display
+                )
+                for key, value in (("supplier_name", supplier_name), ("supplier_code", supplier_code), ("country_area", country_display), ("supplier_address", supplier_address), ("unit_name", unit_name)):
+                    row_xml = _supplier_replace_cell_xml(row_xml, row_idx, int(cols[key]), value=value)
+                row_xml = _supplier_replace_cell_xml(row_xml, row_idx, int(hidden_cols["country"]), formula_cache=country_key)
+                row_xml = _supplier_replace_cell_xml(row_xml, row_idx, int(hidden_cols["industry"]), formula_cache="")
+                row_xml = _supplier_replace_cell_xml(row_xml, row_idx, int(hidden_cols["tier"]), formula_cache="")
+                row_xml = _supplier_sort_row_cells(row_xml)
+            out_rows.append(row_xml)
+        if len(rows) > max(0, max_template_row - DATA_START_ROW + 1):
+            raise ValueError(f"Supplier Bulk Template 預留列數不足：需要 {len(rows)} 筆")
+        new_xml = template_xml[:start.end()] + b"".join(out_rows) + template_xml[end.start():]
+        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zout:
+            for item in zin.infolist():
+                name = item.filename
+                if item.is_dir():
+                    zout.writestr(item, b""); continue
+                if name == "xl/calcChain.xml":
+                    continue
+                data = new_xml if name == sheet_path else zin.read(name)
+                if name == "[Content_Types].xml":
+                    data = re.sub(rb'<Override\b[^>]*PartName="/xl/calcChain\.xml"[^>]*/>', b"", data)
+                elif name == "xl/_rels/workbook.xml.rels":
+                    data = re.sub(rb'<Relationship\b[^>]*(?:calcChain|calcchain)[^>]*/>', b"", data)
+                elif name == "xl/workbook.xml":
+                    if b"<calcPr" not in data:
+                        data = data.replace(b"</workbook>", b'<calcPr calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>', 1)
+                zout.writestr(item, data)
+
 def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supplier_bulk_template_path: str | Path, output_path: str | Path) -> Dict[str, Any]:
     supplier_bulk_template_path = Path(supplier_bulk_template_path)
     output_path = Path(output_path)
@@ -3186,17 +3391,19 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
         return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": "", "supplier_bulk_error": f"找不到內建供應商 Bulk Template：{supplier_bulk_template_path.name}"}
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(supplier_bulk_template_path, output_path)
-    wb = load_workbook(output_path)
-    ws = wb[SUPPLIER_BULK_SHEET_NAME] if SUPPLIER_BULK_SHEET_NAME in wb.sheetnames else wb[wb.sheetnames[0]]
+    wb_meta = load_workbook(supplier_bulk_template_path, read_only=True, data_only=False)
+    ws = wb_meta[SUPPLIER_BULK_SHEET_NAME] if SUPPLIER_BULK_SHEET_NAME in wb_meta.sheetnames else wb_meta[wb_meta.sheetnames[0]]
     cols = {
         "supplier_name": _find_template_column(ws, SUPPLIER_BULK_NAME_ALIASES, 1),
         "supplier_code": _find_template_column(ws, SUPPLIER_BULK_CODE_ALIASES, 2),
         "country_area": _find_template_column(ws, SUPPLIER_BULK_COUNTRY_ALIASES, 3),
         "supplier_address": _find_template_column(ws, SUPPLIER_BULK_ADDRESS_ALIASES, 4),
         "unit_name": _find_template_column(ws, SUPPLIER_BULK_UNIT_ALIASES, 5),
+        "country_hidden": _find_template_column(ws, ["country"], 15),
+        "industry_hidden": _find_template_column(ws, ["industry_category"], 16),
+        "tier_hidden": _find_template_column(ws, ["tier"], 17),
     }
-    _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
+    wb_meta.close()
 
     raw_rows: list[tuple[str, str, str, str, str]] = []
     for _, row in expanded_with_suppliers.iterrows():
@@ -3213,16 +3420,7 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
 
     rows = _normalize_supplier_bulk_rows(raw_rows)
 
-    row_idx = DATA_START_ROW
-    for supplier_name, supplier_code, country_area, supplier_address, unit_name in rows:
-        _write_template_value(ws, row_idx, cols["supplier_name"], supplier_name)
-        _write_template_value(ws, row_idx, cols["supplier_code"], supplier_code)
-        _write_template_value(ws, row_idx, cols["country_area"], country_area)
-        _write_template_value(ws, row_idx, cols["supplier_address"], supplier_address)
-        _write_template_value(ws, row_idx, cols["unit_name"], unit_name)
-        row_idx += 1
-
-    wb.save(output_path)
+    _write_supplier_bulk_openxml(rows, supplier_bulk_template_path, output_path, cols)
     return {
         "supplier_bulk_rows": int(len(rows)),
         "supplier_bulk_filename": output_path.name,
@@ -3283,6 +3481,10 @@ def _write_raw_material_bulk_from_exploded(
     }
 
     document_type_value = _document_type_for_template(wb)
+    transport_calculation_yes_value = _transport_calculation_yes_for_template(wb)
+    activity_unit_display_map = _dropdown_display_map(wb, 3, 4)
+    weight_unit_display_map = _dropdown_display_map(wb, 5, 6)
+    data_source_display_map = _dropdown_display_map(wb, 7, 8)
     supplier_options = _extract_supplier_name_options_from_raw_template(wb)
     expanded, supplier_write_summary = _apply_supplier_mapping_to_exploded(
         exploded,
@@ -3310,7 +3512,10 @@ def _write_raw_material_bulk_from_exploded(
         _write_template_value(activity_ws, row_idx, activity_cols["unit"], r["unit"])
         _write_template_value(activity_ws, row_idx, activity_cols["data_source"], "SAP")
         _write_template_value(activity_ws, row_idx, activity_cols["data_source_other"], "")
-        _write_template_value(activity_ws, row_idx, activity_cols["calculate_transportation_emissions"], "Yes")
+        _write_template_value(
+            activity_ws, row_idx, activity_cols["calculate_transportation_emissions"],
+            r.get("calculate_transportation_emissions", "") or transport_calculation_yes_value,
+        )
         _write_template_value(activity_ws, row_idx, activity_cols["supplier_name"], r.get("supplier_name", ""))
         _write_template_value(activity_ws, row_idx, activity_cols["transport_origin"], r.get("transport_origin", ""))
         _write_template_value(activity_ws, row_idx, activity_cols["transport_destination"], r.get("transport_destination", ""))
@@ -4132,6 +4337,91 @@ def _read_xlsx_header_rows_and_row3_formulas(
     return rows, formula_by_col
 
 
+
+_BUILTIN_XLSX_NUM_FORMATS = {
+    0: "General", 1: "0", 2: "0.00", 3: "#,##0", 4: "#,##0.00",
+    9: "0%", 10: "0.00%", 11: "0.00E+00", 14: "mm-dd-yy",
+    15: "d-mmm-yy", 16: "d-mmm", 17: "mmm-yy", 18: "h:mm AM/PM",
+    19: "h:mm:ss AM/PM", 20: "h:mm", 21: "h:mm:ss",
+    22: "m/d/yy h:mm", 49: "@",
+}
+
+
+def _xlsx_row3_number_formats(path: str | Path, sheet_name: str) -> dict[int, str]:
+    """Read each row-3 cell's real Excel number format directly from OOXML."""
+    sheet_paths = _xlsx_sheet_paths_by_name(path)
+    sheet_xml_path = sheet_paths.get(sheet_name)
+    if not sheet_xml_path:
+        return {}
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(path) as zf:
+        styles_root = ET.fromstring(zf.read("xl/styles.xml"))
+        custom: dict[int, str] = {}
+        numfmts = styles_root.find(f"{ns}numFmts")
+        if numfmts is not None:
+            for item in numfmts.findall(f"{ns}numFmt"):
+                custom[int(item.attrib.get("numFmtId", "0"))] = item.attrib.get("formatCode", "General")
+        xfs = styles_root.find(f"{ns}cellXfs")
+        style_formats: list[str] = []
+        if xfs is not None:
+            for xf in xfs.findall(f"{ns}xf"):
+                num_fmt_id = int(xf.attrib.get("numFmtId", "0"))
+                style_formats.append(custom.get(num_fmt_id, _BUILTIN_XLSX_NUM_FORMATS.get(num_fmt_id, "General")))
+        result: dict[int, str] = {}
+        for _event, row_el in ET.iterparse(zf.open(sheet_xml_path), events=("end",)):
+            if row_el.tag != f"{ns}row":
+                continue
+            row_idx = int(row_el.attrib.get("r", "0") or 0)
+            if row_idx == DATA_START_ROW:
+                for cell in row_el.findall(f"{ns}c"):
+                    col_idx = _xlsx_col_to_index(cell.attrib.get("r", "")) + 1
+                    style_idx = int(cell.attrib.get("s", "0") or 0)
+                    result[col_idx] = style_formats[style_idx] if style_idx < len(style_formats) else "General"
+                break
+            if row_idx > DATA_START_ROW:
+                break
+            row_el.clear()
+        return result
+
+
+def _xlsxwriter_column_formats(workbook, number_formats: dict[int, str]) -> dict[int, Any]:
+    cache: dict[str, Any] = {}
+    result: dict[int, Any] = {}
+    for col_idx, code in (number_formats or {}).items():
+        fmt_code = str(code or "General")
+        if fmt_code.lower() == "general":
+            continue
+        if fmt_code not in cache:
+            cache[fmt_code] = workbook.add_format({"num_format": fmt_code})
+        result[int(col_idx)] = cache[fmt_code]
+    return result
+
+
+def _write_xlsxwriter_typed_cell(ws, zero_based_row: int, zero_based_col: int, value: Any, number_formats: dict[int, str], formats: dict[int, Any]) -> None:
+    col_idx = int(zero_based_col) + 1
+    fmt_code = str((number_formats or {}).get(col_idx, "General") or "General")
+    fmt = (formats or {}).get(col_idx)
+    if value in (None, ""):
+        if fmt is not None:
+            ws.write_blank(zero_based_row, zero_based_col, None, fmt)
+        return
+    if isinstance(value, datetime):
+        ws.write_datetime(zero_based_row, zero_based_col, value, fmt)
+        return
+    if isinstance(value, date):
+        ws.write_datetime(zero_based_row, zero_based_col, datetime(value.year, value.month, value.day), fmt)
+        return
+    if fmt_code == "@":
+        ws.write_string(zero_based_row, zero_based_col, str(value), fmt)
+        return
+    if isinstance(value, bool):
+        ws.write_boolean(zero_based_row, zero_based_col, value, fmt)
+        return
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        ws.write_number(zero_based_row, zero_based_col, float(value), fmt)
+        return
+    ws.write(zero_based_row, zero_based_col, value, fmt)
+
 def _translate_m2_helper_formula(formula: str, target_row: int) -> str:
     """Translate a row-3 helper formula to the requested worksheet row."""
     if not formula or int(target_row) == DATA_START_ROW:
@@ -4140,12 +4430,12 @@ def _translate_m2_helper_formula(formula: str, target_row: int) -> str:
     return re.sub(pattern, lambda m: m.group(1) + str(int(target_row)), formula)
 
 
-def _write_m2_helper_formulas_xlsxwriter(ws, zero_based_row: int, formula_by_col: dict[int, str]) -> None:
+def _write_m2_helper_formulas_xlsxwriter(ws, zero_based_row: int, formula_by_col: dict[int, str], formats: dict[int, Any] | None = None) -> None:
     excel_row = int(zero_based_row) + 1
     for col_idx in M2_ACTIVITY_HELPER_FORMULA_COLS:
         formula = formula_by_col.get(int(col_idx))
         if formula:
-            ws.write_formula(int(zero_based_row), int(col_idx) - 1, _translate_m2_helper_formula(formula, excel_row), None, "")
+            ws.write_formula(int(zero_based_row), int(col_idx) - 1, _translate_m2_helper_formula(formula, excel_row), (formats or {}).get(int(col_idx)), "")
 
 
 def _apply_m2_helper_formulas_to_row(row: list[Any], formula_by_col: dict[int, str], excel_row: int) -> list[Any]:
@@ -4159,7 +4449,7 @@ def _apply_m2_helper_formulas_to_row(row: list[Any], formula_by_col: dict[int, s
     return row
 
 
-def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Path) -> tuple[list[list[Any]], list[list[Any]], dict[str, int], dict[str, int], str, dict[int, str]]:
+def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Path) -> tuple[list[list[Any]], list[list[Any]], dict[str, int], dict[str, int], str, str, dict[int, str], dict[int, str], dict[int, str], dict[str, dict[str, str]]]:
     """Read Raw Material Bulk template two-row headers for Module 2B Large Dataset Mode.
 
     Module 2B intentionally keeps the template sheet names and column layout but
@@ -4212,11 +4502,19 @@ def _template_headers_for_lightweight_bulk(raw_material_template_path: str | Pat
         activity_header_rows = _ensure_bulk_visible_header_row(activity_header_rows, activity_cols, _ACTIVITY_VISIBLE_HEADERS)
         raw_header_rows = _ensure_bulk_visible_header_row(raw_header_rows, raw_cols, _RAW_VISIBLE_HEADERS)
         document_type_value = _document_type_for_template(wb)
+        transport_calculation_yes_value = _transport_calculation_yes_for_template(wb)
         missing_formula_cols = [col for col in M2_ACTIVITY_HELPER_FORMULA_COLS if col not in activity_formula_templates]
         if missing_formula_cols:
             missing_letters = ", ".join(_xlsx_index_to_col_letter(col) for col in missing_formula_cols)
             raise ValueError(f"Raw Material Bulk Template 第 3 列缺少 AB～AI 公式：{missing_letters}")
-        return activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value, activity_formula_templates
+        activity_number_formats = _xlsx_row3_number_formats(raw_material_template_path, ACTIVITY_SHEET_NAME)
+        raw_number_formats = _xlsx_row3_number_formats(raw_material_template_path, RAW_MATERIAL_SHEET_NAME)
+        dropdown_maps = {
+            "activity_unit": _dropdown_display_map(wb, 3, 4),
+            "weight_unit": _dropdown_display_map(wb, 5, 6),
+            "data_source": _dropdown_display_map(wb, 7, 8),
+        }
+        return activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value, transport_calculation_yes_value, activity_formula_templates, activity_number_formats, raw_number_formats, dropdown_maps
     finally:
         wb.close()
 
@@ -4297,6 +4595,19 @@ def _fast_number(value: Any) -> float:
         return float(text)
     except Exception:
         return 0.0
+
+
+def _fast_optional_number(value: Any) -> float | str:
+    """Return a real number when present, otherwise a blank cell."""
+    if value is None or value == "":
+        return ""
+    text = str(value).strip()
+    if not text or text.upper() in {"NAN", "NONE"}:
+        return ""
+    try:
+        return float(text.replace(",", ""))
+    except Exception:
+        return ""
 
 
 def _fast_date_iso(value: Any) -> str:
@@ -4624,7 +4935,7 @@ def _write_raw_material_bulk_from_site_csv_streaming(
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value, activity_formula_templates = _template_headers_for_lightweight_bulk(raw_material_template_path)
+    activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value, transport_calculation_yes_value, activity_formula_templates, activity_number_formats, raw_number_formats, dropdown_maps = _template_headers_for_lightweight_bulk(raw_material_template_path)
     activity_headers = activity_header_rows[0]
     raw_headers = raw_header_rows[0]
 
@@ -4647,19 +4958,19 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         _set_row_value(activity_row, activity_cols["document_type"], document_type_value)
         _set_row_value(activity_row, activity_cols["document_number"], "")
         _set_row_value(activity_row, activity_cols["usage"], usage_value)
-        _set_row_value(activity_row, activity_cols["unit"], row_data.get("unit", ""))
-        _set_row_value(activity_row, activity_cols["data_source"], "SAP")
+        _set_row_value(activity_row, activity_cols["unit"], _localized_dropdown_display(row_data.get("unit", ""), dropdown_maps.get("activity_unit", {})))
+        _set_row_value(activity_row, activity_cols["data_source"], _localized_dropdown_display("SAP", dropdown_maps.get("data_source", {}), "SAP"))
         _set_row_value(activity_row, activity_cols["data_source_other"], "")
-        _set_row_value(activity_row, activity_cols["calculate_transportation_emissions"], "Yes")
+        _set_row_value(activity_row, activity_cols["calculate_transportation_emissions"], transport_calculation_yes_value)
         _set_row_value(activity_row, activity_cols["supplier_name"], "")
         _set_row_value(activity_row, activity_cols["transport_origin"], "")
         _set_row_value(activity_row, activity_cols["transport_destination"], row_data.get("transport_destination", current_site))
         _set_row_value(activity_row, activity_cols["target_product"], row_data.get("target_product", ""))
         _set_row_value(activity_row, activity_cols["comment"], "")
         _set_row_value(activity_row, activity_cols["material_group"], row_data.get("material_group", ""))
-        _set_row_value(activity_row, activity_cols.get("net_weight"), row_data.get("net_weight", ""))
-        _set_row_value(activity_row, activity_cols.get("gross_weight"), row_data.get("gross_weight", ""))
-        _set_row_value(activity_row, activity_cols.get("weight_unit"), row_data.get("weight_uom", ""))
+        _set_row_value(activity_row, activity_cols.get("net_weight"), _fast_optional_number(row_data.get("net_weight", "")))
+        _set_row_value(activity_row, activity_cols.get("gross_weight"), _fast_optional_number(row_data.get("gross_weight", "")))
+        _set_row_value(activity_row, activity_cols.get("weight_unit"), _localized_dropdown_display(row_data.get("weight_uom", ""), dropdown_maps.get("weight_unit", {})))
         return activity_row, raw_material
 
     if xlsxwriter is not None:
@@ -4667,7 +4978,8 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
         raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
         activity_ws.set_column(27, 34, None, None, {"hidden": True})
-        date_format = workbook.add_format({"num_format": "yyyy/mm/dd"})
+        activity_formats = _xlsxwriter_column_formats(workbook, activity_number_formats)
+        raw_formats = _xlsxwriter_column_formats(workbook, raw_number_formats)
         for row_idx, header_row in enumerate(activity_header_rows):
             for col, value in enumerate(header_row):
                 if value not in (None, ""):
@@ -4682,13 +4994,8 @@ def _write_raw_material_bulk_from_site_csv_streaming(
             for row_data in reader:
                 activity_row, raw_material = build_activity_row(row_data)
                 for col, value in enumerate(activity_row):
-                    if value in (None, ""):
-                        continue
-                    if isinstance(value, date):
-                        activity_ws.write_datetime(excel_row_idx, col, datetime(value.year, value.month, value.day), date_format)
-                    else:
-                        activity_ws.write(excel_row_idx, col, value)
-                _write_m2_helper_formulas_xlsxwriter(activity_ws, excel_row_idx, activity_formula_templates)
+                    _write_xlsxwriter_typed_cell(activity_ws, excel_row_idx, col, value, activity_number_formats, activity_formats)
+                _write_m2_helper_formulas_xlsxwriter(activity_ws, excel_row_idx, activity_formula_templates, activity_formats)
                 if raw_material and raw_material not in raw_seen:
                     raw_seen.add(raw_material)
                     raw_descriptions[raw_material] = row_data.get("description", "") or ""
@@ -4712,9 +5019,7 @@ def _write_raw_material_bulk_from_site_csv_streaming(
             _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
             _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
             for col, value in enumerate(raw_row):
-                if value in (None, ""):
-                    continue
-                raw_ws.write(raw_excel_row_idx, col, value)
+                _write_xlsxwriter_typed_cell(raw_ws, raw_excel_row_idx, col, value, raw_number_formats, raw_formats)
             raw_excel_row_idx += 1
         workbook.close()
         writer_name = "xlsxwriter_constant_memory"
@@ -4767,8 +5072,8 @@ def _write_raw_material_bulk_from_site_csv_streaming(
         "supplier_name_options": 0,
         "site_tbc_supplier_count": 0,
         "supplier_status": "Deferred to Module 2C",
-        "m2b_writer": f"large_dataset_{writer_name}_headers_plus_AB_AI_formulas",
-        "calculate_transportation_emissions_value": "Yes",
+        "m2b_writer": f"large_dataset_{writer_name}_template_number_formats_plus_AB_AI_formulas",
+        "calculate_transportation_emissions_value": transport_calculation_yes_value,
         "helper_formula_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],
         "helper_formula_rows": int(actual_data_rows),
     }
@@ -4887,7 +5192,7 @@ def generate_raw_material_bulk_from_standard_total_usage_zip(
         "supplier_upload_files": 0,
         "supplier_bulk_generated": False,
         "module2b_rule": "2A total usage -> Module 1 annual quantity/site mapping -> lightweight Raw Material Bulk ZIP by site; supplier mapping is not applied in Module 2B.",
-        "module2b_template_policy": "Headers and sheet names are preserved from Raw Material Bulk template; formatting/dropdowns/validations/formulas are intentionally not copied in M2B Large Dataset Mode.",
+        "module2b_template_policy": "M2B/M2C lightweight files preserve row-3 number formats and AB~AI formulas; the full dropdown/validation package is restored by M3A final template application.",
     })
     if progress_callback:
         progress_callback(step="Completed", processed=total_rows, total=total_rows, progress=100)
@@ -4922,10 +5227,10 @@ def _read_raw_material_bulk_workbook_as_exploded(raw_bulk_path: str | Path) -> t
         "usage": _find_template_column(activity_ws, USAGE_ALIASES, 7),
         "unit": _find_template_column(activity_ws, ACTIVITY_DATA_UNIT_ALIASES, 8),
         "supplier_name": _find_template_column(activity_ws, SUPPLIER_NAME_ALIASES, 14),
-        "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 15),
-        "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 16),
-        "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 17),
-        "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 19),
+        "transport_origin": _find_template_column(activity_ws, TRANSPORT_ORIGIN_ALIASES, 16),
+        "transport_destination": _find_template_column(activity_ws, TRANSPORT_DESTINATION_ALIASES, 17),
+        "target_product": _find_template_column(activity_ws, PRODUCT_LINK_ALIASES, 18),
+        "material_group": _find_template_column(activity_ws, MATERIAL_GROUP_ALIASES, 20),
         "net_weight": _find_template_optional_column(activity_ws, NET_WEIGHT_ALIASES),
         "gross_weight": _find_template_optional_column(activity_ws, GROSS_WEIGHT_ALIASES),
         "weight_unit": _find_template_optional_column(activity_ws, WEIGHT_UNIT_ALIASES),
@@ -4966,6 +5271,7 @@ def _read_raw_material_bulk_workbook_as_exploded(raw_bulk_path: str | Path) -> t
             "level": 0,
             "transport_destination": _safe_text(activity_ws.cell(row_idx, activity_cols["transport_destination"]).value),
             "transport_origin": _safe_text(activity_ws.cell(row_idx, activity_cols["transport_origin"]).value),
+            "calculate_transportation_emissions": _safe_text(activity_ws.cell(row_idx, activity_cols["calculate_transportation_emissions"]).value),
             "supplier_name": _safe_text(activity_ws.cell(row_idx, activity_cols["supplier_name"]).value),
             "net_weight": _safe_number(activity_ws.cell(row_idx, activity_cols["net_weight"]).value) if activity_cols.get("net_weight") else "",
             "gross_weight": _safe_number(activity_ws.cell(row_idx, activity_cols["gross_weight"]).value) if activity_cols.get("gross_weight") else "",
@@ -4977,7 +5283,7 @@ def _read_raw_material_bulk_workbook_as_exploded(raw_bulk_path: str | Path) -> t
         df = pd.DataFrame(columns=[
             "target_product", "source_material", "raw_material", "usage", "unit", "description",
             "material_group", "valid_from", "level", "transport_destination", "transport_origin",
-            "supplier_name", "net_weight", "gross_weight", "weight_uom",
+            "calculate_transportation_emissions", "supplier_name", "net_weight", "gross_weight", "weight_uom",
         ])
     return df, {
         "input_filename": path.name,
@@ -5111,6 +5417,7 @@ def _iter_activity_rows_streaming(path: str | Path, activity_cols: dict[str, int
                 "level": 0,
                 "transport_destination": _safe_cell_text(_row_get(row, activity_cols["transport_destination"] - 1)),
                 "transport_origin": _safe_cell_text(_row_get(row, activity_cols["transport_origin"] - 1)),
+                "calculate_transportation_emissions": _safe_cell_text(_row_get(row, activity_cols["calculate_transportation_emissions"] - 1)),
                 "supplier_name": _safe_cell_text(_row_get(row, activity_cols["supplier_name"] - 1)),
                 "net_weight": _fast_number(_row_get(row, activity_cols["net_weight"] - 1)) if activity_cols.get("net_weight") else "",
                 "gross_weight": _fast_number(_row_get(row, activity_cols["gross_weight"] - 1)) if activity_cols.get("gross_weight") else "",
@@ -5188,7 +5495,10 @@ def _build_supplier_activity_row(row_data: dict[str, Any], activity_headers: lis
     _set_row_value(activity_row, activity_cols["unit"], row_data.get("unit", ""))
     _set_row_value(activity_row, activity_cols["data_source"], "SAP")
     _set_row_value(activity_row, activity_cols["data_source_other"], "")
-    _set_row_value(activity_row, activity_cols["calculate_transportation_emissions"], "Yes")
+    _set_row_value(
+        activity_row, activity_cols["calculate_transportation_emissions"],
+        row_data.get("calculate_transportation_emissions", "") or "Yes",
+    )
     _set_row_value(activity_row, activity_cols["supplier_name"], row_data.get("supplier_name", ""))
     _set_row_value(activity_row, activity_cols["transport_origin"], row_data.get("transport_origin", ""))
     _set_row_value(activity_row, activity_cols["transport_destination"], row_data.get("transport_destination", ""))
@@ -5257,7 +5567,10 @@ def _write_supplier_mapped_bulk_streaming(
         activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
         raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
         activity_ws.set_column(27, 34, None, None, {"hidden": True})
-        date_format = workbook.add_format({"num_format": "yyyy/mm/dd"})
+        activity_number_formats = _xlsx_row3_number_formats(source_file, ACTIVITY_SHEET_NAME)
+        raw_number_formats = _xlsx_row3_number_formats(source_file, RAW_MATERIAL_SHEET_NAME)
+        activity_formats = _xlsxwriter_column_formats(workbook, activity_number_formats)
+        raw_formats = _xlsxwriter_column_formats(workbook, raw_number_formats)
         for row_idx, header_row in enumerate(activity_header_rows):
             for col, value in enumerate(header_row):
                 if value not in (None, ""):
@@ -5289,13 +5602,8 @@ def _write_supplier_mapped_bulk_streaming(
                     tbc_fallback_rows += 1
                 activity_row, raw_material = _build_supplier_activity_row(mapped_row, activity_headers, activity_cols, document_type_value)
                 for col, value in enumerate(activity_row):
-                    if value in (None, ""):
-                        continue
-                    if isinstance(value, date):
-                        activity_ws.write_datetime(excel_row_idx, col, datetime(value.year, value.month, value.day), date_format)
-                    else:
-                        activity_ws.write(excel_row_idx, col, value)
-                _write_m2_helper_formulas_xlsxwriter(activity_ws, excel_row_idx, activity_formula_templates)
+                    _write_xlsxwriter_typed_cell(activity_ws, excel_row_idx, col, value, activity_number_formats, activity_formats)
+                _write_m2_helper_formulas_xlsxwriter(activity_ws, excel_row_idx, activity_formula_templates, activity_formats)
                 if raw_material and raw_material not in raw_seen:
                     raw_seen.add(raw_material)
                     raw_descriptions[raw_material] = mapped_row.get("description", "") or description_map.get(raw_material, "") or ""
@@ -5325,8 +5633,7 @@ def _write_supplier_mapped_bulk_streaming(
             _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
             _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
             for col, value in enumerate(raw_row):
-                if value not in (None, ""):
-                    raw_ws.write(raw_excel_row, col, value)
+                _write_xlsxwriter_typed_cell(raw_ws, raw_excel_row, col, value, raw_number_formats, raw_formats)
             raw_excel_row += 1
         workbook.close()
     else:
@@ -5417,7 +5724,7 @@ def _write_supplier_mapped_bulk_streaming(
         "tbc_fallback_policy": "prefer_uploaded_plant_tbc_then_system_fallback",
         "m2c_large_dataset_mode": True,
         "m2c_template_policy": "Row-2 headers plus hidden AB~AI formulas are preserved from row 3 through each actual data row (maximum 50,000); N is fixed to Yes.",
-        "calculate_transportation_emissions_value": "Yes",
+        "calculate_transportation_emissions_value": "Preserved from M2B template (YES semantic)",
         "helper_formula_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],
         "helper_formula_rows": int(actual_mapped_rows),
     }, supplier_unique
@@ -5433,27 +5740,21 @@ def _write_supplier_bulk_create_file_from_unique_rows(supplier_rows: set[tuple[s
         return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": "", "supplier_bulk_error": f"找不到內建供應商 Bulk Template：{supplier_bulk_template_path.name}"}
     # Supplier list is much smaller than activity data. Preserve the existing supplier bulk template here.
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(supplier_bulk_template_path, output_path)
-    wb = load_workbook(output_path)
-    ws = wb[SUPPLIER_BULK_SHEET_NAME] if SUPPLIER_BULK_SHEET_NAME in wb.sheetnames else wb[wb.sheetnames[0]]
+    wb_meta = load_workbook(supplier_bulk_template_path, read_only=True, data_only=False)
+    ws = wb_meta[SUPPLIER_BULK_SHEET_NAME] if SUPPLIER_BULK_SHEET_NAME in wb_meta.sheetnames else wb_meta[wb_meta.sheetnames[0]]
     cols = {
         "supplier_name": _find_template_column(ws, SUPPLIER_BULK_NAME_ALIASES, 1),
         "supplier_code": _find_template_column(ws, SUPPLIER_BULK_CODE_ALIASES, 2),
         "country_area": _find_template_column(ws, SUPPLIER_BULK_COUNTRY_ALIASES, 3),
         "supplier_address": _find_template_column(ws, SUPPLIER_BULK_ADDRESS_ALIASES, 4),
         "unit_name": _find_template_column(ws, SUPPLIER_BULK_UNIT_ALIASES, 5),
+        "country_hidden": _find_template_column(ws, ["country"], 15),
+        "industry_hidden": _find_template_column(ws, ["industry_category"], 16),
+        "tier_hidden": _find_template_column(ws, ["tier"], 17),
     }
-    _clear_template_columns(ws, DATA_START_ROW, list(cols.values()))
+    wb_meta.close()
     normalized_rows = _normalize_supplier_bulk_rows(supplier_rows)
-    row_idx = DATA_START_ROW
-    for supplier_name, supplier_code, country_area, supplier_address, unit_name in normalized_rows:
-        _write_template_value(ws, row_idx, cols["supplier_name"], supplier_name)
-        _write_template_value(ws, row_idx, cols["supplier_code"], supplier_code)
-        _write_template_value(ws, row_idx, cols["country_area"], country_area)
-        _write_template_value(ws, row_idx, cols["supplier_address"], supplier_address)
-        _write_template_value(ws, row_idx, cols["unit_name"], unit_name)
-        row_idx += 1
-    wb.save(output_path)
+    _write_supplier_bulk_openxml(normalized_rows, supplier_bulk_template_path, output_path, cols)
     return {
         "supplier_bulk_rows": int(len(normalized_rows)),
         "supplier_bulk_filename": output_path.name,
@@ -5619,4 +5920,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "CMP_V27_13_M2_NEW_TEMPLATE_N_YES_AB_AI_FORMULAS"
+BOM_FORMATTER_VERSION = "DIP_V28_4_TEMPLATE_FORMAT_PRESERVE_20260723"
