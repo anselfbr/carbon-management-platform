@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import re
+import copy
 import zipfile
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape as _xml_escape
@@ -30,7 +31,7 @@ PRODUCTS_SHEET_NAME = "Input Sheet Products"
 # Data starts from row 3
 DATA_START_ROW = 3
 
-BULK_FORMATTER_VERSION = "DIP_M1B_PRODUCT_DROPDOWN_CACHE_LOCALIZATION_V1_20260723"
+BULK_FORMATTER_VERSION = "DIP_M1B_PRODUCT_DROPDOWN_AND_DATE_FORMAT_V2_20260723"
 
 
 def _sanitize_filename(value: Any) -> str:
@@ -410,13 +411,24 @@ def _col_letter(idx: int) -> str:
     return out
 
 
-def _replace_cell_xml(row_xml: bytes, row_idx: int, col_idx: int, kind: str, value: Any = None, formula_cache: str | None = None) -> bytes:
+def _replace_cell_xml(
+    row_xml: bytes,
+    row_idx: int,
+    col_idx: int,
+    kind: str,
+    value: Any = None,
+    formula_cache: str | None = None,
+    style_idx: int | None = None,
+) -> bytes:
     ref = f"{_col_letter(col_idx)}{row_idx}"
     pattern = re.compile(rb'<c\b[^>]*?\br="' + re.escape(ref.encode()) + rb'"[^>]*?(?:/>|>.*?</c>)', re.DOTALL)
     m = pattern.search(row_xml)
     old = m.group(0) if m else b""
-    style_m = re.search(rb'\bs="([^"]+)"', old)
-    style = (b' s="' + style_m.group(1) + b'"') if style_m else b""
+    if style_idx is not None:
+        style = b' s="' + str(int(style_idx)).encode() + b'"'
+    else:
+        style_m = re.search(rb'\bs="([^"]+)"', old)
+        style = (b' s="' + style_m.group(1) + b'"') if style_m else b""
     if kind == "blank":
         new = b'<c r="' + ref.encode() + b'"' + style + b'/>'
     elif kind == "number":
@@ -467,6 +479,112 @@ def _sort_row_cells_by_column(row_xml: bytes) -> bytes:
     return row_xml[:open_m.end()] + new_body + row_xml[close_pos:]
 
 
+
+
+def _cell_style_index(sheet_xml: bytes, ref: str) -> int:
+    """Return the style index used by a template cell, defaulting to style 0."""
+    pattern = re.compile(
+        rb'<c\b[^>]*?\br="' + re.escape(ref.encode("ascii")) + rb'"[^>]*?(?:/>|>.*?</c>)',
+        re.DOTALL,
+    )
+    match = pattern.search(sheet_xml)
+    if not match:
+        return 0
+    style_match = re.search(rb'\bs="(\d+)"', match.group(0))
+    return int(style_match.group(1)) if style_match else 0
+
+
+def _is_date_number_format(num_fmt_id: int, custom_formats: dict[int, str]) -> bool:
+    # Excel built-in date/time number formats.
+    if int(num_fmt_id) in {14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47}:
+        return True
+    code = str(custom_formats.get(int(num_fmt_id), "") or "")
+    if not code:
+        return False
+    # Remove quoted literals, escaped characters and bracket sections before checking.
+    normalized = re.sub(r'"[^"]*"', "", code.lower())
+    normalized = re.sub(r'\\.', "", normalized)
+    normalized = re.sub(r'\[[^\]]*\]', "", normalized)
+    return bool(re.search(r"[dy]", normalized) and "m" in normalized)
+
+
+def _xf_xml_without_namespace(xf: ET.Element) -> bytes:
+    """Serialize one cellXf for insertion into the existing styles.xml package."""
+    raw = ET.tostring(xf, encoding="utf-8", short_empty_elements=True)
+    raw = re.sub(rb'\sxmlns:ns\d+="[^"]+"', b"", raw)
+    raw = re.sub(rb'(<|</)ns\d+:', rb'\1', raw)
+    return raw
+
+
+def _ensure_product_date_styles(styles_xml: bytes, activity_xml: bytes) -> tuple[bytes, dict[int, int]]:
+    """Ensure Product Bulk B/C data cells use real Excel date number formats.
+
+    Some official Product templates preformat B/C as Text (numFmtId 49). The writer
+    already stores Excel date serials; this function adds one unlocked date cellXf
+    cloned from each source style and returns the style indices to assign to B/C.
+    Existing date-formatted templates are left unchanged.
+    """
+    root = ET.fromstring(styles_xml)
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    cell_xfs = root.find(f"{ns}cellXfs")
+    if cell_xfs is None:
+        raise ValueError("Product Activity Template styles.xml 缺少 cellXfs")
+    xfs = list(cell_xfs)
+    custom_formats: dict[int, str] = {}
+    num_fmts = root.find(f"{ns}numFmts")
+    if num_fmts is not None:
+        for node in list(num_fmts):
+            try:
+                custom_formats[int(node.attrib.get("numFmtId", "0"))] = str(node.attrib.get("formatCode", ""))
+            except (TypeError, ValueError):
+                continue
+
+    style_by_col: dict[int, int] = {}
+    appended: list[bytes] = []
+    appended_by_source_style: dict[int, int] = {}
+    # B and C use the same year-start/year-end date semantics.
+    for col_idx, ref in ((2, "B3"), (3, "C3")):
+        original_idx = _cell_style_index(activity_xml, ref)
+        if original_idx < 0 or original_idx >= len(xfs):
+            original_idx = 0
+        original_xf = xfs[original_idx]
+        num_fmt_id = int(original_xf.attrib.get("numFmtId", "0") or 0)
+        if _is_date_number_format(num_fmt_id, custom_formats):
+            style_by_col[col_idx] = original_idx
+            continue
+
+        # Reuse a style already appended for the same original style.
+        reused = appended_by_source_style.get(original_idx)
+        if reused is not None:
+            style_by_col[col_idx] = reused
+            continue
+
+        new_xf = copy.deepcopy(original_xf)
+        new_xf.set("numFmtId", "14")  # Excel built-in mm-dd-yy date format.
+        new_xf.set("applyNumberFormat", "1")
+        new_idx = len(xfs) + len(appended)
+        appended.append(_xf_xml_without_namespace(new_xf))
+        appended_by_source_style[original_idx] = new_idx
+        style_by_col[col_idx] = new_idx
+
+    if not appended:
+        return styles_xml, style_by_col
+
+    close_tag = b"</cellXfs>"
+    close_pos = styles_xml.find(close_tag)
+    if close_pos < 0:
+        raise ValueError("Product Activity Template styles.xml 的 cellXfs 結構不完整")
+    updated = styles_xml[:close_pos] + b"".join(appended) + styles_xml[close_pos:]
+    new_count = len(xfs) + len(appended)
+    updated = re.sub(
+        rb'(<cellXfs\b[^>]*\bcount=")\d+("[^>]*>)',
+        rb'\g<1>' + str(new_count).encode() + rb'\2',
+        updated,
+        count=1,
+    )
+    return updated, style_by_col
+
+
 def _rewrite_product_activity_sheet(
     template_xml: bytes,
     rows: list[dict[str, Any]],
@@ -474,6 +592,7 @@ def _rewrite_product_activity_sheet(
     labor_col: int | None,
     labor_unit_col: int | None,
     dropdown_display: dict[str, str],
+    date_style_by_col: dict[int, int] | None = None,
 ) -> bytes:
     start_m = re.search(rb'<sheetData\b[^>]*>', template_xml)
     end_m = re.search(rb'</sheetData>', template_xml)
@@ -519,7 +638,11 @@ def _rewrite_product_activity_sheet(
                 }
                 if labor_col: vals[labor_col]=(("number",item['labor_hours']) if item['labor_hours'] is not None else ("blank",None))
                 if labor_unit_col: vals[labor_unit_col]=(("text",dropdown_display["working_hours_unit"]) if item['labor_hours'] is not None else ("blank",None))
-                for c,(k,v) in vals.items(): row_xml=_replace_cell_xml(row_xml,row_idx,c,k,v)
+                for c,(k,v) in vals.items():
+                    row_xml=_replace_cell_xml(
+                        row_xml, row_idx, c, k, v,
+                        style_idx=(date_style_by_col or {}).get(c) if c in (2, 3) else None,
+                    )
                 for c,cache in {20:"FINISHED_PRODUCT",21:"SAP",22:"",23:"HOURS",24:""}.items():
                     row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_cache",formula_cache=cache)
         else:
@@ -584,6 +707,11 @@ def _write_product_activity_openxml(
     if not activity_path or not products_path:
         raise ValueError("Product Activity Bulk Template 缺少必要分頁")
     with zipfile.ZipFile(template_path,'r') as zin, zipfile.ZipFile(output_path,'w',compression=zipfile.ZIP_DEFLATED,compresslevel=6) as zout:
+        activity_template_xml = zin.read(activity_path)
+        styles_template_xml = zin.read('xl/styles.xml')
+        styles_output_xml, date_style_by_col = _ensure_product_date_styles(
+            styles_template_xml, activity_template_xml
+        )
         for item in zin.infolist():
             name = item.filename
             if item.is_dir():
@@ -595,15 +723,17 @@ def _write_product_activity_openxml(
                 continue
             data=zin.read(name)
             if name==activity_path:
-                data=_rewrite_product_activity_sheet(data,rows,'activity',labor_col,labor_unit_col,dropdown_display)
+                data=_rewrite_product_activity_sheet(data,rows,'activity',labor_col,labor_unit_col,dropdown_display,date_style_by_col)
             elif name==products_path:
-                data=_rewrite_product_activity_sheet(data,rows,'products',labor_col,labor_unit_col,dropdown_display)
+                data=_rewrite_product_activity_sheet(data,rows,'products',labor_col,labor_unit_col,dropdown_display,None)
             elif name == '[Content_Types].xml':
                 data = _remove_calc_chain_content_types(data)
             elif name == 'xl/_rels/workbook.xml.rels':
                 data = _remove_calc_chain_rels(data)
             elif name == 'xl/workbook.xml':
                 data = _force_full_calc_on_load(data)
+            elif name == 'xl/styles.xml':
+                data = styles_output_xml
             zout.writestr(item,data)
 
 
