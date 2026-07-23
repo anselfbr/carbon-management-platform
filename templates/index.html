@@ -422,7 +422,7 @@
                 </div>
               </section>
 
-              <button id="automationStartBtn" type="submit" class="btn-primary automation-start-btn"><span data-i18n="startAutomatedConsolidation">開始全自動化資料彙整</span></button>
+              <button id="automationStartBtn" type="submit" form="automationForm" class="btn-primary automation-start-btn"><span data-i18n="startAutomatedConsolidation">開始全自動化資料彙整</span></button>
             </form>
           </section>
 
@@ -442,11 +442,22 @@
               <div class="progress-track"><div id="automationProgressBar" class="progress-bar" style="width:0%"></div></div>
             </div>
 
+            <div id="automationM3aActionMount" class="automation-m3a-action-mount hidden"></div>
+
             <div id="automationSteps" class="automation-step-list"></div>
 
-            <details class="automation-log-panel" open>
+            <details class="automation-log-panel automation-stage-log-panel" open>
               <summary data-i18n="automationExecutionLog">執行紀錄</summary>
-              <pre id="automationLog" class="log-box">Ready.</pre>
+              <div class="automation-stage-log-scroll">
+                <table class="automation-stage-log-table">
+                  <thead><tr>
+                    <th>階段</th><th>狀態</th><th>筆數／檔案</th><th>開始時間</th><th>結束時間</th><th>花費時間</th><th>說明</th>
+                  </tr></thead>
+                  <tbody id="automationStageLogBody"></tbody>
+                </table>
+              </div>
+              <div id="automationStageLogSummary" class="automation-stage-log-summary">尚未開始執行</div>
+              <pre id="automationLog" class="log-box automation-raw-log">Ready.</pre>
             </details>
 
             <div id="automationDownloads" class="automation-downloads hidden">
@@ -3845,6 +3856,11 @@ ruleForm.onsubmit = async (e) => {
   const uploadFieldsBody = document.getElementById('automationUploadFieldsBody');
   const uploadToggle = document.getElementById('automationUploadToggle');
   const uploadToggleText = uploadToggle ? uploadToggle.querySelector('span[data-i18n]') : null;
+  const m3aActionMount = document.getElementById('automationM3aActionMount');
+  const stageLogBody = document.getElementById('automationStageLogBody');
+  const stageLogSummary = document.getElementById('automationStageLogSummary');
+  const stageRecords = new Map();
+  const pipelineStartedAt = { value: null };
   const steps = [
     { code: 'M1A', key: 'automationStepM1a', fallback: '工單資料彙整' },
     { code: 'M2A', key: 'automationStepM2a', fallback: '標準 BOM 總用量' },
@@ -3903,6 +3919,56 @@ ruleForm.onsubmit = async (e) => {
       ? cmpRemainingText(Number(job.remaining_seconds)) : '';
     return [stepText,countText,remaining].filter(Boolean).join('｜');
   }
+  function formatClock(value) {
+    if (!value) return '—';
+    return new Date(value).toLocaleTimeString('zh-TW', { hour12: false });
+  }
+  function formatElapsed(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return '—';
+    const total = Math.max(0, Math.round(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = total % 60;
+    return [h,m,sec].map(v => String(v).padStart(2,'0')).join(':');
+  }
+  function recordCountText(job={}) {
+    const summary = job.summary || {};
+    const processed = Number(job.processed_rows ?? job.processed ?? summary.activity_rows ?? summary.written_rows ?? 0);
+    const total = Number(job.total_rows ?? job.total ?? summary.total_rows ?? summary.activity_rows ?? 0);
+    const files = Number(summary.split_file_count ?? summary.processed_file_count ?? 0);
+    let rows = '';
+    if (Number.isFinite(total) && total > 0) rows = `${Math.max(processed,total).toLocaleString()} 筆`;
+    else if (Number.isFinite(processed) && processed > 0) rows = `${processed.toLocaleString()} 筆`;
+    if (files > 0) return rows ? `${rows} / ${files.toLocaleString()} 檔` : `${files.toLocaleString()} 檔`;
+    return rows || '—';
+  }
+  function updateStageRecord(index, patch={}) {
+    const existing = stageRecords.get(index) || { index, stage: cmpT(steps[index].key, steps[index].fallback), status: '待執行', startedAt: null, endedAt: null, count: '—', detail: '' };
+    const next = { ...existing, ...patch };
+    stageRecords.set(index, next);
+    renderStageLog();
+  }
+  function renderStageLog() {
+    if (!stageLogBody) return;
+    stageLogBody.innerHTML = '';
+    steps.forEach((step,index) => {
+      const r = stageRecords.get(index) || { stage: cmpT(step.key, step.fallback), status: '待執行', startedAt:null, endedAt:null, count:'—', detail:'' };
+      const tr = document.createElement('tr');
+      const elapsedEnd = r.endedAt || (r.startedAt && r.status === '執行中' ? Date.now() : null);
+      const elapsed = r.startedAt && elapsedEnd ? formatElapsed(elapsedEnd-r.startedAt) : '—';
+      const statusClass = r.status === '完成' ? 'success' : (r.status === '執行中' ? 'running' : (r.status === '失敗' ? 'error' : 'idle'));
+      tr.innerHTML = `<td>${index+1}. ${r.stage}</td><td><span class="automation-log-status ${statusClass}">${r.status}</span></td><td>${r.count||'—'}</td><td>${formatClock(r.startedAt)}</td><td>${formatClock(r.endedAt)}</td><td>${elapsed}</td><td>${r.detail||'—'}</td>`;
+      stageLogBody.appendChild(tr);
+    });
+    if (stageLogSummary) {
+      const done = [...stageRecords.values()].filter(r=>r.status==='完成');
+      const totalRows = done.reduce((sum,r)=>sum+(Number(r.rows)||0),0);
+      const failed = [...stageRecords.values()].filter(r=>r.status==='失敗').length;
+      const elapsed = pipelineStartedAt.value ? formatElapsed(Date.now()-pipelineStartedAt.value) : '00:00:00';
+      stageLogSummary.textContent = `完成 ${done.length} / ${steps.length} 階段｜累計處理 ${totalRows.toLocaleString()} 筆｜失敗 ${failed} 階段｜總花費時間 ${elapsed}`;
+    }
+  }
+  setInterval(() => { if ([...stageRecords.values()].some(r=>r.status==='執行中')) renderStageLog(); }, 1000);
   function write(message) { lines.push(`[${new Date().toLocaleTimeString()}] ${message}`); log.textContent=lines.join('\n'); log.scrollTop=log.scrollHeight; }
   async function json(res) { const raw=await res.text(); let data={}; try{data=raw?JSON.parse(raw):{}}catch(e){throw new Error(raw||`HTTP ${res.status}`)} if(!res.ok||data.ok===false) throw new Error(data.message||data.error||`HTTP ${res.status}`); return data; }
   async function poll(url, unwrapJob=false, onProgress=null) {
@@ -3924,18 +3990,31 @@ ruleForm.onsubmit = async (e) => {
     const stageName = cmpT(step.key, step.fallback);
     renderSteps(index, index);
     setState('running', stageName, cmpT('automationRunningHint', '全自動化流程執行中，請勿關閉此頁面。'), (index / steps.length) * 100);
+    const startedAt = Date.now();
+    updateStageRecord(index, { status:'執行中', startedAt, endedAt:null, count:'—', rows:0, detail:'工作建立中' });
     write(`${stageName}：開始`);
     const start = await json(await fetch(startUrl, { method: 'POST', body: fd }));
     const jobId = start.job_id;
     if (!jobId) throw new Error(`${stageName}：未取得工作編號`);
     const job = await poll(statusUrlBuilder(jobId), unwrap, (j) => {
       const inner = Number(j.progress || 0);
+      const processed = Number(j.processed_rows ?? j.processed ?? 0);
+      const total = Number(j.total_rows ?? j.total ?? 0);
+      updateStageRecord(index, {
+        status:'執行中',
+        count: recordCountText(j),
+        rows: Math.max(processed,total,0),
+        detail: String(j.step || j.message || '資料處理中')
+      });
       setState('running', stageName, automationJobDetail(j), ((index + inner / 100) / steps.length) * 100);
     });
     renderSteps(-1, index + 1);
     const completedDetail=automationJobDetail(job);
     setState('running', stageName, completedDetail || cmpT('automationStageCompleted', '已完成'), ((index + 1) / steps.length) * 100);
-    write(`${stageName}：完成`);
+    const summary = job.summary || {};
+    const rows = Number(summary.activity_rows ?? summary.written_rows ?? job.total_rows ?? job.processed_rows ?? 0);
+    updateStageRecord(index, { status:'完成', endedAt:Date.now(), count:recordCountText(job), rows:Math.max(0,rows), detail:String(job.step || job.message || '完成') });
+    write(`${stageName}：完成｜${recordCountText(job)}｜花費 ${formatElapsed(Date.now()-startedAt)}`);
     return job;
   }
   function setAutomationButtonLabel(key, fallback) {
@@ -3969,14 +4048,23 @@ ruleForm.onsubmit = async (e) => {
     if (m3aResumePanel) m3aResumePanel.classList.toggle('hidden', !awaitingM3a);
     if (officialRawTemplate) officialRawTemplate.required = awaitingM3a;
     if (awaitingM3a) {
-      setAutomationUploadsCollapsed(false);
+      setAutomationUploadsCollapsed(true);
+      if (m3aActionMount) {
+        m3aActionMount.classList.remove('hidden');
+        m3aActionMount.appendChild(m3aResumePanel);
+        m3aActionMount.appendChild(startBtn);
+      }
       setAutomationButtonLabel('automationContinueM3a', '繼續執行 M3A');
     } else {
+      if (m3aActionMount) m3aActionMount.classList.add('hidden');
+      if (uploadFieldsBody && m3aResumePanel) uploadFieldsBody.appendChild(m3aResumePanel);
+      if (form && startBtn) form.appendChild(startBtn);
       setAutomationButtonLabel('startAutomatedConsolidation', '開始全自動化資料彙整');
     }
   }
 
   renderSteps();
+  renderStageLog();
   setAutomationUploadsCollapsed(false);
   setAutomationResumeMode(false);
 
@@ -4003,6 +4091,7 @@ ruleForm.onsubmit = async (e) => {
         write(cmpT('automationPipelineCompletedLog','全自動化資料彙整：全部完成。'));
       } catch (err) {
         renderSteps(-1,6,6);
+        updateStageRecord(6, { status:'失敗', endedAt:Date.now(), detail:err.message || String(err) });
         setState('error','M3A 執行失敗', err.message || String(err), (6/steps.length)*100);
         write(`M3A：失敗－${err.message || err}`);
         setAutomationResumeMode(true);
@@ -4013,6 +4102,9 @@ ruleForm.onsubmit = async (e) => {
     }
 
     lines=[];
+    stageRecords.clear();
+    pipelineStartedAt.value = Date.now();
+    renderStageLog();
     downloads.classList.add('hidden');
     setAutomationResumeMode(false);
     [m1bDownload, supplierBulkDownload, m3aDownload].forEach(link => {
@@ -4057,6 +4149,7 @@ ruleForm.onsubmit = async (e) => {
       write('M3：完成。等待正式原物料批次檔後繼續執行 M3A。');
     }catch(err){
       renderSteps(-1,current,current);
+      updateStageRecord(current, { status:'失敗', endedAt:Date.now(), detail:err.message || String(err) });
       const failedStage=steps[current]||steps[0];
       setState('error',cmpT('automationFailed','全自動化資料彙整失敗'),`${cmpT(failedStage.key,failedStage.fallback)}：${err.message||String(err)}`,(current/steps.length)*100);
       write(`${cmpT(failedStage.key,failedStage.fallback)}：失敗－${err.message||err}`);

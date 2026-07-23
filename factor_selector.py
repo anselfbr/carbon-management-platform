@@ -43,6 +43,27 @@ def _text(value: Any) -> str:
     return str(value).strip()
 
 
+def _coerce_excel_date(value: Any) -> Any:
+    """Keep date fields as real Excel dates so the official template number format applies."""
+    if value in (None, "") or isinstance(value, (datetime, date)):
+        return value
+    if isinstance(value, pd.Timestamp):
+        return value.to_pydatetime()
+    text = str(value).strip()
+    if not text:
+        return value
+    for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%Y.%m.%d", "%Y%m%d", "%m/%d/%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+    try:
+        parsed = pd.to_datetime(text, errors="raise")
+        return parsed.to_pydatetime() if hasattr(parsed, "to_pydatetime") else parsed
+    except Exception:
+        return value
+
+
 def _find_header_row(ws, aliases: Iterable[str], max_scan_rows: int = 30) -> int:
     alias_keys = {_norm(a) for a in aliases}
     for row in range(1, min(ws.max_row, max_scan_rows) + 1):
@@ -1493,6 +1514,12 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 transport_calc_col = target_activity_cols.get("calculate_transportation_emissions")
                 if transport_calc_col:
                     out[int(transport_calc_col) - 1] = transport_calculation_yes_value
+                # Preserve the official English-template date display by writing
+                # real Excel date values into the Doc. Start/End Date columns.
+                for date_key in ("doc_start", "doc_end"):
+                    date_col = target_activity_cols.get(date_key)
+                    if date_col:
+                        out[int(date_col) - 1] = _coerce_excel_date(out[int(date_col) - 1])
                 # Country/Area is populated only when the CCL factor is matched.
                 # Clear any upstream/source value first so unmatched rows remain blank.
                 out[factor_cols["country_area"] - 1] = None
@@ -1603,6 +1630,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         "template_strategy": "M3 final output split into third-party-uploadable workbooks; each part preserves original Raw Material Bulk Template headers/sheets",
         "compact_template_write": True,
         "template_number_formats_preserved": True,
+        "doc_start_end_date_formats_preserved": True,
         "empty_non_general_styles_preserved": True,
         "activity_helper_formula_cache": activity_helper_cache_stats,
         "activity_helper_formula_cache_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],

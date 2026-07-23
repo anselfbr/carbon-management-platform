@@ -3573,3 +3573,24 @@ select:focus {
     text-align: center;
   }
 }
+
+
+/* 2026-07-23 M3A second-stage action emphasis + structured execution log */
+.automation-m3a-action-mount{display:grid;grid-template-columns:minmax(320px,1fr) minmax(360px,1.4fr);gap:18px;align-items:stretch;margin:14px 0 14px;padding:16px;border:1px solid #b8d7ff;border-radius:16px;background:linear-gradient(180deg,#fbfdff 0%,#f4f9ff 100%);box-shadow:0 8px 24px rgba(30,92,166,.08)}
+.automation-m3a-action-mount.hidden{display:none}
+.automation-m3a-action-mount .automation-m3a-resume-panel{display:flex!important;flex-direction:column;justify-content:center;margin:0;padding:14px 16px;border:1px dashed #8ebeff;border-radius:12px;background:#fff}
+.automation-m3a-action-mount .automation-start-btn{width:100%;min-height:76px;margin:0;align-self:center;font-size:18px;box-shadow:0 10px 24px rgba(0,110,220,.18)}
+.automation-stage-log-scroll{overflow:auto;border:1px solid #dce6f2;border-radius:12px 12px 0 0;background:#fff}
+.automation-stage-log-table{width:100%;min-width:1120px;border-collapse:collapse;font-size:14px}
+.automation-stage-log-table th{padding:12px 14px;text-align:left;color:#fff;background:#10233f;white-space:nowrap}
+.automation-stage-log-table td{padding:11px 14px;border-bottom:1px solid #e8eef6;vertical-align:middle}
+.automation-stage-log-table tbody tr:last-child td{border-bottom:0}
+.automation-stage-log-table tbody tr:nth-child(even){background:#f8fbff}
+.automation-log-status{display:inline-flex;align-items:center;gap:6px;font-weight:700;white-space:nowrap}
+.automation-log-status::before{content:'○';font-size:15px}
+.automation-log-status.success{color:#159447}.automation-log-status.success::before{content:'●'}
+.automation-log-status.running{color:#0b6ee8}.automation-log-status.running::before{content:'◌'}
+.automation-log-status.error{color:#dc2f3f}.automation-log-status.error::before{content:'×'}
+.automation-stage-log-summary{display:flex;justify-content:center;padding:13px 16px;border:1px solid #dce6f2;border-top:0;border-radius:0 0 12px 12px;background:#f7fbff;font-weight:700;color:#17365d}
+.automation-raw-log{margin-top:12px;max-height:150px;font-size:12px;opacity:.85}
+@media(max-width:900px){.automation-m3a-action-mount{grid-template-columns:1fr}.automation-m3a-action-mount .automation-start-btn{min-height:60px}}
