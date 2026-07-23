@@ -440,13 +440,42 @@
                 </table>
               </div>
               <div id="automationStageLogSummary" class="automation-stage-log-summary">尚未開始執行</div>
-              <pre id="automationLog" class="log-box automation-raw-log">Ready.</pre>
             </details>
 
             <div id="automationDownloads" class="automation-downloads hidden">
-              <a id="automationM1bDownload" class="download disabled" href="#" data-i18n="downloadM1bResult">下載 Product Activity Bulk</a>
-              <a id="automationSupplierBulkDownload" class="download disabled" href="#" data-i18n="downloadSupplierBulkResult">下載供應商 Bulk</a>
-              <a id="automationM3aDownload" class="download disabled" href="#" data-i18n="downloadM3aResult">下載 CCL Raw Material Bulk</a>
+              <div class="automation-downloads-heading">
+                <span class="automation-downloads-heading-icon" aria-hidden="true">✓</span>
+                <div>
+                  <b>產出檔案</b>
+                  <p>全自動化流程產出的批次檔案已完成，可依需求下載。</p>
+                </div>
+              </div>
+              <div class="automation-download-grid">
+                <a id="automationM1bDownload" class="download automation-download-card disabled" href="#">
+                  <span class="automation-download-icon" aria-hidden="true">⇩</span>
+                  <span class="automation-download-copy">
+                    <b data-i18n="downloadM1bResult">下載 Product Activity Bulk</b>
+                    <small>M1B｜產品活動數據批次檔</small>
+                  </span>
+                  <span class="automation-download-arrow" aria-hidden="true">→</span>
+                </a>
+                <a id="automationSupplierBulkDownload" class="download automation-download-card disabled" href="#">
+                  <span class="automation-download-icon" aria-hidden="true">⇩</span>
+                  <span class="automation-download-copy">
+                    <b data-i18n="downloadSupplierBulkResult">下載供應商 Bulk</b>
+                    <small>M2C｜供應商資料批次檔</small>
+                  </span>
+                  <span class="automation-download-arrow" aria-hidden="true">→</span>
+                </a>
+                <a id="automationM3aDownload" class="download automation-download-card disabled" href="#">
+                  <span class="automation-download-icon" aria-hidden="true">⇩</span>
+                  <span class="automation-download-copy">
+                    <b data-i18n="downloadM3aResult">下載 CCL Raw Material Bulk</b>
+                    <small>M3A｜最終原物料批次檔</small>
+                  </span>
+                  <span class="automation-download-arrow" aria-hidden="true">→</span>
+                </a>
+              </div>
             </div>
           </section>
         </section>
@@ -3963,7 +3992,7 @@ ruleForm.onsubmit = async (e) => {
     }
   }
   setInterval(() => { if ([...stageRecords.values()].some(r=>r.status==='執行中')) renderStageLog(); }, 1000);
-  function write(message) { lines.push(`[${new Date().toLocaleTimeString()}] ${message}`); log.textContent=lines.join('\n'); log.scrollTop=log.scrollHeight; }
+  function write(message) { lines.push(`[${new Date().toLocaleTimeString()}] ${message}`); if (log) { log.textContent=lines.join('\n'); log.scrollTop=log.scrollHeight; } }
   async function json(res) { const raw=await res.text(); let data={}; try{data=raw?JSON.parse(raw):{}}catch(e){throw new Error(raw||`HTTP ${res.status}`)} if(!res.ok||data.ok===false) throw new Error(data.message||data.error||`HTTP ${res.status}`); return data; }
   async function poll(url, unwrapJob=false, onProgress=null) {
     while (true) {
