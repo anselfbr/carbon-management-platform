@@ -10,6 +10,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, Callable
 
+from template_header_resolver import aliases as _profile_aliases, find_column as _profile_find_column
+
 import pandas as pd
 from openpyxl import load_workbook
 
@@ -23,7 +25,7 @@ PRODUCTS_SHEET_NAME = "Input Sheet Products"
 # Data starts from row 3
 DATA_START_ROW = 3
 
-BULK_FORMATTER_VERSION = "CMP_BULK_V8_4_M1B_OPENXML_CELL_ORDER_FIX"
+BULK_FORMATTER_VERSION = "DIP_M1B_TEMPLATE_I18N_RESOLVER_V2_VISIBLE_HEADER_PRIORITY"
 
 
 def _sanitize_filename(value: Any) -> str:
@@ -283,11 +285,17 @@ def _clear_target_cells(ws, start_row: int, columns: list[int]) -> None:
 
 
 
-def _template_header_columns(template_path: Path, sheet_name: str) -> dict[str, int]:
+def _template_header_rows(template_path: Path, sheet_name: str) -> list[list[Any]]:
+    """Read template rows 1-2 from OpenXML without trusting worksheet dimension.
+
+    Row 2 is the user-visible header and must take priority over row 1 internal
+    helper keys.  This prevents fields such as Working Hours Unit from being
+    mapped to the hidden helper column W instead of the visible input column M.
+    """
     paths = _xlsx_sheet_paths(template_path)
     sheet_path = paths.get(sheet_name)
     if not sheet_path:
-        return {}
+        return []
     ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
     with zipfile.ZipFile(template_path, "r") as zf:
         shared: list[str] = []
@@ -296,27 +304,51 @@ def _template_header_columns(template_path: Path, sheet_name: str) -> dict[str, 
             for si in root.findall(f"{ns}si"):
                 shared.append("".join(t.text or "" for t in si.iter(f"{ns}t")))
         sheet = ET.fromstring(zf.read(sheet_path))
-        result: dict[str, int] = {}
         data = sheet.find(f"{ns}sheetData")
         if data is None:
-            return result
-        for row in data.findall(f"{ns}row")[:2]:
+            return []
+        row_maps: dict[int, dict[int, Any]] = {1: {}, 2: {}}
+        max_col = 0
+        for row in data.findall(f"{ns}row"):
+            try:
+                row_idx = int(row.attrib.get("r", "0") or 0)
+            except Exception:
+                row_idx = 0
+            if row_idx not in row_maps:
+                if row_idx > 2:
+                    break
+                continue
             for cell in row.findall(f"{ns}c"):
                 ref = cell.attrib.get("r", "")
+                col_idx = _cell_col_index(ref)
+                max_col = max(max_col, col_idx)
                 typ = cell.attrib.get("t")
-                val = ""
+                val: Any = ""
                 v = cell.find(f"{ns}v")
                 inline = cell.find(f"{ns}is")
                 if typ == "s" and v is not None and v.text is not None:
-                    try: val = shared[int(v.text)]
-                    except (ValueError, IndexError): val = ""
+                    try:
+                        val = shared[int(v.text)]
+                    except (ValueError, IndexError):
+                        val = ""
                 elif typ == "inlineStr" and inline is not None:
                     val = "".join(t.text or "" for t in inline.iter(f"{ns}t"))
                 elif v is not None:
                     val = v.text or ""
-                if val:
-                    result[_normalize_header(val)] = _cell_col_index(ref)
-        return result
+                row_maps[row_idx][col_idx] = val
+        return [[row_maps[row_idx].get(col, "") for col in range(1, max_col + 1)] for row_idx in (1, 2)]
+
+
+def _template_header_columns(template_path: Path, sheet_name: str) -> dict[str, int]:
+    """Legacy flattened header map kept for compatibility with older callers."""
+    rows = _template_header_rows(template_path, sheet_name)
+    result: dict[str, int] = {}
+    # Internal row first, visible row second so visible labels win on duplicates.
+    for row in rows:
+        for col_idx, value in enumerate(row, start=1):
+            if str(value or "").strip():
+                result[_normalize_header(value)] = col_idx
+    return result
 
 
 def _find_header_col_map(header_map: dict[str, int], candidates: list[str]) -> int | None:
@@ -628,18 +660,16 @@ def generate_product_activity_bulk_file(
             pass
 
     # 直接從 OpenXML 表頭取得欄位位置；不載入或重新儲存整本 Workbook。
-    activity_header_map = _template_header_columns(bulk_template_path, ACTIVITY_SHEET_NAME)
-    product_header_map = _template_header_columns(bulk_template_path, PRODUCTS_SHEET_NAME)
-    if not activity_header_map or not product_header_map:
+    activity_header_rows = _template_header_rows(bulk_template_path, ACTIVITY_SHEET_NAME)
+    product_header_rows = _template_header_rows(bulk_template_path, PRODUCTS_SHEET_NAME)
+    if not activity_header_rows or not product_header_rows:
         raise ValueError("Product Activity Bulk Template 缺少必要分頁或表頭")
-    activity_labor_hours_col = _find_header_col_map(activity_header_map, [
-        "Working Hour (optional)", "Working Hours (optional)", "Working Hour", "Working Hours",
-        "年度總工時", "Total working hours", "Total Hours", "Labor Hours", "生產工時", "工時", "Hours"
-    ])
-    activity_labor_hours_unit_col = _find_header_col_map(activity_header_map, [
-        "Working Hours Unit (optional)", "Working Hour Unit (optional)", "Working Hours Unit", "Working Hour Unit",
-        "工時單位", "生產工時單位", "Hours Unit", "Hour Unit"
-    ])
+    activity_labor_hours_col = _profile_find_column(
+        activity_header_rows, "product_activity", "working_hour"
+    )
+    activity_labor_hours_unit_col = _profile_find_column(
+        activity_header_rows, "product_activity", "working_hours_unit"
+    )
 
     excluded_wip_rows = 0
     excluded_structural_wip_rows = 0

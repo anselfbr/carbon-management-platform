@@ -1,0 +1,297 @@
+{
+  "version": "DIP_TEMPLATE_MAPPING_20260723_V2_VISIBLE_HEADER_PRIORITY",
+  "profiles": {
+    "raw_material_activity": {
+      "sheet_names": [
+        "Input Sheet Activity Data"
+      ],
+      "header_rows": [
+        1,
+        2
+      ],
+      "data_start_row": 3,
+      "fields": {
+        "raw_name": [
+          "raw_material_name",
+          "Raw Material Name",
+          "原物料名稱"
+        ],
+        "raw_code": [
+          "raw_material_code",
+          "Raw Material Code",
+          "原物料料號",
+          "原物料代碼"
+        ],
+        "doc_start": [
+          "doc_start_date",
+          "Doc. Start Date",
+          "開始日期"
+        ],
+        "doc_end": [
+          "doc_end_date",
+          "Doc. End Date",
+          "結束日期"
+        ],
+        "document_type": [
+          "document_type",
+          "Document Type",
+          "單據類型"
+        ],
+        "document_number": [
+          "document_number",
+          "Document Number (optional)",
+          "單據號碼"
+        ],
+        "usage": [
+          "usage",
+          "Usage",
+          "使用量",
+          "用量"
+        ],
+        "unit": [
+          "activity_data_unit",
+          "Activity Data Unit",
+          "活動數據單位"
+        ],
+        "net_weight": [
+          "net_weight",
+          "Net Weight (optional)",
+          "淨重"
+        ],
+        "gross_weight": [
+          "gross_weight",
+          "Gross Weight (optional)",
+          "毛重"
+        ],
+        "weight_unit": [
+          "weight_unit",
+          "Weight Unit (optional)",
+          "重量單位"
+        ],
+        "data_source": [
+          "data_source",
+          "Data Source",
+          "資料來源"
+        ],
+        "data_source_other": [
+          "data_source_other",
+          "Data Source Other",
+          "資料來源其他"
+        ],
+        "calculate_transportation_emissions": [
+          "Calculate Transportation Emissions (Required)",
+          "是否計算運輸排放（必填）",
+          "is_transportation_emission_calculated"
+        ],
+        "supplier_name": [
+          "supplier_name",
+          "Supplier Name (optional)",
+          "供應商名稱（選填）",
+          "供應商名稱"
+        ],
+        "transport_origin": [
+          "transportation_origin",
+          "Transportation Origin",
+          "運輸起點"
+        ],
+        "transport_destination": [
+          "transportation_destination",
+          "Transportation Destination",
+          "運輸目的地"
+        ],
+        "target_product": [
+          "allocated_target_product_service",
+          "Allocated Target Product/Service",
+          "分配目標產品／服務",
+          "分配目標產品/服務"
+        ],
+        "comment": [
+          "comment",
+          "Comment (optional)",
+          "備註"
+        ],
+        "material_group": [
+          "material_group",
+          "Material Group",
+          "物料群組"
+        ],
+        "factor_name": [
+          "factor_name",
+          "Factor Name",
+          "係數名稱"
+        ],
+        "factor_source": [
+          "factor_source",
+          "Factor Source",
+          "係數來源"
+        ],
+        "factor_comment": [
+          "factor_comment",
+          "Factor Comment",
+          "係數備註"
+        ],
+        "country_area": [
+          "country_area",
+          "Country/Area",
+          "國家／地區",
+          "國家/地區"
+        ],
+        "enabled_date": [
+          "activation_date",
+          "Enabled Date",
+          "啟用日期"
+        ],
+        "data_quality": [
+          "data_quality",
+          "Data Quality",
+          "數據品質",
+          "資料品質"
+        ],
+        "emission_factor": [
+          "emission_factor",
+          "Emission Factor",
+          "排放係數"
+        ]
+      }
+    },
+    "raw_material_master": {
+      "sheet_names": [
+        "Input Sheet Raw Material"
+      ],
+      "header_rows": [
+        1,
+        2
+      ],
+      "data_start_row": 3,
+      "fields": {
+        "raw_name": [
+          "raw_material_name",
+          "Raw Material Name",
+          "原物料名稱"
+        ],
+        "raw_code": [
+          "raw_material_code",
+          "Raw Material Code",
+          "原物料料號"
+        ],
+        "description": [
+          "raw_material_description",
+          "Raw Material Description (Optional)",
+          "原物料描述"
+        ]
+      }
+    },
+    "supplier_bulk": {
+      "sheet_names": [
+        "Input Sheet"
+      ],
+      "header_rows": [
+        1,
+        2
+      ],
+      "data_start_row": 3,
+      "fields": {
+        "supplier_name": [
+          "supplier_name",
+          "Supplier Name",
+          "供應商名稱"
+        ],
+        "supplier_code": [
+          "supplier_code",
+          "Supplier Code",
+          "供應商代碼"
+        ],
+        "country_area": [
+          "Country/Area",
+          "國家/地區",
+          "國家／地區"
+        ],
+        "supplier_address": [
+          "supplier_address",
+          "Supplier Address (optional)",
+          "供應商地址（選填）",
+          "供應商地址 （選填）"
+        ],
+        "unit_name": [
+          "unit_name",
+          "Unit Name",
+          "單位名稱"
+        ],
+        "industry_category": [
+          "Industry Category (optional)",
+          "產業類別（選填）",
+          "產業類別 （選填）"
+        ],
+        "tier": [
+          "Tier (optional)",
+          "分級（選填）",
+          "分級 （選填）"
+        ]
+      }
+    },
+    "product_activity": {
+      "sheet_names": [
+        "Input Sheet Activity Data"
+      ],
+      "header_rows": [
+        1,
+        2
+      ],
+      "data_start_row": 3,
+      "fields": {
+        "product_name": [
+          "product_name",
+          "Product Name",
+          "產品名稱"
+        ],
+        "working_hour": [
+          "working_hour",
+          "Working Hour (optional)",
+          "工時"
+        ],
+        "working_hours_unit": [
+          "working_hours_unit",
+          "Working Hours Unit (optional)",
+          "工時單位"
+        ],
+        "production_site": [
+          "production_site",
+          "Production Site",
+          "製造場所"
+        ]
+      }
+    },
+    "product_master": {
+      "sheet_names": [
+        "Input Sheet Products"
+      ],
+      "header_rows": [
+        1,
+        2
+      ],
+      "data_start_row": 3,
+      "fields": {
+        "product_name": [
+          "product_name",
+          "Product Name",
+          "產品名稱"
+        ],
+        "product_description": [
+          "product_description",
+          "Product Description (optional)",
+          "產品描述"
+        ],
+        "system_boundary": [
+          "system_boundary",
+          "System Boundary",
+          "系統邊界"
+        ],
+        "declared_unit": [
+          "declared_unit",
+          "Declared Unit",
+          "宣告單位"
+        ]
+      }
+    }
+  }
+}
