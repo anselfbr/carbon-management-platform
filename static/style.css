@@ -3864,3 +3864,169 @@ select:focus {
     display: none;
   }
 }
+
+
+/* 2026-07-24 v3: compact M3A action area and readable download list */
+#automated-data-consolidation .automation-m3a-action-mount {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  gap: 16px;
+  align-items: center;
+  padding: 16px;
+  overflow: visible;
+}
+
+#automated-data-consolidation .automation-m3a-action-mount .automation-m3a-resume-panel {
+  min-height: 0;
+  height: auto;
+  padding: 18px 20px;
+  justify-content: flex-start;
+  gap: 10px;
+}
+
+#automated-data-consolidation .automation-m3a-action-mount .automation-m3a-resume-panel label {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+#automated-data-consolidation .automation-m3a-action-mount .automation-m3a-resume-panel input[type="file"] {
+  min-height: 52px;
+  padding: 7px 10px;
+  font-size: 14px;
+}
+
+#automated-data-consolidation .automation-m3a-action-mount .automation-m3a-resume-panel .form-hint {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: break-word;
+}
+
+#automated-data-consolidation .automation-m3a-action-mount .automation-start-btn {
+  min-height: 58px;
+  height: auto;
+  align-self: center;
+  padding: 14px 18px;
+  border-radius: 12px;
+  font-size: 16px;
+  line-height: 1.35;
+  box-shadow: 0 7px 18px rgba(0, 110, 220, .16);
+}
+
+#automated-data-consolidation .automation-downloads {
+  padding: 18px;
+  gap: 14px;
+}
+
+#automated-data-consolidation .automation-downloads-heading-icon {
+  width: 34px;
+  height: 34px;
+  font-size: 18px;
+}
+
+#automated-data-consolidation .automation-downloads-heading b {
+  font-size: 16px;
+}
+
+#automated-data-consolidation .automation-downloads-heading p {
+  font-size: 13px;
+}
+
+#automated-data-consolidation .automation-download-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+#automated-data-consolidation .automation-download-card {
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  gap: 12px;
+  min-height: 68px;
+  padding: 12px 14px;
+  border-radius: 12px;
+}
+
+#automated-data-consolidation .automation-download-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  font-size: 21px;
+}
+
+#automated-data-consolidation .automation-download-copy b {
+  margin: 0;
+  color: #247c3b;
+  font-size: 14px;
+  line-height: 1.35;
+  word-break: normal;
+  overflow-wrap: normal;
+  white-space: normal;
+}
+
+#automated-data-consolidation .automation-download-copy small {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: normal;
+  overflow-wrap: normal;
+  white-space: normal;
+}
+
+#automated-data-consolidation .automation-download-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 58px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: #238a43;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+#automated-data-consolidation .automation-download-card.disabled .automation-download-arrow {
+  background: #9ec8aa;
+}
+
+@media (max-width: 960px) {
+  #automated-data-consolidation .automation-m3a-action-mount {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #automated-data-consolidation .automation-m3a-action-mount .automation-start-btn {
+    width: 100%;
+    min-height: 54px;
+  }
+}
+
+@media (max-width: 560px) {
+  #automated-data-consolidation .automation-m3a-action-mount,
+  #automated-data-consolidation .automation-downloads {
+    padding: 14px;
+  }
+
+  #automated-data-consolidation .automation-m3a-action-mount .automation-m3a-resume-panel {
+    padding: 15px;
+  }
+
+  #automated-data-consolidation .automation-download-card {
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 11px 12px;
+  }
+
+  #automated-data-consolidation .automation-download-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 19px;
+  }
+
+  #automated-data-consolidation .automation-download-arrow {
+    display: inline-flex;
+    min-width: 50px;
+    padding: 0 9px;
+  }
+}
