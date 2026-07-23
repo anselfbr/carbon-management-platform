@@ -427,21 +427,6 @@
           </section>
 
           <section class="card automation-status-card">
-            <div class="automation-status-heading">
-              <div>
-                <p class="section-eyebrow" data-i18n="automationProgressEyebrow">STATUS</p>
-                <h3 data-i18n="automationProgressTitle">執行進度</h3>
-                <p data-i18n="automationProgressHint">每完成一個階段，系統會自動標示勾選並繼續下一階段。</p>
-              </div>
-              <span id="automationStageCounter" class="automation-stage-counter">0 / 7</span>
-            </div>
-
-            <div id="automationStatus" class="processing-status idle automation-current-status">
-              <div class="automation-current-copy"><b id="automationStatusTitle" data-i18n="automationReady">全自動化流程已就緒</b><p id="automationStatusText" data-i18n="automationReadyHint">選擇所有必要檔案後即可開始。</p></div>
-              <span id="automationStatusTime" class="automation-progress-percent">0%</span>
-              <div class="progress-track"><div id="automationProgressBar" class="progress-bar" style="width:0%"></div></div>
-            </div>
-
             <div id="automationM3aActionMount" class="automation-m3a-action-mount hidden"></div>
 
             <details class="automation-log-panel automation-stage-log-panel" open>
@@ -3890,12 +3875,21 @@ ruleForm.onsubmit = async (e) => {
     }).join('');
   }
   function setState(mode, title, text, progress) {
-    statusBox.classList.remove('idle','running','success','error'); statusBox.classList.add(mode);
+    if (statusBox) {
+      statusBox.classList.remove('idle','running','success','error');
+      statusBox.classList.add(mode);
+    }
     // Runtime status must not be overwritten by the initial i18n wording.
-    statusTitle.removeAttribute('data-i18n');
-    statusText.removeAttribute('data-i18n');
-    statusTitle.textContent=title; statusText.textContent=text; statusTime.textContent=`${Math.round(progress)}%`;
-    progressBar.style.width=`${Math.max(0,Math.min(100,progress))}%`;
+    if (statusTitle) {
+      statusTitle.removeAttribute('data-i18n');
+      statusTitle.textContent = title;
+    }
+    if (statusText) {
+      statusText.removeAttribute('data-i18n');
+      statusText.textContent = text;
+    }
+    if (statusTime) statusTime.textContent = `${Math.round(progress)}%`;
+    if (progressBar) progressBar.style.width = `${Math.max(0,Math.min(100,progress))}%`;
   }
   function automationActionLabel(stepText='') {
     const value=String(stepText||'').toLowerCase();

@@ -3601,3 +3601,62 @@ select:focus {
   display: none !important;
 }
 
+
+
+/* 2026-07-24: remove current execution progress summary block and fix M3A second-stage overflow */
+#automated-data-consolidation .automation-status-heading,
+#automated-data-consolidation #automationStatus {
+  display: none !important;
+}
+
+#automated-data-consolidation .automation-status-card {
+  gap: 14px;
+}
+
+.automation-m3a-action-mount {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 1fr);
+  gap: 18px;
+  align-items: stretch;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.automation-m3a-action-mount > * {
+  min-width: 0;
+}
+
+.automation-m3a-action-mount .automation-m3a-resume-panel {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.automation-m3a-action-mount .automation-m3a-resume-panel input[type="file"] {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.automation-m3a-action-mount .automation-start-btn {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  align-self: stretch;
+  white-space: normal;
+  word-break: break-word;
+  padding: 18px 24px;
+}
+
+@media (max-width: 1180px) {
+  .automation-m3a-action-mount {
+    grid-template-columns: 1fr;
+  }
+
+  .automation-m3a-action-mount .automation-start-btn {
+    min-height: 60px;
+  }
+}
