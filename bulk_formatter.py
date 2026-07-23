@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any, Dict, Callable
 
 from template_header_resolver import aliases as _profile_aliases, find_column as _profile_find_column
+from dropdown_value_resolver import (
+    DropdownValuesCache,
+    PRODUCT_DISPLAY_ALIASES,
+    PRODUCT_DROPDOWN_FIELDS,
+)
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -25,7 +30,7 @@ PRODUCTS_SHEET_NAME = "Input Sheet Products"
 # Data starts from row 3
 DATA_START_ROW = 3
 
-BULK_FORMATTER_VERSION = "DIP_M1B_TEMPLATE_I18N_RESOLVER_V2_VISIBLE_HEADER_PRIORITY"
+BULK_FORMATTER_VERSION = "DIP_M1B_PRODUCT_DROPDOWN_CACHE_LOCALIZATION_V1_20260723"
 
 
 def _sanitize_filename(value: Any) -> str:
@@ -462,7 +467,14 @@ def _sort_row_cells_by_column(row_xml: bytes) -> bytes:
     return row_xml[:open_m.end()] + new_body + row_xml[close_pos:]
 
 
-def _rewrite_product_activity_sheet(template_xml: bytes, rows: list[dict[str, Any]], sheet_kind: str, labor_col: int | None, labor_unit_col: int | None) -> bytes:
+def _rewrite_product_activity_sheet(
+    template_xml: bytes,
+    rows: list[dict[str, Any]],
+    sheet_kind: str,
+    labor_col: int | None,
+    labor_unit_col: int | None,
+    dropdown_display: dict[str, str],
+) -> bytes:
     start_m = re.search(rb'<sheetData\b[^>]*>', template_xml)
     end_m = re.search(rb'</sheetData>', template_xml)
     if not start_m or not end_m:
@@ -495,9 +507,18 @@ def _rewrite_product_activity_sheet(template_xml: bytes, rows: list[dict[str, An
                 # Excel 1900 date system serials; 1899-12-30 matches openpyxl/Excel.
                 start_serial=(date(year,1,1)-date(1899,12,30)).days
                 end_serial=(date(year,12,31)-date(1899,12,30)).days
-                vals={1:("text",item['product_name']),2:("number",start_serial),3:("number",end_serial),4:("text","Target Product"),5:("text",item['production_site']),6:("number",item['qty']),7:("text","SAP"),8:("blank",None)}
+                vals={
+                    1:("text",item['product_name']),
+                    2:("number",start_serial),
+                    3:("number",end_serial),
+                    4:("text",dropdown_display["product_type"]),
+                    5:("text",item['production_site']),
+                    6:("number",item['qty']),
+                    7:("text",dropdown_display["data_source"]),
+                    8:("blank",None),
+                }
                 if labor_col: vals[labor_col]=(("number",item['labor_hours']) if item['labor_hours'] is not None else ("blank",None))
-                if labor_unit_col: vals[labor_unit_col]=(("text","hours") if item['labor_hours'] is not None else ("blank",None))
+                if labor_unit_col: vals[labor_unit_col]=(("text",dropdown_display["working_hours_unit"]) if item['labor_hours'] is not None else ("blank",None))
                 for c,(k,v) in vals.items(): row_xml=_replace_cell_xml(row_xml,row_idx,c,k,v)
                 for c,cache in {20:"FINISHED_PRODUCT",21:"SAP",22:"",23:"HOURS",24:""}.items():
                     row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_cache",formula_cache=cache)
@@ -507,7 +528,12 @@ def _rewrite_product_activity_sheet(template_xml: bytes, rows: list[dict[str, An
                 for c in visible: row_xml=_replace_cell_xml(row_xml,row_idx,c,"blank")
                 for c in range(22,29): row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_blank")
             else:
-                for c,k,v in [(1,"text",item['product_name']),(3,"text",item['product_description']),(4,"text","Cradle-to-Gate"),(6,"text","PC")]:
+                for c,k,v in [
+                    (1,"text",item['product_name']),
+                    (3,"text",item['product_description']),
+                    (4,"text",dropdown_display["system_boundary"]),
+                    (6,"text",dropdown_display["declared_unit"]),
+                ]:
                     row_xml=_replace_cell_xml(row_xml,row_idx,c,k,v)
                 for c,cache in {22:"CRADLE_TO_GATE",23:"PC",24:"",25:"",26:"",27:"",28:""}.items():
                     row_xml=_replace_cell_xml(row_xml,row_idx,c,"formula_cache",formula_cache=cache)
@@ -545,7 +571,14 @@ def _force_full_calc_on_load(data: bytes) -> bytes:
 
     return re.sub(rb"<calcPr\b[^>]*/?>", repl, data, count=1)
 
-def _write_product_activity_openxml(template_path: Path, output_path: Path, rows: list[dict[str, Any]], labor_col: int | None, labor_unit_col: int | None) -> None:
+def _write_product_activity_openxml(
+    template_path: Path,
+    output_path: Path,
+    rows: list[dict[str, Any]],
+    labor_col: int | None,
+    labor_unit_col: int | None,
+    dropdown_display: dict[str, str],
+) -> None:
     paths=_xlsx_sheet_paths(template_path)
     activity_path=paths.get(ACTIVITY_SHEET_NAME); products_path=paths.get(PRODUCTS_SHEET_NAME)
     if not activity_path or not products_path:
@@ -562,9 +595,9 @@ def _write_product_activity_openxml(template_path: Path, output_path: Path, rows
                 continue
             data=zin.read(name)
             if name==activity_path:
-                data=_rewrite_product_activity_sheet(data,rows,'activity',labor_col,labor_unit_col)
+                data=_rewrite_product_activity_sheet(data,rows,'activity',labor_col,labor_unit_col,dropdown_display)
             elif name==products_path:
-                data=_rewrite_product_activity_sheet(data,rows,'products',labor_col,labor_unit_col)
+                data=_rewrite_product_activity_sheet(data,rows,'products',labor_col,labor_unit_col,dropdown_display)
             elif name == '[Content_Types].xml':
                 data = _remove_calc_chain_content_types(data)
             elif name == 'xl/_rels/workbook.xml.rels':
@@ -582,6 +615,7 @@ def generate_product_activity_bulk_file(
     bom_structure_path: str | Path | None = None,
     working_hour_rollup_path: str | Path | None = None,
     progress_callback: Callable[..., None] | None = None,
+    dropdown_cache: DropdownValuesCache | None = None,
 ) -> Dict[str, Any]:
     """
     方案 1：直接複製原始 Bulk Template，再只覆蓋指定分頁的指定儲存格內容。
@@ -670,6 +704,22 @@ def generate_product_activity_bulk_file(
     activity_labor_hours_unit_col = _profile_find_column(
         activity_header_rows, "product_activity", "working_hours_unit"
     )
+
+    # Parse the complete Product Template Dropdown Values sheet exactly once.
+    # All data rows and all site-split outputs reuse these in-memory maps.
+    product_dropdown_cache = dropdown_cache or DropdownValuesCache.from_xlsx_path(
+        bulk_template_path,
+        fields=PRODUCT_DROPDOWN_FIELDS,
+        display_aliases=PRODUCT_DISPLAY_ALIASES,
+        required=True,
+    )
+    dropdown_display = {
+        "product_type": product_dropdown_cache.display("product_type", "FINISHED_PRODUCT", "Target Product"),
+        "data_source": product_dropdown_cache.display("data_source", "SAP", "SAP"),
+        "working_hours_unit": product_dropdown_cache.display("working_hours_unit", "HOURS", "Hours"),
+        "system_boundary": product_dropdown_cache.display("system_boundary", "CRADLE_TO_GATE", "Cradle-to-Gate"),
+        "declared_unit": product_dropdown_cache.display("declared_unit", "PC", "PC"),
+    }
 
     excluded_wip_rows = 0
     excluded_structural_wip_rows = 0
@@ -798,6 +848,7 @@ def generate_product_activity_bulk_file(
     _write_product_activity_openxml(
         bulk_template_path, output_path, rows_to_write,
         activity_labor_hours_col, activity_labor_hours_unit_col,
+        dropdown_display,
     )
     report("Product Activity Bulk 已完成", rows_total, rows_total, 100)
 
@@ -829,6 +880,8 @@ def generate_product_activity_bulk_file(
         "working_hour_source": working_hour_source,
         "working_hour_rollup_used": bool(working_hour_rollup_path and Path(working_hour_rollup_path).exists()),
         "semi_finished_working_hour_products": int(len(structural_wip_materials) or len(semi_hour_by_material)),
+        "product_dropdown_cache": product_dropdown_cache.summary(),
+        "product_dropdown_display_values": dict(dropdown_display),
         "bulk_formatter_version": BULK_FORMATTER_VERSION,
     }
 
@@ -854,12 +907,19 @@ def generate_product_activity_bulk_files_by_site(
     output_dir.mkdir(parents=True, exist_ok=True)
     token = token or "bulk"
 
+    product_dropdown_cache = DropdownValuesCache.from_xlsx_path(
+        bulk_template_path,
+        fields=PRODUCT_DROPDOWN_FIELDS,
+        display_aliases=PRODUCT_DISPLAY_ALIASES,
+        required=True,
+    )
+
     df = pd.read_excel(step1_output_path, sheet_name=SOURCE_SHEET_NAME, dtype=object)
     production_site_col = _find_optional_column(df, ["Production Site", "production site", "生產廠區", "廠區", "廠別"])
 
     if production_site_col is None:
         output_path = output_dir / f"product_activity_data_bulk_create_{token}.xlsx"
-        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
+        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path, dropdown_cache=product_dropdown_cache)
         return {
             "split_by_production_site": False,
             "production_site_count": 1,
@@ -878,7 +938,7 @@ def generate_product_activity_bulk_files_by_site(
     if len(sites) <= 1:
         site = sites[0] if sites else "ALL"
         output_path = output_dir / f"product_activity_data_bulk_create_{_sanitize_filename(site)}_{token}.xlsx"
-        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
+        summary = generate_product_activity_bulk_file(step1_output_path, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path, dropdown_cache=product_dropdown_cache)
         return {
             "split_by_production_site": False,
             "production_site_count": len(sites) or 1,
@@ -903,7 +963,7 @@ def generate_product_activity_bulk_files_by_site(
             with pd.ExcelWriter(temp_step1, engine="openpyxl") as writer:
                 site_df.to_excel(writer, index=False, sheet_name=SOURCE_SHEET_NAME)
 
-            summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path)
+            summary = generate_product_activity_bulk_file(temp_step1, bulk_template_path, output_path, working_hour_source=working_hour_source, bom_structure_path=bom_structure_path, working_hour_rollup_path=working_hour_rollup_path, dropdown_cache=product_dropdown_cache)
             files.append({
                 "production_site": site,
                 "filename": output_path.name,
@@ -948,6 +1008,13 @@ def generate_product_activity_bulk_files_by_site_zip(
     output_dir.mkdir(parents=True, exist_ok=True)
     token = token or "bulk"
 
+    product_dropdown_cache = DropdownValuesCache.from_xlsx_path(
+        bulk_template_path,
+        fields=PRODUCT_DROPDOWN_FIELDS,
+        display_aliases=PRODUCT_DISPLAY_ALIASES,
+        required=True,
+    )
+
     def report(step: str, processed: int = 0, total: int = 0, progress: int = 0, **extra: Any) -> None:
         if progress_callback is None:
             return
@@ -982,6 +1049,7 @@ def generate_product_activity_bulk_files_by_site_zip(
                 working_hour_source=working_hour_source,
                 bom_structure_path=bom_structure_path,
                 working_hour_rollup_path=working_hour_rollup_path,
+                dropdown_cache=product_dropdown_cache,
                 progress_callback=lambda step, processed=0, total=0, progress=0, **extra: report(
                     step, processed, total, 8 + int(progress * 0.82), production_site="ALL", **extra
                 ),
@@ -1019,6 +1087,7 @@ def generate_product_activity_bulk_files_by_site_zip(
                     working_hour_source=working_hour_source,
                     bom_structure_path=bom_structure_path,
                     working_hour_rollup_path=working_hour_rollup_path,
+                    dropdown_cache=product_dropdown_cache,
                     progress_callback=lambda step, processed=0, total=0, progress=0, _site=site, _start=stage_start, _span=stage_span, **extra: report(
                         f"{_site}｜{step}", processed, total, int(_start + (progress / 100) * _span), production_site=_site, **extra
                     ),
