@@ -28,7 +28,7 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "DIP_V29_M2C_STREAMING_OPENXML_20260724"
+BOM_FORMATTER_VERSION = "DIP_V30_M2C_EXCLUDE_UNASSIGNED_FILE_20260724"
 M2_MAX_ACTIVITY_DATA_ROWS = 50000
 M2_ACTIVITY_HELPER_FORMULA_COLS = tuple(range(28, 36))  # AB~AI
 M2C_XLSX_COMPRESSION_LEVEL = max(0, min(9, int(os.getenv("M2C_XLSX_COMPRESSION_LEVEL", "1") or 1)))
@@ -6443,6 +6443,20 @@ def _write_supplier_bulk_create_file_from_unique_rows(supplier_rows: set[tuple[s
     }
 
 
+def _is_unassigned_module2b_member(member_name: Any) -> bool:
+    """Return True when an M2B ZIP member is the Unassigned site workbook.
+
+    M2B creates one workbook per Production Site.  When site mapping fails, the
+    workbook name contains ``Unassigned``.  M2C must skip the whole workbook,
+    rather than reading it and propagating invalid Unit Name values into
+    Supplier Bulk and supplier-mapped Raw Material Bulk outputs.
+    """
+    name = Path(str(member_name or "")).name
+    stem = Path(name).stem
+    normalized = re.sub(r"[^a-z0-9]+", "", stem.casefold())
+    return "unassigned" in normalized or "unassign" in normalized
+
+
 def generate_supplier_mapped_raw_material_bulk_from_zip(
     raw_material_bulk_zip_path: str | Path,
     supplier_paths: list[str | Path] | tuple[str | Path, ...],
@@ -6496,12 +6510,28 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
         with tempfile.TemporaryDirectory(prefix="dip_module2c_openxml_") as tmp:
             tmpdir = Path(tmp)
             with zipfile.ZipFile(source_zip, "r") as source_bundle:
-                members = [
+                excel_members = [
                     m for m in source_bundle.namelist()
                     if m.lower().endswith((".xlsx", ".xlsm")) and not Path(m).name.startswith("~$")
                 ]
-                if not members:
+                excluded_unassigned_members = [m for m in excel_members if _is_unassigned_module2b_member(m)]
+                members = [m for m in excel_members if not _is_unassigned_module2b_member(m)]
+                if not excel_members:
                     raise ValueError("Module 2B ZIP 中找不到 Raw Material Bulk Excel 檔案。")
+                if not members:
+                    excluded_names = "、".join(Path(m).name for m in excluded_unassigned_members[:10])
+                    raise ValueError(
+                        "Module 2B ZIP 只有 Unassigned 原物料中間檔，M2C 已全部排除，沒有可執行的正常廠區檔案。"
+                        + (f" 排除檔案：{excluded_names}" if excluded_names else "")
+                    )
+                if excluded_unassigned_members and progress_callback:
+                    progress_callback(
+                        step=f"已排除 {len(excluded_unassigned_members)} 份 Unassigned 原物料中間檔",
+                        processed=0,
+                        total=len(members),
+                        progress=10,
+                        excluded_files=[Path(m).name for m in excluded_unassigned_members],
+                    )
 
                 with zipfile.ZipFile(partial_zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as out_zip:
                     for idx, member in enumerate(members, start=1):
@@ -6601,6 +6631,10 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
         "module2c_xlsx_compression_level": int(M2C_XLSX_COMPRESSION_LEVEL),
         "module2c_template_policy": "Row-2 headers and row-3 styles plus hidden AB~AI formulas are preserved; full dropdown/validation package is restored by M3A.",
         "input_files": int(input_files),
+        "source_excel_files": int(len(excel_members)) if 'excel_members' in locals() else int(input_files),
+        "excluded_unassigned_files": int(len(excluded_unassigned_members)) if 'excluded_unassigned_members' in locals() else 0,
+        "excluded_unassigned_filenames": [Path(m).name for m in excluded_unassigned_members] if 'excluded_unassigned_members' in locals() else [],
+        "unassigned_file_policy": "exclude_entire_m2b_workbook_before_m2c_mapping",
         "input_rows": int(total_input_rows),
         "activity_rows": int(total_output_rows),
         "generated_files": generated_files,
@@ -6631,4 +6665,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "DIP_V29_M2C_STREAMING_OPENXML_20260724"
+BOM_FORMATTER_VERSION = "DIP_V30_M2C_EXCLUDE_UNASSIGNED_FILE_20260724"
