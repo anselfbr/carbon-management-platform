@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import re
 import shutil
+import os
+import errno
+from functools import lru_cache
 import tempfile
 import zipfile
 import time
@@ -23,10 +26,15 @@ RAW_MATERIAL_SHEET_ALIASES = ["Input Sheet Raw Material", "Raw Material", "Raw M
 DATA_START_ROW = 3
 M3_MAX_UPLOAD_TOTAL_ROWS = 50000
 M3_MAX_UPLOAD_DATA_ROWS = max(1, M3_MAX_UPLOAD_TOTAL_ROWS - (DATA_START_ROW - 1))
+# XLSX is already a ZIP package. Compression level 9 costs substantially more CPU
+# for very little size reduction on large worksheet XML. Level 1 keeps files valid
+# while prioritising throughput on Render. Can be overridden for diagnostics.
+M3A_XLSX_COMPRESSION_LEVEL = max(0, min(9, int(os.getenv("M3A_XLSX_COMPRESSION_LEVEL", "1") or 1)))
+M3A_COPY_BUFFER_BYTES = max(1024 * 1024, int(os.getenv("M3A_COPY_BUFFER_BYTES", str(4 * 1024 * 1024)) or (4 * 1024 * 1024)))
 CCL_SHEET_NAME = "02.料號CCL分類表"
 LCIA_SHEET_NAME = "LCIA"
 
-FACTOR_SELECTOR_VERSION = "DIP_M3_LIGHTWEIGHT_M3A_FINAL_TEMPLATE_PERF_V5_20260723"
+FACTOR_SELECTOR_VERSION = "DIP_M3A_STREAM_PACKAGE_PERF_V6_20260724"
 
 
 def _norm(value: Any) -> str:
@@ -41,27 +49,6 @@ def _text(value: Any) -> str:
     if isinstance(value, float) and pd.isna(value):
         return ""
     return str(value).strip()
-
-
-def _coerce_excel_date(value: Any) -> Any:
-    """Keep date fields as real Excel dates so the official template number format applies."""
-    if value in (None, "") or isinstance(value, (datetime, date)):
-        return value
-    if isinstance(value, pd.Timestamp):
-        return value.to_pydatetime()
-    text = str(value).strip()
-    if not text:
-        return value
-    for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%Y.%m.%d", "%Y%m%d", "%m/%d/%Y", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(text, fmt)
-        except ValueError:
-            pass
-    try:
-        parsed = pd.to_datetime(text, errors="raise")
-        return parsed.to_pydatetime() if hasattr(parsed, "to_pydatetime") else parsed
-    except Exception:
-        return value
 
 
 def _find_header_row(ws, aliases: Iterable[str], max_scan_rows: int = 30) -> int:
@@ -1169,6 +1156,106 @@ def _write_sheet_part_from_template(zout: zipfile.ZipFile, arcname: str, templat
                 shutil.copyfileobj(src, out, length=1024 * 1024)
         out.write(suffix)
 
+def _template_cache_key(template_path: str | Path, activity_width: int, raw_width: int) -> tuple[str, int, int, int, int]:
+    path = Path(template_path).resolve()
+    stat = path.stat()
+    return (str(path), int(stat.st_mtime_ns), int(stat.st_size), int(activity_width), int(raw_width))
+
+
+@lru_cache(maxsize=8)
+def _prepare_template_write_context_cached(
+    template_path_str: str,
+    template_mtime_ns: int,
+    template_size: int,
+    activity_width: int,
+    raw_width: int,
+) -> dict[str, Any]:
+    """Parse and cache immutable official-template parts once per uploaded file.
+
+    M3A may split one source file into several workbooks and may process several
+    M3 source files. Re-reading workbook relationships, worksheet XML, styles,
+    and every static ZIP member for each split was a major I/O/CPU cost.
+    """
+    del template_mtime_ns, template_size  # included in the cache key for invalidation
+    template_path = Path(template_path_str)
+    sheet_paths = _sheet_paths_by_name_from_xlsx(template_path)
+    activity_template_name = _first_existing_name(sheet_paths.keys(), ACTIVITY_SHEET_ALIASES)
+    raw_template_name = _first_existing_name(sheet_paths.keys(), RAW_MATERIAL_SHEET_ALIASES)
+    activity_sheet_path = sheet_paths.get(activity_template_name or "")
+    raw_sheet_path = sheet_paths.get(raw_template_name or "")
+    if not activity_sheet_path or not raw_sheet_path:
+        raise ValueError("Raw Material Bulk Template 缺少 Activity Data 或 Raw Material 分頁。")
+
+    static_entries: list[tuple[zipfile.ZipInfo, bytes]] = []
+    with zipfile.ZipFile(template_path, "r") as zin:
+        activity_template_xml = zin.read(activity_sheet_path)
+        raw_template_xml = zin.read(raw_sheet_path)
+        styles_xml = zin.read("xl/styles.xml") if "xl/styles.xml" in zin.namelist() else None
+        for item in zin.infolist():
+            name = item.filename
+            if name == "xl/calcChain.xml" or name in {activity_sheet_path, raw_sheet_path}:
+                continue
+            if item.is_dir():
+                static_entries.append((item, b""))
+                continue
+            data = zin.read(name)
+            if name == "[Content_Types].xml":
+                data = _remove_calc_chain_content_types(data)
+            elif name == "xl/_rels/workbook.xml.rels":
+                data = _remove_calc_chain_rels(data)
+            elif name == "xl/workbook.xml":
+                data = _force_full_calc_on_load(data)
+            static_entries.append((item, data))
+
+    _, activity_inside, _, _ = _split_sheet_xml(activity_template_xml)
+    _, raw_inside, _, _ = _split_sheet_xml(raw_template_xml)
+    activity_style_by_col, activity_formula_by_col, activity_row_attrs = _template_row_format(
+        activity_inside, DATA_START_ROW, activity_width
+    )
+    activity_style_by_col, helper_style_summary = _normalize_activity_helper_styles(
+        activity_style_by_col, styles_xml
+    )
+    if (
+        activity_width >= _M3_DOCUMENT_TYPE_HELPER_COL
+        and _M3_DOCUMENT_TYPE_HELPER_COL not in activity_formula_by_col
+    ):
+        activity_formula_by_col[_M3_DOCUMENT_TYPE_HELPER_COL] = _M3_DOCUMENT_TYPE_HELPER_FORMULA_XML
+    raw_style_by_col, raw_formula_by_col, raw_row_attrs = _template_row_format(
+        raw_inside, DATA_START_ROW, raw_width
+    )
+    return {
+        "activity_sheet_path": activity_sheet_path,
+        "raw_sheet_path": raw_sheet_path,
+        "activity_template_xml": activity_template_xml,
+        "raw_template_xml": raw_template_xml,
+        "activity_style_by_col": activity_style_by_col,
+        "activity_formula_by_col": activity_formula_by_col,
+        "activity_row_attrs": activity_row_attrs,
+        "raw_style_by_col": raw_style_by_col,
+        "raw_formula_by_col": raw_formula_by_col,
+        "raw_row_attrs": raw_row_attrs,
+        "helper_style_summary": helper_style_summary,
+        "static_entries": static_entries,
+    }
+
+
+def _prepare_template_write_context(
+    template_path: str | Path,
+    activity_width: int,
+    raw_width: int,
+) -> dict[str, Any]:
+    return _prepare_template_write_context_cached(*_template_cache_key(template_path, activity_width, raw_width))
+
+
+def _raise_m3a_io_error(exc: OSError, phase: str) -> None:
+    if getattr(exc, "errno", None) == errno.ENOSPC:
+        raise RuntimeError(
+            f"M3A {phase}失敗：暫存磁碟空間不足。請清理 outputs/uploads 暫存檔後重試；"
+            "本版本已改為低暫存量封裝，仍建議至少保留 1 GB 可用空間。"
+        ) from exc
+    raise RuntimeError(f"M3A {phase}失敗：{exc}") from exc
+
+
 def _write_template_applied_workbook(
     template_path: str | Path,
     output_path: str | Path,
@@ -1178,52 +1265,31 @@ def _write_template_applied_workbook(
     raw_rows_iter,
     activity_width: int,
     raw_width: int,
+    template_context: dict[str, Any] | None = None,
 ) -> dict[str, int]:
     template_path = Path(template_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    sheet_paths = _sheet_paths_by_name_from_xlsx(template_path)
-    activity_template_name = _first_existing_name(sheet_paths.keys(), ACTIVITY_SHEET_ALIASES)
-    raw_template_name = _first_existing_name(sheet_paths.keys(), RAW_MATERIAL_SHEET_ALIASES)
-    activity_sheet_path = sheet_paths.get(activity_template_name or "")
-    raw_sheet_path = sheet_paths.get(raw_template_name or "")
-    if not activity_sheet_path or not raw_sheet_path:
-        raise ValueError("Raw Material Bulk Template 缺少 Activity Data 或 Raw Material 分頁。")
+    context = template_context or _prepare_template_write_context(template_path, activity_width, raw_width)
+    activity_sheet_path = str(context["activity_sheet_path"])
+    raw_sheet_path = str(context["raw_sheet_path"])
 
     with tempfile.TemporaryDirectory(prefix="cmp_m3_template_apply_") as tmp:
         tmpdir = Path(tmp)
         activity_xml_tmp = tmpdir / "activity_rows.xml"
         raw_xml_tmp = tmpdir / "raw_rows.xml"
-        with zipfile.ZipFile(template_path, "r") as zpeek:
-            activity_template_xml_peek = zpeek.read(activity_sheet_path)
-            raw_template_xml_peek = zpeek.read(raw_sheet_path)
-            styles_xml_peek = zpeek.read("xl/styles.xml") if "xl/styles.xml" in zpeek.namelist() else None
-        _, activity_inside, _, _ = _split_sheet_xml(activity_template_xml_peek)
-        _, raw_inside, _, _ = _split_sheet_xml(raw_template_xml_peek)
-        activity_style_by_col, activity_formula_by_col, activity_row_attrs = _template_row_format(activity_inside, DATA_START_ROW, activity_width)
-        activity_style_by_col, helper_style_summary = _normalize_activity_helper_styles(
-            activity_style_by_col,
-            styles_xml_peek,
-        )
-        # Some production templates may contain AB~AG formulas but have AA3
-        # accidentally blank. Rebuild only the official AA document_type helper
-        # formula so the hidden key resolves from visible E, matching manual
-        # paste behavior in the third-party template.
-        if (
-            activity_width >= _M3_DOCUMENT_TYPE_HELPER_COL
-            and _M3_DOCUMENT_TYPE_HELPER_COL not in activity_formula_by_col
-        ):
-            activity_formula_by_col[_M3_DOCUMENT_TYPE_HELPER_COL] = _M3_DOCUMENT_TYPE_HELPER_FORMULA_XML
-        raw_style_by_col, raw_formula_by_col, raw_row_attrs = _template_row_format(raw_inside, DATA_START_ROW, raw_width)
         activity_count, activity_actual_width = _spool_sheet_rows_xml(
             activity_rows_iter,
             activity_xml_tmp,
             DATA_START_ROW,
             activity_width,
-            style_by_col=activity_style_by_col,
-            formula_by_col=activity_formula_by_col,
-            template_row_attrs=activity_row_attrs,
-            emit_empty_styles=True,
+            style_by_col=context["activity_style_by_col"],
+            formula_by_col=context["activity_formula_by_col"],
+            template_row_attrs=context["activity_row_attrs"],
+            # Blank styled cells multiplied XML size across ~500k rows. Non-empty
+            # dates/numbers still receive the official style, while formulas are
+            # always emitted through formula_by_col.
+            emit_empty_styles=False,
             general_numeric_cols=set(_M3_ACTIVITY_HELPER_FORMULA_COL_RANGE),
         )
         raw_count, raw_actual_width = _spool_sheet_rows_xml(
@@ -1231,43 +1297,61 @@ def _write_template_applied_workbook(
             raw_xml_tmp,
             DATA_START_ROW,
             raw_width,
-            style_by_col=raw_style_by_col,
-            formula_by_col=raw_formula_by_col,
-            template_row_attrs=raw_row_attrs,
-            emit_empty_styles=True,
+            style_by_col=context["raw_style_by_col"],
+            formula_by_col=context["raw_formula_by_col"],
+            template_row_attrs=context["raw_row_attrs"],
+            emit_empty_styles=False,
         )
         final_activity_width = max(int(activity_width), int(activity_actual_width))
         final_raw_width = max(int(raw_width), int(raw_actual_width))
 
-        with zipfile.ZipFile(template_path, "r") as zin, zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zout:
-            for item in zin.infolist():
-                name = item.filename
-                if item.is_dir():
-                    zout.writestr(item, b"")
-                    continue
-                if name == "xl/calcChain.xml":
-                    continue
-                if name in {activity_sheet_path, raw_sheet_path}:
-                    continue
-                data = zin.read(name)
-                if name == "[Content_Types].xml":
-                    data = _remove_calc_chain_content_types(data)
-                elif name == "xl/_rels/workbook.xml.rels":
-                    data = _remove_calc_chain_rels(data)
-                elif name == "xl/workbook.xml":
-                    data = _force_full_calc_on_load(data)
-                zout.writestr(item, data)
-            activity_template_xml = zin.read(activity_sheet_path)
-            raw_template_xml = zin.read(raw_sheet_path)
-            _write_sheet_part_from_template(zout, activity_sheet_path, activity_template_xml, activity_header_rows, activity_xml_tmp, activity_count, final_activity_width)
-            _write_sheet_part_from_template(zout, raw_sheet_path, raw_template_xml, raw_header_rows, raw_xml_tmp, raw_count, final_raw_width)
+        partial_path = output_path.with_name(output_path.name + ".partial")
+        partial_path.unlink(missing_ok=True)
+        try:
+            with zipfile.ZipFile(
+                partial_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=M3A_XLSX_COMPRESSION_LEVEL,
+                allowZip64=True,
+            ) as zout:
+                for item, data in context["static_entries"]:
+                    zout.writestr(item, data)
+                _write_sheet_part_from_template(
+                    zout,
+                    activity_sheet_path,
+                    context["activity_template_xml"],
+                    activity_header_rows,
+                    activity_xml_tmp,
+                    activity_count,
+                    final_activity_width,
+                )
+                _write_sheet_part_from_template(
+                    zout,
+                    raw_sheet_path,
+                    context["raw_template_xml"],
+                    raw_header_rows,
+                    raw_xml_tmp,
+                    raw_count,
+                    final_raw_width,
+                )
+            partial_path.replace(output_path)
+        except OSError as exc:
+            partial_path.unlink(missing_ok=True)
+            _raise_m3a_io_error(exc, "正式 Template 封裝")
+        except Exception:
+            partial_path.unlink(missing_ok=True)
+            raise
+    helper_style_summary = context["helper_style_summary"]
     return {
         "activity_rows": int(activity_count),
         "raw_material_rows": int(raw_count),
         "ab_ai_text_styles_replaced": list(helper_style_summary.get("helper_text_styles_replaced", [])),
         "ab_ai_general_style_id": helper_style_summary.get("helper_general_style_id", "0"),
+        "xlsx_compression_level": int(M3A_XLSX_COMPRESSION_LEVEL),
+        "template_context_cached": True,
+        "empty_styled_cells_omitted": True,
     }
-
 
 def _build_source_col_map(
     header_rows: list[list[Any]],
@@ -1323,6 +1407,7 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
     raw_material_template_path: str | Path,
     progress_callback: Callable[..., None] | None = None,
     ccl_map: Dict[str, Dict[str, Any]] | None = None,
+    reuse_source_factors: bool = False,
 ) -> Dict[str, Any]:
     """Apply CCL factors and split final upload workbooks into <=50,000 total rows.
 
@@ -1332,8 +1417,9 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
     containing one or more template-applied XLSX files.
     """
     perf_start = time.perf_counter()
-    if ccl_map is None:
+    if ccl_map is None and not reuse_source_factors:
         ccl_map = _read_ccl_mapping(ccl_mapping_path, progress_callback=progress_callback)
+    ccl_map = ccl_map or {}
 
     raw_material_bulk_path = Path(raw_material_bulk_path)
     raw_material_template_path = Path(raw_material_template_path)
@@ -1395,6 +1481,12 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         )
         source_activity_cols = _build_source_col_map(source_activity_headers, _ACTIVITY_SOURCE_ALIASES, _ACTIVITY_SOURCE_DEFAULT_COLS)
         source_raw_cols = _build_source_col_map(source_raw_headers, _RAW_SOURCE_ALIASES, _RAW_SOURCE_DEFAULT_COLS)
+        source_factor_cols = {
+            key: _find_col_in_header_values(source_activity_headers, aliases, required=False)
+            for key, aliases, _preferred in _ACTIVITY_FINAL_FACTOR_COLUMNS
+        }
+        if reuse_source_factors and not (source_factor_cols.get("factor_name") or source_factor_cols.get("emission_factor")):
+            raise ValueError("M3A 來源檔缺少已完成的 Factor Name／Emission Factor 欄位，請先重新執行 M3。")
         source_exact = _build_exact_source_lookup(source_activity_headers)
         raw_exact = _build_exact_source_lookup(source_raw_headers)
         activity_copy_plan = _build_copy_plan(target_activity_headers, source_exact)
@@ -1439,6 +1531,9 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
 
         t0 = time.perf_counter()
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        template_context = _prepare_template_write_context(
+            raw_material_template_path, activity_width, raw_width
+        )
         base_name = output_path.stem
         if base_name.lower().endswith(".xlsx"):
             base_name = Path(base_name).stem
@@ -1470,12 +1565,16 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 iter(raw_chunk),
                 activity_width,
                 raw_width,
+                template_context=template_context,
             )
             return {
                 "part_index": int(part_idx),
                 "activity_rows": int(written_summary.get("activity_rows", len(activity_chunk))),
                 "raw_material_rows": int(written_summary.get("raw_material_rows", len(raw_chunk))),
                 "total_excel_rows": int(written_summary.get("activity_rows", len(activity_chunk))) + (DATA_START_ROW - 1),
+                "xlsx_compression_level": int(written_summary.get("xlsx_compression_level", M3A_XLSX_COMPRESSION_LEVEL)),
+                "template_context_cached": bool(written_summary.get("template_context_cached", True)),
+                "empty_styled_cells_omitted": bool(written_summary.get("empty_styled_cells_omitted", True)),
             }
 
         with tempfile.TemporaryDirectory(prefix="cmp_m3_split_upload_") as tmp:
@@ -1514,30 +1613,52 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 transport_calc_col = target_activity_cols.get("calculate_transportation_emissions")
                 if transport_calc_col:
                     out[int(transport_calc_col) - 1] = transport_calculation_yes_value
-                # Preserve the official English-template date display by writing
-                # real Excel date values into the Doc. Start/End Date columns.
-                for date_key in ("doc_start", "doc_end"):
-                    date_col = target_activity_cols.get(date_key)
-                    if date_col:
-                        out[int(date_col) - 1] = _coerce_excel_date(out[int(date_col) - 1])
-                # Country/Area is populated only when the CCL factor is matched.
-                # Clear any upstream/source value first so unmatched rows remain blank.
+                # M3A receives an already factor-filled M3 workbook. Reuse the
+                # factor cells from the current source row instead of reading the
+                # entire workbook once to build a material map and then reading it
+                # again for template output. This removes one full openpyxl pass.
                 out[factor_cols["country_area"] - 1] = None
-                item = ccl_map.get(normalized_material)
-                if item:
-                    out[factor_cols["country_area"] - 1] = dropdown_cache.display(
-                        "country_area", "TBD", "TBD"
-                    )
-                    out[factor_cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
-                    out[factor_cols["emission_factor"] - 1] = item.get("emission_factor")
-                    out[factor_cols["factor_source"] - 1] = "Ecoinvent"
-                    out[factor_cols["factor_comment"] - 1] = "CCLibrary"
-                    start_date = _row_value(values, source_activity_cols.get("doc_start"))
-                    out[factor_cols["enabled_date"] - 1] = start_date or out[target_activity_cols["doc_start"] - 1] if target_activity_cols.get("doc_start") else start_date
-                    out[factor_cols["data_quality"] - 1] = "SECONDARY"
-                    matched += 1
+                if reuse_source_factors:
+                    source_factor_name = _row_value(values, source_factor_cols.get("factor_name"))
+                    source_factor_value = _row_value(values, source_factor_cols.get("emission_factor"))
+                    has_factor = _text(source_factor_name) != "" or source_factor_value not in (None, "")
+                    if has_factor:
+                        for factor_key, target_col in factor_cols.items():
+                            source_col = source_factor_cols.get(factor_key)
+                            if source_col:
+                                out[int(target_col) - 1] = _row_value(values, source_col)
+                        source_country = _row_value(values, source_factor_cols.get("country_area")) or "TBD"
+                        out[factor_cols["country_area"] - 1] = dropdown_cache.display(
+                            "country_area", source_country, "TBD"
+                        )
+                        if out[factor_cols["factor_source"] - 1] in (None, ""):
+                            out[factor_cols["factor_source"] - 1] = "Ecoinvent"
+                        if out[factor_cols["factor_comment"] - 1] in (None, ""):
+                            out[factor_cols["factor_comment"] - 1] = "CCLibrary"
+                        if out[factor_cols["enabled_date"] - 1] in (None, ""):
+                            start_date = _row_value(values, source_activity_cols.get("doc_start"))
+                            out[factor_cols["enabled_date"] - 1] = start_date
+                        if out[factor_cols["data_quality"] - 1] in (None, ""):
+                            out[factor_cols["data_quality"] - 1] = "SECONDARY"
+                        matched += 1
+                    else:
+                        unmatched += 1
                 else:
-                    unmatched += 1
+                    item = ccl_map.get(normalized_material)
+                    if item:
+                        out[factor_cols["country_area"] - 1] = dropdown_cache.display(
+                            "country_area", "TBD", "TBD"
+                        )
+                        out[factor_cols["factor_name"] - 1] = item.get("factor_name") or item.get("ccl_item") or ""
+                        out[factor_cols["emission_factor"] - 1] = item.get("emission_factor")
+                        out[factor_cols["factor_source"] - 1] = "Ecoinvent"
+                        out[factor_cols["factor_comment"] - 1] = "CCLibrary"
+                        start_date = _row_value(values, source_activity_cols.get("doc_start"))
+                        out[factor_cols["enabled_date"] - 1] = start_date or out[target_activity_cols["doc_start"] - 1] if target_activity_cols.get("doc_start") else start_date
+                        out[factor_cols["data_quality"] - 1] = "SECONDARY"
+                        matched += 1
+                    else:
+                        unmatched += 1
 
                 _apply_preserved_formula_cache_cells(
                     out,
@@ -1582,13 +1703,18 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
                 with zipfile.ZipFile(actual_output_path, "w", compression=zipfile.ZIP_STORED) as zout:
                     for idx, part_path in enumerate(generated_paths, start=1):
                         arcname = make_part_name(idx, total_parts)
+                        try:
+                            part_size = part_path.stat().st_size
+                        except OSError:
+                            part_size = None
                         zout.write(part_path, arcname=arcname)
                         part_summaries[idx - 1]["output_filename"] = arcname
-                        try:
-                            part_summaries[idx - 1]["file_size_bytes"] = part_path.stat().st_size
-                            part_summaries[idx - 1]["file_size_mb"] = round(part_path.stat().st_size / 1024 / 1024, 2)
-                        except OSError:
-                            pass
+                        if part_size is not None:
+                            part_summaries[idx - 1]["file_size_bytes"] = int(part_size)
+                            part_summaries[idx - 1]["file_size_mb"] = round(part_size / 1024 / 1024, 2)
+                        # Release each split workbook immediately after it has been
+                        # stored in the nested package to lower peak temporary disk use.
+                        part_path.unlink(missing_ok=True)
             else:
                 actual_output_path = output_path
                 shutil.copyfile(generated_paths[0], actual_output_path)
@@ -1630,8 +1756,9 @@ def _apply_ccl_factors_to_raw_material_bulk_final_template(
         "template_strategy": "M3 final output split into third-party-uploadable workbooks; each part preserves original Raw Material Bulk Template headers/sheets",
         "compact_template_write": True,
         "template_number_formats_preserved": True,
-        "doc_start_end_date_formats_preserved": True,
-        "empty_non_general_styles_preserved": True,
+        "empty_styled_cells_omitted": True,
+        "xlsx_compression_level": int(M3A_XLSX_COMPRESSION_LEVEL),
+        "template_context_cached": True,
         "activity_helper_formula_cache": activity_helper_cache_stats,
         "activity_helper_formula_cache_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],
         "calculate_transportation_emissions_column": target_activity_cols.get("calculate_transportation_emissions"),
@@ -2076,17 +2203,19 @@ def apply_final_template_to_factor_filled_bulk(
 ) -> Dict[str, Any]:
     """Apply an official third-party template to one M3 factor-filled workbook."""
     factor_filled_bulk_path = Path(factor_filled_bulk_path)
-    ccl_map = _read_factor_map_from_filled_bulk(factor_filled_bulk_path, progress_callback=progress_callback)
+    _emit_progress(progress_callback, 8, "驗證 M3 係數對應完成檔並直接套版", 30, 0, None)
     summary = _apply_ccl_factors_to_raw_material_bulk_final_template(
         raw_material_bulk_path=factor_filled_bulk_path,
-        ccl_mapping_path=factor_filled_bulk_path,  # unused because ccl_map is supplied
+        ccl_mapping_path=factor_filled_bulk_path,  # not reread in M3A direct-factor mode
         output_path=output_path,
         raw_material_template_path=raw_material_template_path,
         progress_callback=progress_callback,
-        ccl_map=ccl_map,
+        ccl_map={},
+        reuse_source_factors=True,
     )
     summary["m3a_source_filename"] = factor_filled_bulk_path.name
     summary["m3a_reused_completed_factor_mapping"] = True
+    summary["m3a_direct_source_factor_rows"] = True
     return summary
 
 
@@ -2096,12 +2225,8 @@ def apply_final_template_to_factor_filled_package(
     output_path: str | Path,
     progress_callback: Callable[..., None] | None = None,
 ) -> Dict[str, Any]:
-    """Apply the user-uploaded official template to the latest M3 output package.
-
-    This is the M3A stage. It preserves the official template's dropdown values,
-    validations, formulas and hidden sheets, while reusing M3's completed factor
-    mapping instead of asking the user to upload the CCL file again.
-    """
+    """Apply the official template to an M3 package with low temporary-disk use."""
+    package_start = time.perf_counter()
     factor_filled_bulk_path = Path(factor_filled_bulk_path)
     raw_material_template_path = Path(raw_material_template_path)
     output_path = Path(output_path)
@@ -2118,88 +2243,156 @@ def apply_final_template_to_factor_filled_package(
         )
 
     _emit_progress(progress_callback, 2, "讀取 M3 係數對應完成 ZIP", 60, 0, None)
-    with zipfile.ZipFile(factor_filled_bulk_path, "r") as zin:
-        all_excel_members = [
-            info for info in zin.infolist()
-            if not info.is_dir()
-            and not Path(info.filename).name.startswith("~$")
-            and Path(info.filename).suffix.lower() in {".xlsx", ".xlsm", ".xls"}
-        ]
-        excel_members = [info for info in all_excel_members if _is_raw_material_bulk_zip_member(info.filename)]
-        skipped_excel_members = [Path(info.filename).name for info in all_excel_members if info not in excel_members]
-        if not excel_members:
-            raise ValueError("M3 ZIP 內找不到已填入係數的原物料 Bulk Excel 檔案。")
+    partial_output = output_path.with_name(output_path.name + ".partial")
+    partial_output.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(factor_filled_bulk_path, "r") as zin:
+            all_excel_members = [
+                info for info in zin.infolist()
+                if not info.is_dir()
+                and not Path(info.filename).name.startswith("~$")
+                and Path(info.filename).suffix.lower() in {".xlsx", ".xlsm", ".xls"}
+            ]
+            excel_members = [info for info in all_excel_members if _is_raw_material_bulk_zip_member(info.filename)]
+            skipped_excel_members = [Path(info.filename).name for info in all_excel_members if info not in excel_members]
+            if not excel_members:
+                raise ValueError("M3 ZIP 內找不到已填入係數的原物料 Bulk Excel 檔案。")
 
-        totals = {
-            "matched_rows": 0,
-            "unmatched_rows": 0,
-            "written_rows": 0,
-            "total_rows": 0,
-            "activity_rows": 0,
-            "raw_material_rows": 0,
-        }
-        processed_files: list[dict[str, Any]] = []
-        with tempfile.TemporaryDirectory(prefix="cmp_module3a_template_") as tmpdir:
-            tmpdir_path = Path(tmpdir)
-            total_files = len(excel_members)
-            with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_STORED) as zout:
-                for file_idx, info in enumerate(excel_members, start=1):
-                    original_name = Path(info.filename).name
-                    input_file = tmpdir_path / f"input_{file_idx}_{original_name}"
-                    concise_base_name = _short_m3_bulk_output_base_name(original_name)
-                    filled_file = tmpdir_path / f"{concise_base_name}.zip"
-                    with zin.open(info, "r") as src, input_file.open("wb") as dst:
-                        shutil.copyfileobj(src, dst, length=1024 * 1024)
+            totals = {
+                "matched_rows": 0,
+                "unmatched_rows": 0,
+                "written_rows": 0,
+                "total_rows": 0,
+                "activity_rows": 0,
+                "raw_material_rows": 0,
+            }
+            processed_files: list[dict[str, Any]] = []
+            used_arcnames: set[str] = set()
+            with tempfile.TemporaryDirectory(prefix="cmp_module3a_template_") as tmpdir:
+                tmpdir_path = Path(tmpdir)
+                total_files = len(excel_members)
+                with zipfile.ZipFile(partial_output, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as zout:
+                    for file_idx, info in enumerate(excel_members, start=1):
+                        original_name = Path(info.filename).name
+                        input_file = tmpdir_path / f"input_{file_idx}_{original_name}"
+                        concise_base_name = _short_m3_bulk_output_base_name(original_name)
+                        filled_file = tmpdir_path / f"{concise_base_name}.zip"
+                        with zin.open(info, "r") as src, input_file.open("wb") as dst:
+                            shutil.copyfileobj(src, dst, length=M3A_COPY_BUFFER_BYTES)
 
-                    base_pct = 5 + int((file_idx - 1) / max(1, total_files) * 88)
-                    _emit_progress(progress_callback, base_pct, f"M3A 套用第 {file_idx}/{total_files} 個正式 Template：{original_name}", 60, 0, None)
+                        base_pct = 5 + int((file_idx - 1) / max(1, total_files) * 88)
+                        _emit_progress(
+                            progress_callback,
+                            base_pct,
+                            f"M3A 套用第 {file_idx}/{total_files} 個正式 Template：{original_name}",
+                            60,
+                            0,
+                            None,
+                        )
 
-                    def nested_progress(p: int, step: str, remaining_seconds: int | None = None, *, processed_rows: int | None = None, total_rows: int | None = None) -> None:
-                        file_span = 88 / max(1, total_files)
-                        normalized = max(0, min(1, int(p) / 100))
-                        package_progress = int(5 + ((file_idx - 1) + normalized) * file_span)
-                        _emit_progress(progress_callback, package_progress, f"{step}: {original_name}", remaining_seconds, processed_rows, total_rows)
+                        def nested_progress(
+                            p: int,
+                            step: str,
+                            remaining_seconds: int | None = None,
+                            *,
+                            processed_rows: int | None = None,
+                            total_rows: int | None = None,
+                        ) -> None:
+                            file_span = 88 / max(1, total_files)
+                            normalized = max(0, min(1, int(p) / 100))
+                            package_progress = int(5 + ((file_idx - 1) + normalized) * file_span)
+                            _emit_progress(
+                                progress_callback,
+                                package_progress,
+                                f"{step}: {original_name}",
+                                remaining_seconds,
+                                processed_rows,
+                                total_rows,
+                            )
 
-                    summary = apply_final_template_to_factor_filled_bulk(
-                        input_file,
-                        raw_material_template_path,
-                        filled_file,
-                        progress_callback=nested_progress,
-                    )
-                    flattened_outputs: list[str] = []
-                    if filled_file.exists() and zipfile.is_zipfile(filled_file):
-                        with zipfile.ZipFile(filled_file, "r") as nested_zip:
-                            for nested_info in nested_zip.infolist():
-                                if nested_info.is_dir():
-                                    continue
-                                arcname = Path(nested_info.filename).name
-                                staged_part = tmpdir_path / f"staged_{file_idx}_{arcname}"
-                                with nested_zip.open(nested_info, "r") as src, staged_part.open("wb") as dst:
-                                    shutil.copyfileobj(src, dst, length=1024 * 1024)
-                                zout.write(staged_part, arcname=arcname)
-                                flattened_outputs.append(arcname)
-                    elif filled_file.exists():
-                        arcname = f"{concise_base_name}.xlsx"
-                        zout.write(filled_file, arcname=arcname)
-                        flattened_outputs.append(arcname)
+                        summary = apply_final_template_to_factor_filled_bulk(
+                            input_file,
+                            raw_material_template_path,
+                            filled_file,
+                            progress_callback=nested_progress,
+                        )
+                        flattened_outputs: list[str] = []
+                        if filled_file.exists() and zipfile.is_zipfile(filled_file):
+                            _emit_progress(
+                                progress_callback,
+                                min(98, int(5 + file_idx * 88 / max(1, total_files))),
+                                f"封裝第 {file_idx}/{total_files} 組 M3A 切檔",
+                                20,
+                                int(summary.get("activity_rows", 0) or 0),
+                                int(summary.get("activity_rows", 0) or 0),
+                            )
+                            with zipfile.ZipFile(filled_file, "r") as nested_zip:
+                                for nested_info in nested_zip.infolist():
+                                    if nested_info.is_dir():
+                                        continue
+                                    base_arcname = Path(nested_info.filename).name
+                                    arcname = base_arcname
+                                    if arcname in used_arcnames:
+                                        arcname = f"{concise_base_name}_{base_arcname}"
+                                    suffix_idx = 2
+                                    while arcname in used_arcnames:
+                                        arcname = f"{concise_base_name}_{suffix_idx}_{base_arcname}"
+                                        suffix_idx += 1
+                                    used_arcnames.add(arcname)
+                                    # Stream the already-compressed XLSX directly into the
+                                    # outer ZIP entry. The previous implementation staged a
+                                    # second full copy on disk before writing it again.
+                                    with nested_zip.open(nested_info, "r") as src, zout.open(
+                                        arcname, "w", force_zip64=True
+                                    ) as dst:
+                                        shutil.copyfileobj(src, dst, length=M3A_COPY_BUFFER_BYTES)
+                                    flattened_outputs.append(arcname)
+                        elif filled_file.exists():
+                            arcname = f"{concise_base_name}.xlsx"
+                            if arcname in used_arcnames:
+                                arcname = f"{file_idx}_{arcname}"
+                            used_arcnames.add(arcname)
+                            with filled_file.open("rb") as src, zout.open(arcname, "w", force_zip64=True) as dst:
+                                shutil.copyfileobj(src, dst, length=M3A_COPY_BUFFER_BYTES)
+                            flattened_outputs.append(arcname)
+                        else:
+                            raise RuntimeError(f"M3A 未產生輸出檔：{original_name}")
 
-                    processed_files.append({
-                        "filename": original_name,
-                        "output_filename": flattened_outputs[0] if len(flattened_outputs) == 1 else "",
-                        "output_files": flattened_outputs,
-                        "split_file_count": summary.get("split_file_count", len(flattened_outputs) or 1),
-                        "split_files": summary.get("split_files", []),
-                        "matched_rows": summary.get("matched_rows", 0),
-                        "unmatched_rows": summary.get("unmatched_rows", 0),
-                        "written_rows": summary.get("written_rows", 0),
-                        "total_rows": summary.get("total_rows", 0),
-                        "activity_rows": summary.get("activity_rows", 0),
-                        "raw_material_rows": summary.get("raw_material_rows", 0),
-                    })
-                    for key in totals:
-                        totals[key] += int(summary.get(key, 0) or 0)
+                        input_file.unlink(missing_ok=True)
+                        filled_file.unlink(missing_ok=True)
+                        processed_files.append({
+                            "filename": original_name,
+                            "output_filename": flattened_outputs[0] if len(flattened_outputs) == 1 else "",
+                            "output_files": flattened_outputs,
+                            "split_file_count": summary.get("split_file_count", len(flattened_outputs) or 1),
+                            "split_files": summary.get("split_files", []),
+                            "matched_rows": summary.get("matched_rows", 0),
+                            "unmatched_rows": summary.get("unmatched_rows", 0),
+                            "written_rows": summary.get("written_rows", 0),
+                            "total_rows": summary.get("total_rows", 0),
+                            "activity_rows": summary.get("activity_rows", 0),
+                            "raw_material_rows": summary.get("raw_material_rows", 0),
+                            "performance_seconds": summary.get("performance_seconds", {}),
+                        })
+                        for key in totals:
+                            totals[key] += int(summary.get(key, 0) or 0)
+        partial_output.replace(output_path)
+    except OSError as exc:
+        partial_output.unlink(missing_ok=True)
+        _raise_m3a_io_error(exc, "最終 ZIP 封裝")
+    except Exception:
+        partial_output.unlink(missing_ok=True)
+        raise
 
-    _emit_progress(progress_callback, 100, "M3A 正式原物料批次檔套版完成", 0, totals.get("activity_rows", 0), totals.get("activity_rows", 0))
+    package_seconds = time.perf_counter() - package_start
+    _emit_progress(
+        progress_callback,
+        100,
+        "M3A 正式原物料批次檔套版完成",
+        0,
+        totals.get("activity_rows", 0),
+        totals.get("activity_rows", 0),
+    )
     return {
         "output_filename": output_path.name,
         "download_url": f"/download/{output_path.name}",
@@ -2215,11 +2408,14 @@ def apply_final_template_to_factor_filled_package(
         "skipped_non_raw_material_bulk_files": skipped_excel_members,
         "factor_selector_version": FACTOR_SELECTOR_VERSION,
         "large_dataset_mode": True,
-        "template_strategy": "M3A applies user-uploaded official template to completed M3 factor-filled intermediates",
+        "template_strategy": "M3A cached-template OpenXML writer with direct low-disk outer-package streaming",
         "compact_template_write": True,
         "precomputed_copy_plan": True,
-        "outer_zip_strategy": "ZIP_STORED because XLSX parts are already compressed",
+        "outer_zip_strategy": "ZIP_STORED direct stream; no staged duplicate XLSX files",
         "m3a_reused_completed_factor_mapping": True,
+        "xlsx_compression_level": int(M3A_XLSX_COMPRESSION_LEVEL),
+        "template_context_cache": _prepare_template_write_context_cached.cache_info()._asdict(),
+        "performance_seconds": {"package_total": round(package_seconds, 3)},
         **totals,
     }
 
@@ -2545,7 +2741,7 @@ def search_factor_library(
 import sqlite3
 from contextlib import closing
 
-FACTOR_SELECTOR_VERSION = "DIP_M3_LIGHTWEIGHT_M3A_FINAL_TEMPLATE_PERF_V5_20260723"
+FACTOR_SELECTOR_VERSION = "DIP_M3A_STREAM_PACKAGE_PERF_V6_20260724"
 FACTOR_DB_FILENAME = "factors.db"
 FACTOR_DB_SCHEMA_VERSION = "20260704_v1"
 

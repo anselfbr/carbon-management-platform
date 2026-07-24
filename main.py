@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import shutil
 import time
 import traceback
@@ -717,6 +718,26 @@ def _run_module3_ccl_job(job_id: str, raw_path: Path, ccl_path: Path, output_pat
         )
 
 
+def _refresh_latest_output_alias(source_path: Path, alias_path: Path) -> str:
+    """Refresh a latest-file alias without duplicating a large ZIP on disk."""
+    source_path = Path(source_path)
+    alias_path = Path(alias_path)
+    alias_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        alias_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        os.link(source_path, alias_path)
+        return "hardlink"
+    except OSError:
+        try:
+            alias_path.symlink_to(source_path.name)
+            return "symlink"
+        except OSError:
+            return "direct-output-only"
+
+
 def _run_module3a_template_job(
     job_id: str,
     m3_output_path: Path,
@@ -753,11 +774,13 @@ def _run_module3a_template_job(
             output_path=output_path,
             progress_callback=report,
         )
-        summary["app_version"] = "DIP_MODULE3A_FINAL_TEMPLATE_PERF_V2"
+        summary["app_version"] = "DIP_MODULE3A_STREAM_PACKAGE_PERF_V3"
         if output_path.exists():
             _register_workspace_output(output_path, workspace_id)
-            shutil.copy2(output_path, MODULE3A_FINAL_BULK_LATEST_PATH)
-            _register_workspace_output(MODULE3A_FINAL_BULK_LATEST_PATH, workspace_id)
+            alias_mode = _refresh_latest_output_alias(output_path, MODULE3A_FINAL_BULK_LATEST_PATH)
+            summary["latest_output_alias_mode"] = alias_mode
+            if alias_mode != "direct-output-only":
+                _register_workspace_output(MODULE3A_FINAL_BULK_LATEST_PATH, workspace_id)
             try:
                 summary["output_file_size_bytes"] = output_path.stat().st_size
                 summary["output_file_size_mb"] = round(output_path.stat().st_size / 1024 / 1024, 2)
