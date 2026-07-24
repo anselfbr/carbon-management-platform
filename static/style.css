@@ -4057,3 +4057,22 @@ body.m5-active .content{background:#061a2a}
 .m5-footnote{color:#6f91a2;font-size:10px;margin:10px 6px 0}.m5-modal{background:rgba(1,10,18,.76)}.m5-modal-card{background:#09263a;color:#dcecf5;border:1px solid rgba(42,184,214,.38)}.m5-modal h2,.m5-modal h3,.m5-detail-kpis b{color:#edf9ff}.m5-modal p,.m5-detail-kpis span,.m5-detail-kpis small{color:#87a9b9}.m5-detail-kpis article{background:#0c3048;border-color:rgba(52,164,193,.25)}.m5-modal-close{background:#13394f;color:#d8f4fa}
 @media(max-width:1200px){.m5-dashboard-head{grid-template-columns:1fr}.m5-grid-top{grid-template-columns:1fr 1fr}.m5-grid-lower{grid-template-columns:1fr 1fr}.m5-hotspot-panel{grid-column:1/-1}.m5-kpis{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:760px){.m5-head-upload{grid-template-columns:1fr}.m5-file-drop,.m5-head-submit,.m5-upload-note{grid-column:1;grid-row:auto}.m5-grid-top,.m5-grid-lower{grid-template-columns:1fr}.m5-hotspot-panel{grid-column:auto}.m5-kpis{grid-template-columns:1fr 1fr}.m5-toolbar{align-items:flex-start;flex-direction:column}.m5-data-meta{flex-direction:column;gap:4px}.m5-dashboard-head{padding:24px 20px}.m5-dashboard-head h2{font-size:34px}}
+
+/* Module 5 Carbon Intelligence — compact header title (2026-07-24) */
+.m5-dashboard-head h2 {
+  font-size: 34px;
+  line-height: 1.12;
+  margin: 8px 0 10px;
+  letter-spacing: -0.035em;
+}
+.m5-dashboard-head p {
+  font-size: 15px;
+  line-height: 1.45;
+}
+@media (max-width: 1000px) {
+  .m5-dashboard-head h2 { font-size: 30px; }
+}
+@media (max-width: 760px) {
+  .m5-dashboard-head h2 { font-size: 27px; }
+  .m5-dashboard-head p { font-size: 14px; }
+}
