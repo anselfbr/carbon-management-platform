@@ -102,9 +102,29 @@ def analyze_bulk(path: Path) -> dict[str,Any]:
     products=agg("product"); materials=agg("material"); suppliers=agg("supplier"); plants=agg("plant")
     total=sum(r["emission"] for r in records)
     by_product={}
+    material_detail={}
+    product_material_detail={}
     for r in records:
         p=by_product.setdefault(r["product"],{"materials":{},"suppliers":{}})
         p["materials"][r["material"]]=p["materials"].get(r["material"],0)+r["emission"]
         p["suppliers"][r["supplier"]]=p["suppliers"].get(r["supplier"],0)+r["emission"]
-    drill={p:{"materials":[{"name":k,"emission":v} for k,v in sorted(vv["materials"].items(),key=lambda x:x[1],reverse=True)],"suppliers":[{"name":k,"emission":v} for k,v in sorted(vv["suppliers"].items(),key=lambda x:x[1],reverse=True)]} for p,vv in by_product.items()}
-    return {"ok":True,"summary":{"total_emission":total,"product_count":len(products),"material_count":len(materials),"supplier_count":len(suppliers),"plant_count":len(plants),"record_count":len(records),"file_count":files,"skipped_files":skipped},"products":products,"materials":materials,"suppliers":suppliers,"plants":plants,"drilldown":drill,"calculation_methods":sorted({r["method"] for r in records})}
+
+        md=material_detail.setdefault(r["material"],{"name":r["material_name"],"emission":0.0,"activity_kg":0.0,"suppliers":{},"products":{},"plants":{},"records":0})
+        md["emission"]+=r["emission"]; md["activity_kg"]+=r["activity_kg"]; md["records"]+=1
+        md["suppliers"][r["supplier"]]=md["suppliers"].get(r["supplier"],0)+r["emission"]
+        md["products"][r["product"]]=md["products"].get(r["product"],0)+r["emission"]
+        md["plants"][r["plant"]]=md["plants"].get(r["plant"],0)+r["emission"]
+
+        key=f'{r["product"]}|||{r["material"]}'
+        pmd=product_material_detail.setdefault(key,{"product":r["product"],"material":r["material"],"name":r["material_name"],"emission":0.0,"activity_kg":0.0,"suppliers":{},"plants":{},"records":0})
+        pmd["emission"]+=r["emission"]; pmd["activity_kg"]+=r["activity_kg"]; pmd["records"]+=1
+        pmd["suppliers"][r["supplier"]]=pmd["suppliers"].get(r["supplier"],0)+r["emission"]
+        pmd["plants"][r["plant"]]=pmd["plants"].get(r["plant"],0)+r["emission"]
+
+    def ranked(d):
+        return [{"name":k,"emission":v} for k,v in sorted(d.items(),key=lambda x:x[1],reverse=True)]
+
+    drill={p:{"materials":ranked(vv["materials"]),"suppliers":ranked(vv["suppliers"])} for p,vv in by_product.items()}
+    material_details={k:{**v,"suppliers":ranked(v["suppliers"]),"products":ranked(v["products"]),"plants":ranked(v["plants"])} for k,v in material_detail.items()}
+    product_material_details={k:{**v,"suppliers":ranked(v["suppliers"]),"plants":ranked(v["plants"])} for k,v in product_material_detail.items()}
+    return {"ok":True,"summary":{"total_emission":total,"product_count":len(products),"material_count":len(materials),"supplier_count":len(suppliers),"plant_count":len(plants),"record_count":len(records),"file_count":files,"skipped_files":skipped},"products":products,"materials":materials,"suppliers":suppliers,"plants":plants,"drilldown":drill,"material_details":material_details,"product_material_details":product_material_details,"calculation_methods":sorted({r["method"] for r in records})}
