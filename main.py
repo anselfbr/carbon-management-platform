@@ -4378,3 +4378,24 @@ async def process_bom_expansion(request: Request):
         "summary": summary,
         "download_url": summary.get("download_url", f"/download/{output_path.name}"),
     }
+
+# Module 5 · Carbon Analytics Center
+from module5_analytics import analyze_bulk
+
+@app.post("/module5/analyze")
+async def module5_analyze(file: UploadFile = File(...)):
+    suffix = Path(file.filename or "bulk.xlsx").suffix.lower()
+    if suffix not in {".zip", ".xlsx", ".xlsm"}:
+        return JSONResponse({"ok": False, "message": "僅支援 ZIP、XLSX、XLSM。"}, status_code=400)
+    saved = UPLOAD_DIR / f"module5_{uuid.uuid4().hex}{suffix}"
+    try:
+        with saved.open("wb") as out:
+            shutil.copyfileobj(file.file, out)
+        result = analyze_bulk(saved)
+        return JSONResponse(result)
+    except Exception as exc:
+        traceback.print_exc()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    finally:
+        try: saved.unlink(missing_ok=True)
+        except OSError: pass
