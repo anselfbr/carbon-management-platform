@@ -4380,22 +4380,29 @@ async def process_bom_expansion(request: Request):
     }
 
 # Module 5 · Carbon Analytics Center
-from module5_analytics import analyze_bulk
+from module5_analytics import analyze_bulk_many
 
 @app.post("/module5/analyze")
-async def module5_analyze(file: UploadFile = File(...)):
-    suffix = Path(file.filename or "bulk.xlsx").suffix.lower()
-    if suffix not in {".zip", ".xlsx", ".xlsm"}:
-        return JSONResponse({"ok": False, "message": "僅支援 ZIP、XLSX、XLSM。"}, status_code=400)
-    saved = UPLOAD_DIR / f"module5_{uuid.uuid4().hex}{suffix}"
+async def module5_analyze(files: list[UploadFile] = File(...)):
+    if not files:
+        return JSONResponse({"ok": False, "message": "請至少上傳一個分析檔案。"}, status_code=400)
+    saved_paths = []
     try:
-        with saved.open("wb") as out:
-            shutil.copyfileobj(file.file, out)
-        result = analyze_bulk(saved)
+        for upload in files:
+            suffix = Path(upload.filename or "bulk.xlsx").suffix.lower()
+            if suffix not in {".zip", ".xlsx", ".xlsm"}:
+                return JSONResponse({"ok": False, "message": f"{upload.filename}：僅支援 ZIP、XLSX、XLSM。"}, status_code=400)
+            saved = UPLOAD_DIR / f"module5_{uuid.uuid4().hex}{suffix}"
+            with saved.open("wb") as out:
+                shutil.copyfileobj(upload.file, out)
+            saved_paths.append(saved)
+        result = analyze_bulk_many(saved_paths)
+        result["summary"]["upload_count"] = len(files)
         return JSONResponse(result)
     except Exception as exc:
         traceback.print_exc()
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
     finally:
-        try: saved.unlink(missing_ok=True)
-        except OSError: pass
+        for saved in saved_paths:
+            try: saved.unlink(missing_ok=True)
+            except OSError: pass
