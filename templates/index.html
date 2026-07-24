@@ -407,6 +407,7 @@
                     <label><span data-i18n="automationProductTemplate">Product Activity Bulk Template</span><input id="autoProductTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
                     <label><span data-i18n="automationRawTemplate">Raw Material Bulk Template</span><input id="autoRawTemplate" type="file" accept=".xlsx,.xls,.xlsm" required></label>
                     <label><span data-i18n="automationSupplierFiles">供應商資料</span><input id="autoSupplierFiles" type="file" accept=".xlsx,.xls,.xlsm" multiple required></label>
+                    <label><span>Supplier Bulk Template</span><input id="autoSupplierBulkTemplate" type="file" accept=".xlsx,.xlsm" required></label>
                     <label><span data-i18n="automationCclFile">CCL 係數組配表</span><input id="autoCclFile" type="file" accept=".xlsx,.xls,.xlsm" required></label>
                     <label><span data-i18n="businessUnitRuleSet">Business Unit Rule Set</span><select id="autoRuleSet"><option value="IPS" selected>IPS</option><option value="AE">AE</option><option value="PC_CE">PC&amp;CE</option></select></label>
                     <label><span data-i18n="laborAllocationSource">Labor Allocation Source</span><select id="autoLaborMode"><option value="both" data-i18n="automationLaborBoth" selected>Labor HR.Act + FOH-Others.Act</option><option value="labor_hr" data-i18n="automationLaborHrOnly">Labor HR.Act Only</option><option value="foh" data-i18n="automationFohOnly">FOH-Others.Act Only</option></select></label>
@@ -1102,6 +1103,10 @@
                 <label for="module2cSupplierFiles">上傳供應商資料</label>
                 <input id="module2cSupplierFiles" name="module2c_supplier_files" type="file" accept=".xlsx,.xls,.xlsm" multiple required />
                 <p class="form-hint">支援多個供應商 Excel；依目前供應商規則以 Raw Material Code + Vendor/Vendor Name 對應，一料多供應商會展開為多筆。</p>
+
+                <label for="module2cSupplierBulkTemplate">上傳正式 Supplier Bulk Template</label>
+                <input id="module2cSupplierBulkTemplate" name="module2c_supplier_bulk_template" type="file" accept=".xlsx,.xlsm" required />
+                <p class="form-hint">請上傳第三方資料中心目前使用的正式供應商 Bulk Template。系統將保留其表頭、Dropdown Values、公式、格式與資料驗證，並以 Template 允許的 Unit Name 寫入。</p>
 
                 <button type="submit" class="btn-primary">
                   <span class="btn-icon">⌘</span>
@@ -3758,7 +3763,7 @@ ruleForm.onsubmit = async (e) => {
       download.href = '#';
       download.classList.add('disabled');
     }
-    setState('running', 'MODULE 2C queued', 'Uploading Supplier files...', cmpRemainingText(90), 3);
+    setState('running', 'MODULE 2C queued', 'Uploading Supplier files and Supplier Bulk Template...', cmpRemainingText(90), 3);
     if (log) log.textContent = `Uploading and creating MODULE 2C job...\n${module2cStep1SourceText ? module2cStep1SourceText.textContent : ''}\n${module2cRawBulkSourceText ? module2cRawBulkSourceText.textContent : ''}`;
 
     try {
@@ -4153,6 +4158,9 @@ ruleForm.onsubmit = async (e) => {
       await runJob(3, steps[3], '/module2b/raw-material-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
 
       current=4; fd=new FormData(); appendFiles(fd,'module2c_supplier_files','autoSupplierFiles');
+      const supplierBulkTemplate = oneFile('autoSupplierBulkTemplate');
+      if (!supplierBulkTemplate) throw new Error('請上傳 Supplier Bulk Template。');
+      fd.append('module2c_supplier_bulk_template', supplierBulkTemplate);
       const m2c=await runJob(4, steps[4], '/module2c/supplier-mapping-bulk-job', fd, id => `/module2/bom-job/${encodeURIComponent(id)}`);
       const supplierBulkUrl=m2c.summary?.supplier_bulk_download_url||m2c.supplier_bulk_download_url||'#';
       if (!supplierBulkUrl || supplierBulkUrl.endsWith('#')) {

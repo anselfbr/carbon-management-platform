@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import csv
+import math
+import os
 import re
 import shutil
 import tempfile
+import time
 import zipfile
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict
 
@@ -25,9 +28,11 @@ except Exception:  # pragma: no cover
 ACTIVITY_SHEET_NAME = "Input Sheet Activity Data"
 RAW_MATERIAL_SHEET_NAME = "Input Sheet Raw Material"
 DATA_START_ROW = 3
-BOM_FORMATTER_VERSION = "DIP_V28_5_DROPDOWN_CACHE_LOCALIZED_20260723"
+BOM_FORMATTER_VERSION = "DIP_V29_M2C_STREAMING_OPENXML_20260724"
 M2_MAX_ACTIVITY_DATA_ROWS = 50000
 M2_ACTIVITY_HELPER_FORMULA_COLS = tuple(range(28, 36))  # AB~AI
+M2C_XLSX_COMPRESSION_LEVEL = max(0, min(9, int(os.getenv("M2C_XLSX_COMPRESSION_LEVEL", "1") or 1)))
+M2C_COPY_BUFFER_BYTES = max(1024 * 1024, int(os.getenv("M2C_COPY_BUFFER_BYTES", str(4 * 1024 * 1024)) or (4 * 1024 * 1024)))
 
 
 DEFAULT_MAPPING = {
@@ -3290,6 +3295,67 @@ def _supplier_dropdown_country_maps(template_path: str | Path) -> tuple[dict[str
     return display_to_key, key_to_display
 
 
+def _supplier_unit_aliases(value: Any) -> list[str]:
+    """Build normalized aliases for a Supplier Template Unit Name."""
+    raw = _safe_text(value)
+    if not raw:
+        return []
+    candidates = [raw]
+    # Template values commonly append the business unit, e.g. 中國常州廠(A2)-IPS.
+    candidates.append(re.sub(r"\s*[-–—]\s*(?:IPS|AE|PC\s*&\s*CE|PC_CE)\s*$", "", raw, flags=re.I))
+    # Source values may contain only the plant code or may use older site wording.
+    code_match = re.search(r"\(([^)]+)\)", raw)
+    if code_match:
+        candidates.append(code_match.group(1))
+    aliases: list[str] = []
+    for candidate in candidates:
+        normalized = _normalize_template_header(candidate)
+        if normalized and normalized not in aliases:
+            aliases.append(normalized)
+    return aliases
+
+
+def _supplier_dropdown_unit_name_map(template_path: str | Path) -> dict[str, str]:
+    """Return normalized Unit Name aliases -> exact dropdown display value."""
+    alias_to_display: dict[str, str] = {}
+    wb = load_workbook(template_path, read_only=True, data_only=True)
+    try:
+        if "Dropdown Values" not in wb.sheetnames:
+            return alias_to_display
+        ws = wb["Dropdown Values"]
+        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+        unit_col = None
+        for idx, value in enumerate(header_row, start=1):
+            if _normalize_template_header(value) in {
+                _normalize_template_header("Unit Name"),
+                _normalize_template_header("單位名稱"),
+                _normalize_template_header("廠區"),
+            }:
+                unit_col = idx
+                break
+        if unit_col is None:
+            return alias_to_display
+        for row in ws.iter_rows(min_row=2, min_col=unit_col, max_col=unit_col, values_only=True):
+            display = _safe_text(row[0] if row else "")
+            if not display:
+                continue
+            for alias in _supplier_unit_aliases(display):
+                alias_to_display.setdefault(alias, display)
+    finally:
+        wb.close()
+    return alias_to_display
+
+
+def _supplier_localized_unit_name(unit_name: Any, alias_to_display: dict[str, str]) -> str:
+    """Resolve source site text to an exact Unit Name allowed by the uploaded template."""
+    raw = _safe_text(unit_name)
+    for alias in _supplier_unit_aliases(raw):
+        display = alias_to_display.get(alias)
+        if display:
+            return display
+    return ""
+
+
 def _supplier_localized_country(country_area: Any, unit_name: Any, display_to_key: dict[str, str], key_to_display: dict[str, str]) -> tuple[str, str]:
     """Resolve a country to the uploaded Supplier Template language and internal key."""
     original = _safe_text(country_area)
@@ -3328,6 +3394,17 @@ def _write_supplier_bulk_openxml(rows: list[tuple[str, str, str, str, str]], tem
     if not sheet_path:
         raise ValueError("Supplier Bulk Template 缺少 Input Sheet")
     country_display_to_key, country_key_to_display = _supplier_dropdown_country_maps(template_path)
+    unit_name_map = _supplier_dropdown_unit_name_map(template_path)
+    if not unit_name_map:
+        raise ValueError("Supplier Bulk Template 的 Dropdown Values 缺少 Unit Name 選項。")
+    missing_unit_names = sorted({
+        _safe_text(row[4]) for row in rows
+        if _safe_text(row[4]) and not _supplier_localized_unit_name(row[4], unit_name_map)
+    })
+    if missing_unit_names:
+        preview = "、".join(missing_unit_names[:10])
+        more = f"（另有 {len(missing_unit_names) - 10} 個）" if len(missing_unit_names) > 10 else ""
+        raise ValueError(f"Supplier Bulk Template 缺少以下 Unit Name 下拉選項：{preview}{more}")
     hidden_cols = {"country": cols.get("country_hidden", 15), "industry": cols.get("industry_hidden", 16), "tier": cols.get("tier_hidden", 17)}
     with zipfile.ZipFile(template_path, "r") as zin:
         template_xml = zin.read(sheet_path)
@@ -3347,10 +3424,11 @@ def _write_supplier_bulk_openxml(rows: list[tuple[str, str, str, str, str]], tem
             offset = row_idx - DATA_START_ROW
             if offset < len(rows):
                 supplier_name, supplier_code, country_area, supplier_address, unit_name = rows[offset]
+                resolved_unit_name = _supplier_localized_unit_name(unit_name, unit_name_map)
                 country_display, country_key = _supplier_localized_country(
-                    country_area, unit_name, country_display_to_key, country_key_to_display
+                    country_area, resolved_unit_name or unit_name, country_display_to_key, country_key_to_display
                 )
-                for key, value in (("supplier_name", supplier_name), ("supplier_code", supplier_code), ("country_area", country_display), ("supplier_address", supplier_address), ("unit_name", unit_name)):
+                for key, value in (("supplier_name", supplier_name), ("supplier_code", supplier_code), ("country_area", country_display), ("supplier_address", supplier_address), ("unit_name", resolved_unit_name)):
                     row_xml = _supplier_replace_cell_xml(row_xml, row_idx, int(cols[key]), value=value)
                 row_xml = _supplier_replace_cell_xml(row_xml, row_idx, int(hidden_cols["country"]), formula_cache=country_key)
                 row_xml = _supplier_replace_cell_xml(row_xml, row_idx, int(hidden_cols["industry"]), formula_cache="")
@@ -3383,7 +3461,7 @@ def _write_supplier_bulk_create_file(expanded_with_suppliers: pd.DataFrame, supp
     if expanded_with_suppliers is None or expanded_with_suppliers.empty:
         return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": ""}
     if not supplier_bulk_template_path.exists():
-        return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": "", "supplier_bulk_error": f"找不到內建供應商 Bulk Template：{supplier_bulk_template_path.name}"}
+        return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": "", "supplier_bulk_error": f"找不到 Supplier Bulk Template：{supplier_bulk_template_path.name}"}
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb_meta = load_workbook(supplier_bulk_template_path, read_only=True, data_only=False)
@@ -5518,6 +5596,479 @@ def _build_supplier_activity_row(row_data: dict[str, Any], activity_headers: lis
     return activity_row, raw_material
 
 
+
+_XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_XLSX_MAIN_TAG = "{" + _XLSX_MAIN_NS + "}"
+_XLSX_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_XLSX_PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+
+def _m2c_sheet_paths_from_zip(zf: zipfile.ZipFile) -> dict[str, str]:
+    workbook_root = ET.fromstring(zf.read("xl/workbook.xml"))
+    rel_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+    rels: dict[str, str] = {}
+    for rel in rel_root.findall(f"{{{_XLSX_PKG_REL_NS}}}Relationship"):
+        rid = rel.attrib.get("Id")
+        target = rel.attrib.get("Target", "")
+        if not rid:
+            continue
+        if target.startswith("/xl/"):
+            rels[rid] = target.lstrip("/")
+        elif target.startswith("xl/"):
+            rels[rid] = target
+        else:
+            rels[rid] = "xl/" + target.lstrip("/")
+    result: dict[str, str] = {}
+    sheets = workbook_root.find(f"{{{_XLSX_MAIN_NS}}}sheets")
+    if sheets is not None:
+        for sheet in sheets.findall(f"{{{_XLSX_MAIN_NS}}}sheet"):
+            name = sheet.attrib.get("name", "")
+            rid = sheet.attrib.get(f"{{{_XLSX_REL_NS}}}id")
+            if name and rid in rels:
+                result[name] = rels[rid]
+    return result
+
+
+def _m2c_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+    if "xl/sharedStrings.xml" not in zf.namelist():
+        return []
+    values: list[str] = []
+    for _event, si in ET.iterparse(zf.open("xl/sharedStrings.xml"), events=("end",)):
+        if si.tag == f"{_XLSX_MAIN_TAG}si":
+            values.append("".join(t.text or "" for t in si.iter(f"{_XLSX_MAIN_TAG}t")))
+            si.clear()
+    return values
+
+
+def _m2c_cell_value(cell: ET.Element, shared: list[str]) -> Any:
+    cell_type = cell.attrib.get("t", "")
+    if cell_type == "inlineStr":
+        return "".join(t.text or "" for t in cell.iter(f"{_XLSX_MAIN_TAG}t"))
+    value_el = cell.find(f"{_XLSX_MAIN_TAG}v")
+    if value_el is None or value_el.text is None:
+        return ""
+    raw = value_el.text
+    if cell_type == "s":
+        try:
+            return shared[int(raw)]
+        except Exception:
+            return raw
+    if cell_type == "b":
+        return raw == "1"
+    return raw
+
+
+def _m2c_row_cell_map(row_el: ET.Element, shared: list[str], needed_cols: set[int] | None = None) -> dict[int, Any]:
+    values: dict[int, Any] = {}
+    for cell in row_el.findall(f"{_XLSX_MAIN_TAG}c"):
+        col_idx = _xlsx_col_to_index(cell.attrib.get("r", "")) + 1
+        if needed_cols is not None and col_idx not in needed_cols:
+            continue
+        values[col_idx] = _m2c_cell_value(cell, shared)
+    return values
+
+
+def _m2c_clean_xml_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    # XML 1.0 disallows most ASCII control characters.  Supplier masters may
+    # contain them, so strip only invalid controls while preserving tabs/newlines.
+    return re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
+
+
+def _m2c_xml_escape(value: Any) -> bytes:
+    text = _m2c_clean_xml_text(value)
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .encode("utf-8")
+    )
+
+
+def _m2c_cell_xml(
+    row_idx: int,
+    col_idx: int,
+    value: Any,
+    style_id: str | int | None = None,
+    formula: str | None = None,
+) -> bytes:
+    ref = f"{_xlsx_index_to_col_letter(col_idx)}{int(row_idx)}".encode("ascii")
+    style_attr = b""
+    if style_id is not None and str(style_id).strip() not in {"", "0"}:
+        style_attr = f' s="{str(style_id).strip()}"'.encode("ascii")
+    if formula:
+        formula_text = formula[1:] if formula.startswith("=") else formula
+        return (
+            b'<c r="' + ref + b'"' + style_attr + b' t="str"><f>'
+            + _m2c_xml_escape(formula_text)
+            + b'</f><v></v></c>'
+        )
+    if value is None or value == "":
+        return b""
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        serial = (value - date(1899, 12, 30)).days
+        return b'<c r="' + ref + b'"' + style_attr + b'><v>' + str(serial).encode("ascii") + b'</v></c>'
+    if isinstance(value, bool):
+        return b'<c r="' + ref + b'"' + style_attr + f' t="b"><v>{1 if value else 0}</v></c>'.encode("ascii")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            number = float(value)
+            if math.isfinite(number):
+                raw = str(int(number)) if number.is_integer() else repr(number)
+                return b'<c r="' + ref + b'"' + style_attr + b'><v>' + raw.encode("ascii") + b'</v></c>'
+        except Exception:
+            pass
+    return (
+        b'<c r="' + ref + b'"' + style_attr
+        + b' t="inlineStr"><is><t xml:space="preserve">'
+        + _m2c_xml_escape(value)
+        + b'</t></is></c>'
+    )
+
+
+def _m2c_row_xml(
+    row_idx: int,
+    col_values: list[tuple[int, Any]],
+    style_by_col: dict[int, str] | None = None,
+    formula_by_col: dict[int, str] | None = None,
+    width: int = 1,
+) -> bytes:
+    cells: list[bytes] = []
+    styles = style_by_col or {}
+    formulas = formula_by_col or {}
+    for col_idx, value in col_values:
+        formula = formulas.get(int(col_idx))
+        cell = _m2c_cell_xml(row_idx, int(col_idx), value, styles.get(int(col_idx), "0"), formula=formula)
+        if cell:
+            cells.append(cell)
+    return (
+        f'<row r="{int(row_idx)}" spans="1:{max(1, int(width))}">'.encode("ascii")
+        + b"".join(cells)
+        + b"</row>"
+    )
+
+
+def _m2c_header_rows_and_styles(
+    row_maps: dict[int, dict[int, Any]],
+    row_styles: dict[int, dict[int, str]],
+    width: int,
+) -> tuple[list[list[Any]], dict[int, dict[int, str]]]:
+    rows = [
+        [row_maps.get(row_idx, {}).get(col_idx, "") for col_idx in range(1, width + 1)]
+        for row_idx in (1, 2)
+    ]
+    return rows, row_styles
+
+
+def _m2c_excel_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = _fast_text(value)
+    if not text:
+        return None
+    try:
+        serial = float(text)
+        if math.isfinite(serial) and 1 <= serial <= 2958465:
+            return (datetime(1899, 12, 30) + timedelta(days=serial)).date()
+    except Exception:
+        pass
+    if len(text) >= 4 and text[:4].isdigit():
+        try:
+            return date(int(text[:4]), 1, 1)
+        except Exception:
+            pass
+    return None
+
+
+def _m2c_year_bounds(value: Any) -> tuple[date, date]:
+    parsed = _m2c_excel_date(value)
+    year = parsed.year if parsed else datetime.now().year
+    return date(year, 1, 1), date(year, 12, 31)
+
+
+def _m2c_supplier_options_from_zip(
+    zf: zipfile.ZipFile,
+    sheet_paths: dict[str, str],
+    shared: list[str],
+) -> list[str]:
+    path = sheet_paths.get("Dropdown Values")
+    if not path:
+        return []
+    alias_keys = {
+        _normalize_template_header(x)
+        for x in ("Supplier Name (optional)", "Supplier Name(optional)", "Supplier Name", "supplier_name", "供應商名稱")
+    }
+    target_col: int | None = None
+    values: list[str] = []
+    seen: set[str] = set()
+    for _event, row_el in ET.iterparse(zf.open(path), events=("end",)):
+        if row_el.tag != f"{_XLSX_MAIN_TAG}row":
+            continue
+        row_idx = int(row_el.attrib.get("r", "0") or 0)
+        row_values = _m2c_row_cell_map(row_el, shared)
+        if row_idx == 1:
+            for col_idx, value in row_values.items():
+                if _normalize_template_header(value) in alias_keys:
+                    target_col = col_idx
+                    break
+        elif target_col:
+            value = _safe_text(row_values.get(target_col, ""))
+            if value and value not in seen:
+                seen.add(value)
+                values.append(value)
+        row_el.clear()
+    return values
+
+
+def _m2c_raw_context_and_descriptions(
+    zf: zipfile.ZipFile,
+    sheet_path: str,
+    shared: list[str],
+) -> tuple[list[list[Any]], dict[int, dict[int, str]], dict[int, str], dict[str, int], int, dict[str, str]]:
+    row_maps: dict[int, dict[int, Any]] = {1: {}, 2: {}}
+    row_styles: dict[int, dict[int, str]] = {1: {}, 2: {}}
+    row3_styles: dict[int, str] = {}
+    width = max(_RAW_VISIBLE_DEFAULT_COLS.values())
+    raw_cols: dict[str, int] | None = None
+    descriptions: dict[str, str] = {}
+    for _event, row_el in ET.iterparse(zf.open(sheet_path), events=("end",)):
+        if row_el.tag != f"{_XLSX_MAIN_TAG}row":
+            continue
+        row_idx = int(row_el.attrib.get("r", "0") or 0)
+        if row_idx in (1, 2):
+            for cell in row_el.findall(f"{_XLSX_MAIN_TAG}c"):
+                col_idx = _xlsx_col_to_index(cell.attrib.get("r", "")) + 1
+                width = max(width, col_idx)
+                row_maps[row_idx][col_idx] = _m2c_cell_value(cell, shared)
+                row_styles[row_idx][col_idx] = cell.attrib.get("s", "0")
+            if row_idx == 2:
+                headers, _ = _m2c_header_rows_and_styles(row_maps, row_styles, width)
+                raw_cols = {
+                    "raw_name": _bulk_find_col_from_rows(headers, RAW_MATERIAL_NAME_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["raw_name"]),
+                    "raw_code": _bulk_find_col_from_rows(headers, RAW_MATERIAL_CODE_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["raw_code"]),
+                    "description": _bulk_find_col_from_rows(headers, RAW_MATERIAL_DESC_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["description"]),
+                }
+        elif row_idx >= DATA_START_ROW:
+            if raw_cols is None:
+                headers, _ = _m2c_header_rows_and_styles(row_maps, row_styles, width)
+                raw_cols = {
+                    "raw_name": _bulk_find_col_from_rows(headers, RAW_MATERIAL_NAME_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["raw_name"]),
+                    "raw_code": _bulk_find_col_from_rows(headers, RAW_MATERIAL_CODE_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["raw_code"]),
+                    "description": _bulk_find_col_from_rows(headers, RAW_MATERIAL_DESC_ALIASES, _RAW_VISIBLE_DEFAULT_COLS["description"]),
+                }
+            needed = {int(v) for v in raw_cols.values() if v}
+            values = _m2c_row_cell_map(row_el, shared, needed)
+            if row_idx == DATA_START_ROW:
+                for cell in row_el.findall(f"{_XLSX_MAIN_TAG}c"):
+                    col_idx = _xlsx_col_to_index(cell.attrib.get("r", "")) + 1
+                    width = max(width, col_idx)
+                    row3_styles[col_idx] = cell.attrib.get("s", "0")
+            raw = _safe_text(values.get(raw_cols["raw_code"], "")) or _safe_text(values.get(raw_cols["raw_name"], ""))
+            if raw and raw not in descriptions:
+                desc = _safe_text(values.get(raw_cols["description"], ""))
+                descriptions[raw] = desc
+                descriptions[_normalize_material_key(raw)] = desc
+        row_el.clear()
+    headers, header_styles = _m2c_header_rows_and_styles(row_maps, row_styles, width)
+    assert raw_cols is not None
+    headers = _ensure_bulk_visible_header_row(headers, raw_cols, _RAW_VISIBLE_HEADERS)
+    for col_idx in range(1, width + 1):
+        row3_styles.setdefault(col_idx, "0")
+    return headers, header_styles, row3_styles, raw_cols, width, descriptions
+
+
+def _m2c_remove_calc_chain_content_types(data: bytes) -> bytes:
+    return re.sub(rb'<Override\b[^>]*PartName="/xl/calcChain\.xml"[^>]*/>', b"", data)
+
+
+def _m2c_remove_calc_chain_rels(data: bytes) -> bytes:
+    return re.sub(rb'<Relationship\b[^>]*Type="[^"]*/calcChain"[^>]*/>', b"", data)
+
+
+def _m2c_force_full_calc(data: bytes) -> bytes:
+    attrs = b' calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"'
+    if b"<calcPr" not in data:
+        return data.replace(b"</workbook>", b"<calcPr" + attrs + b"/></workbook>", 1)
+    def repl(match: re.Match[bytes]) -> bytes:
+        tag = match.group(0)
+        for attr in (b"calcMode", b"fullCalcOnLoad", b"forceFullCalc"):
+            tag = re.sub(attr + rb'="[^"]*"', b"", tag)
+        if tag.endswith(b"/>"):
+            return tag[:-2].rstrip() + attrs + b"/>"
+        return tag[:-1].rstrip() + attrs + b">"
+    return re.sub(rb"<calcPr\b[^>]*/?>", repl, data, count=1)
+
+
+def _m2c_write_sheet_part(
+    zout: zipfile.ZipFile,
+    arcname: str,
+    header_rows: list[list[Any]],
+    header_styles: dict[int, dict[int, str]],
+    data_spool_path: Path,
+    data_count: int,
+    width: int,
+    hide_helper_columns: bool = False,
+) -> None:
+    max_row = max(2, DATA_START_ROW - 1 + int(data_count))
+    max_col = max(1, int(width))
+    dimension = f'A1:{_xlsx_index_to_col_letter(max_col)}{max_row}'
+    with zout.open(arcname, "w", force_zip64=True) as out:
+        out.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+        out.write(f'<worksheet xmlns="{_XLSX_MAIN_NS}">'.encode("ascii"))
+        out.write(f'<dimension ref="{dimension}"/>'.encode("ascii"))
+        out.write(b'<sheetViews><sheetView workbookViewId="0"/></sheetViews>')
+        out.write(b'<sheetFormatPr defaultRowHeight="15"/>')
+        if hide_helper_columns:
+            out.write(b'<cols><col min="28" max="35" width="0" hidden="1" customWidth="1"/></cols>')
+        out.write(b'<sheetData>')
+        for row_idx in (1, 2):
+            values = header_rows[row_idx - 1] if len(header_rows) >= row_idx else []
+            col_values = [(col_idx, values[col_idx - 1]) for col_idx in range(1, min(len(values), max_col) + 1) if values[col_idx - 1] not in (None, "")]
+            out.write(_m2c_row_xml(row_idx, col_values, header_styles.get(row_idx, {}), width=max_col))
+        if data_spool_path.exists():
+            with data_spool_path.open("rb") as src:
+                shutil.copyfileobj(src, out, length=M2C_COPY_BUFFER_BYTES)
+        out.write(b'</sheetData>')
+        out.write(b'<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>')
+        out.write(b'</worksheet>')
+
+
+def _m2c_copy_static_zip_entry(zin: zipfile.ZipFile, zout: zipfile.ZipFile, item: zipfile.ZipInfo) -> None:
+    if item.is_dir():
+        zout.writestr(item, b"")
+        return
+    with zin.open(item, "r") as src, zout.open(item, "w", force_zip64=True) as dst:
+        shutil.copyfileobj(src, dst, length=M2C_COPY_BUFFER_BYTES)
+
+
+def _m2c_build_output_package(
+    source_file: Path,
+    output_path: Path,
+    activity_sheet_path: str,
+    raw_sheet_path: str,
+    activity_headers: list[list[Any]],
+    activity_header_styles: dict[int, dict[int, str]],
+    activity_spool: Path,
+    activity_count: int,
+    activity_width: int,
+    raw_headers: list[list[Any]],
+    raw_header_styles: dict[int, dict[int, str]],
+    raw_spool: Path,
+    raw_count: int,
+    raw_width: int,
+) -> None:
+    partial = output_path.with_suffix(output_path.suffix + ".partial")
+    partial.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(source_file, "r") as zin, zipfile.ZipFile(
+            partial,
+            "w",
+            compression=zipfile.ZIP_DEFLATED,
+            compresslevel=M2C_XLSX_COMPRESSION_LEVEL,
+            allowZip64=True,
+        ) as zout:
+            replaced = {activity_sheet_path, raw_sheet_path, "xl/calcChain.xml"}
+            for item in zin.infolist():
+                name = item.filename
+                if name in replaced:
+                    continue
+                if name in {"[Content_Types].xml", "xl/_rels/workbook.xml.rels", "xl/workbook.xml"}:
+                    data = zin.read(name)
+                    if name == "[Content_Types].xml":
+                        data = _m2c_remove_calc_chain_content_types(data)
+                    elif name == "xl/_rels/workbook.xml.rels":
+                        data = _m2c_remove_calc_chain_rels(data)
+                    else:
+                        data = _m2c_force_full_calc(data)
+                    zout.writestr(item, data)
+                else:
+                    _m2c_copy_static_zip_entry(zin, zout, item)
+            _m2c_write_sheet_part(
+                zout, activity_sheet_path, activity_headers, activity_header_styles,
+                activity_spool, activity_count, activity_width, hide_helper_columns=True,
+            )
+            _m2c_write_sheet_part(
+                zout, raw_sheet_path, raw_headers, raw_header_styles,
+                raw_spool, raw_count, raw_width, hide_helper_columns=False,
+            )
+        os.replace(partial, output_path)
+    except Exception:
+        partial.unlink(missing_ok=True)
+        raise
+
+
+
+
+def _m2c_compile_formula_template(formula: str) -> str:
+    """Compile row-3 references once; per-row expansion becomes a cheap replace."""
+    if not formula:
+        return formula
+    pattern = r'(?<![A-Za-z0-9_])(\$?[A-Z]{1,3})3(?![0-9])'
+    return re.sub(pattern, lambda m: m.group(1) + "{ROW}", formula)
+
+def _m2c_supplier_variants(
+    base: dict[str, Any],
+    suppliers: list[dict[str, str]],
+    supplier_options: list[str],
+    tbc_supplier_map: dict[str, dict[str, str]],
+):
+    destination = _safe_text(base.get("transport_destination"))
+    if not suppliers:
+        uploaded_tbc = _select_uploaded_tbc_supplier_for_destination(tbc_supplier_map, destination)
+        uploaded_address = ""
+        uploaded_country = ""
+        uploaded_plant = ""
+        if uploaded_tbc:
+            uploaded_address = uploaded_tbc.get("supplier_address", "") or uploaded_tbc.get("transport_origin", "")
+            uploaded_country = uploaded_tbc.get("country_area", "")
+            uploaded_plant = uploaded_tbc.get("plant", "")
+        yield {
+            "usage": base.get("usage", 0),
+            "supplier_name": _raw_material_supplier_display_name(destination, "TBC", "TBC"),
+            "transport_origin": uploaded_address or "TBC",
+            "supplier_code": "TBC",
+            "supplier_master_name": "TBC",
+            "supplier_country_area": _country_area_for_unit_name(destination, uploaded_plant, uploaded_country),
+            "supplier_address": uploaded_address or "TBC",
+        }, False, True, True
+        return
+    usage_per_supplier = _split_usage_evenly_by_supplier_count(base.get("usage"), len(suppliers))
+    for info in suppliers:
+        supplier_address = info.get("supplier_address", "") or info.get("transport_origin", "")
+        supplier_code = info.get("supplier_code", "") or info.get("vendor_code", "")
+        normalized_code = _normalize_vendor_code(supplier_code)
+        if normalized_code == "TBC":
+            uploaded_tbc = _select_uploaded_tbc_supplier_for_destination(tbc_supplier_map, destination)
+            if uploaded_tbc:
+                supplier_address = supplier_address or uploaded_tbc.get("supplier_address", "") or uploaded_tbc.get("transport_origin", "")
+        supplier_master_name = info.get("supplier_master_name", "") or _supplier_name_from_option(info.get("supplier_name", ""))
+        supplier_name = _raw_material_supplier_display_name(destination, supplier_code, supplier_master_name)
+        if not supplier_name:
+            supplier_name = _select_supplier_name_option(supplier_options, destination, supplier_code)
+        if normalized_code == "TBC":
+            supplier_master_name = "TBC"
+            supplier_country_area = _country_area_for_unit_name(destination, info.get("plant", ""), info.get("country_area", ""))
+            supplier_name = _raw_material_supplier_display_name(destination, "TBC", "TBC")
+        else:
+            supplier_country_area = info.get("country_area", "")
+        yield {
+            "usage": usage_per_supplier,
+            "supplier_name": supplier_name,
+            "transport_origin": supplier_address,
+            "supplier_code": supplier_code,
+            "supplier_master_name": supplier_master_name,
+            "supplier_country_area": supplier_country_area,
+            "supplier_address": supplier_address,
+        }, True, bool(supplier_name), False
+
+
 def _write_supplier_mapped_bulk_streaming(
     source_file: str | Path,
     output_path: str | Path,
@@ -5526,34 +6077,21 @@ def _write_supplier_mapped_bulk_streaming(
     progress_callback=None,
     current_file: str = "",
 ) -> tuple[Dict[str, Any], set[tuple[str, str, str, str, str]]]:
-    """Stream-read one Module 2B workbook, apply supplier mapping, and stream-write output."""
+    """Complete Streaming OpenXML M2C pipeline.
+
+    The source XLSX is read directly from worksheet XML, supplier mapping is
+    applied row-by-row, row XML is spooled to disk, and a new XLSX package is
+    assembled by replacing only the Activity Data and Raw Material worksheet
+    parts.  No pandas DataFrame, openpyxl workbook or XlsxWriter cell loop is
+    used for the large activity dataset.
+    """
+    started = time.perf_counter()
     source_file = Path(source_file)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    activity_header_rows, raw_header_rows, activity_cols, raw_cols, document_type_value = _activity_layout_from_bulk_workbook(source_file)
-    _formula_headers, activity_formula_templates = _read_xlsx_header_rows_and_row3_formulas(source_file, ACTIVITY_SHEET_NAME)
-    missing_formula_cols = [col for col in M2_ACTIVITY_HELPER_FORMULA_COLS if col not in activity_formula_templates]
-    if missing_formula_cols:
-        missing_letters = ", ".join(_xlsx_index_to_col_letter(col) for col in missing_formula_cols)
-        raise ValueError(f"M2C 輸入的 Raw Material Bulk 第 3 列缺少 AB～AI 公式：{missing_letters}")
-    activity_headers = activity_header_rows[0]
-    raw_headers = raw_header_rows[0]
-    # Lightweight M2B files may not contain Dropdown Values; supplier display-name
-    # options are only a fallback for matched vendors missing a display name.
-    # Plant-specific TBC records are read from the uploaded IPS supplier master.
-    try:
-        wb_meta = load_workbook(source_file, read_only=True, data_only=True)
-        try:
-            supplier_options = _extract_supplier_name_options_from_raw_template(wb_meta)
-        finally:
-            wb_meta.close()
-    except Exception:
-        supplier_options = []
     tbc_supplier_map = tbc_supplier_map or {}
-    description_map = _read_raw_material_descriptions_streaming(source_file)
 
     input_rows = 0
-    output_rows = 0
     actual_mapped_rows = 0
     matched_source_rows = 0
     supplier_expanded_rows = 0
@@ -5569,146 +6107,277 @@ def _write_supplier_mapped_bulk_streaming(
     supplier_unique: set[tuple[str, str, str, str, str]] = set()
     progress_every = 5000
 
-    if xlsxwriter is not None:
-        workbook = xlsxwriter.Workbook(str(output_path), {"constant_memory": True})
-        activity_ws = workbook.add_worksheet(ACTIVITY_SHEET_NAME[:31])
-        raw_ws = workbook.add_worksheet(RAW_MATERIAL_SHEET_NAME[:31])
-        activity_ws.set_column(27, 34, None, None, {"hidden": True})
-        activity_number_formats = _xlsx_row3_number_formats(source_file, ACTIVITY_SHEET_NAME)
-        raw_number_formats = _xlsx_row3_number_formats(source_file, RAW_MATERIAL_SHEET_NAME)
-        activity_formats = _xlsxwriter_column_formats(workbook, activity_number_formats)
-        raw_formats = _xlsxwriter_column_formats(workbook, raw_number_formats)
-        for row_idx, header_row in enumerate(activity_header_rows):
-            for col, value in enumerate(header_row):
-                if value not in (None, ""):
-                    activity_ws.write(row_idx, col, value)
-        for row_idx, header_row in enumerate(raw_header_rows):
-            for col, value in enumerate(header_row):
-                if value not in (None, ""):
-                    raw_ws.write(row_idx, col, value)
-        excel_row_idx = DATA_START_ROW - 1
-        for base_row in _iter_activity_rows_streaming(source_file, activity_cols, description_map):
-            input_rows += 1
-            source_supplier_count = len(supplier_map.get(_normalize_material_key(base_row.get("raw_material"))) or [])
-            if source_supplier_count > 1:
-                source_usage = _safe_number(base_row.get("usage"))
-                split_usage = _split_usage_evenly_by_supplier_count(source_usage, source_supplier_count)
-                supplier_usage_split_source_rows += 1
-                supplier_usage_split_output_rows += source_supplier_count
-                supplier_usage_total_before_split += source_usage
-                supplier_usage_total_after_split += split_usage * source_supplier_count
-            for mapped_row, matched, name_ok, used_tbc in _supplier_rows_for_activity_row(base_row, supplier_map, supplier_options, tbc_supplier_map):
-                if matched:
-                    matched_source_rows += 1
-                    supplier_expanded_rows += 1
-                if name_ok:
-                    supplier_name_matched += 1
-                else:
-                    supplier_name_missing += 1
-                if used_tbc:
-                    tbc_fallback_rows += 1
-                activity_row, raw_material = _build_supplier_activity_row(mapped_row, activity_headers, activity_cols, document_type_value)
-                for col, value in enumerate(activity_row):
-                    _write_xlsxwriter_typed_cell(activity_ws, excel_row_idx, col, value, activity_number_formats, activity_formats)
-                _write_m2_helper_formulas_xlsxwriter(activity_ws, excel_row_idx, activity_formula_templates, activity_formats)
-                if raw_material and raw_material not in raw_seen:
-                    raw_seen.add(raw_material)
-                    raw_descriptions[raw_material] = mapped_row.get("description", "") or description_map.get(raw_material, "") or ""
-                supplier_code = _normalize_vendor_code(mapped_row.get("supplier_code", ""))
-                if supplier_code:
-                    supplier_unique.add((
-                        _supplier_bulk_name_only(
-                            mapped_row.get("supplier_master_name", ""),
-                            mapped_row.get("supplier_name", ""),
-                            supplier_code,
-                            mapped_row.get("transport_destination", ""),
-                        ),
-                        supplier_code,
-                        _safe_text(mapped_row.get("supplier_country_area", "")),
-                        _safe_text(mapped_row.get("supplier_address", "")) or _safe_text(mapped_row.get("transport_origin", "")),
-                        _safe_text(mapped_row.get("transport_destination", "")),
-                    ))
-                output_rows += 1
-                actual_mapped_rows += 1
-                excel_row_idx += 1
-            if progress_callback and (input_rows == 1 or input_rows % progress_every == 0):
-                progress_callback(step=f"Applying Supplier mapping: {current_file or source_file.name}", processed=input_rows, total=0, progress=30, current_file=current_file or source_file.name)
-        raw_excel_row = DATA_START_ROW - 1
-        for raw_material in sorted(raw_seen):
-            raw_row = ["" for _ in raw_headers]
-            _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
-            _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
-            _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
-            for col, value in enumerate(raw_row):
-                _write_xlsxwriter_typed_cell(raw_ws, raw_excel_row, col, value, raw_number_formats, raw_formats)
-            raw_excel_row += 1
-        workbook.close()
-    else:
-        wb_out = Workbook(write_only=True)
-        activity_ws = wb_out.create_sheet(ACTIVITY_SHEET_NAME)
-        raw_ws = wb_out.create_sheet(RAW_MATERIAL_SHEET_NAME)
-        for col_idx in M2_ACTIVITY_HELPER_FORMULA_COLS:
-            activity_ws.column_dimensions[_xlsx_index_to_col_letter(col_idx)].hidden = True
-        if "Sheet" in wb_out.sheetnames:
-            try:
-                del wb_out["Sheet"]
-            except Exception:
-                pass
-        for header_row in activity_header_rows:
-            activity_ws.append(header_row)
-        for header_row in raw_header_rows:
-            raw_ws.append(header_row)
-        for base_row in _iter_activity_rows_streaming(source_file, activity_cols, description_map):
-            input_rows += 1
-            source_supplier_count = len(supplier_map.get(_normalize_material_key(base_row.get("raw_material"))) or [])
-            if source_supplier_count > 1:
-                source_usage = _safe_number(base_row.get("usage"))
-                split_usage = _split_usage_evenly_by_supplier_count(source_usage, source_supplier_count)
-                supplier_usage_split_source_rows += 1
-                supplier_usage_split_output_rows += source_supplier_count
-                supplier_usage_total_before_split += source_usage
-                supplier_usage_total_after_split += split_usage * source_supplier_count
-            for mapped_row, matched, name_ok, used_tbc in _supplier_rows_for_activity_row(base_row, supplier_map, supplier_options, tbc_supplier_map):
-                if matched:
-                    matched_source_rows += 1
-                    supplier_expanded_rows += 1
-                if name_ok:
-                    supplier_name_matched += 1
-                else:
-                    supplier_name_missing += 1
-                if used_tbc:
-                    tbc_fallback_rows += 1
-                activity_row, raw_material = _build_supplier_activity_row(mapped_row, activity_headers, activity_cols, document_type_value)
-                activity_ws.append(_apply_m2_helper_formulas_to_row(activity_row, activity_formula_templates, DATA_START_ROW + output_rows))
-                if raw_material and raw_material not in raw_seen:
-                    raw_seen.add(raw_material)
-                    raw_descriptions[raw_material] = mapped_row.get("description", "") or description_map.get(raw_material, "") or ""
-                supplier_code = _normalize_vendor_code(mapped_row.get("supplier_code", ""))
-                if supplier_code:
-                    supplier_unique.add((
-                        _supplier_bulk_name_only(
-                            mapped_row.get("supplier_master_name", ""),
-                            mapped_row.get("supplier_name", ""),
-                            supplier_code,
-                            mapped_row.get("transport_destination", ""),
-                        ),
-                        supplier_code,
-                        _safe_text(mapped_row.get("supplier_country_area", "")),
-                        _safe_text(mapped_row.get("supplier_address", "")) or _safe_text(mapped_row.get("transport_origin", "")),
-                        _safe_text(mapped_row.get("transport_destination", "")),
-                    ))
-                output_rows += 1
-                actual_mapped_rows += 1
-            if progress_callback and (input_rows == 1 or input_rows % progress_every == 0):
-                progress_callback(step=f"Applying Supplier mapping: {current_file or source_file.name}", processed=input_rows, total=0, progress=30, current_file=current_file or source_file.name)
-        for raw_material in sorted(raw_seen):
-            raw_row = ["" for _ in raw_headers]
-            _set_row_value(raw_row, raw_cols["raw_name"], raw_material)
-            _set_row_value(raw_row, raw_cols["raw_code"], raw_material)
-            _set_row_value(raw_row, raw_cols["description"], raw_descriptions.get(raw_material, ""))
-            raw_ws.append(raw_row)
-        wb_out.save(output_path)
+    with tempfile.TemporaryDirectory(prefix="dip_m2c_openxml_") as tmp:
+        tmpdir = Path(tmp)
+        activity_spool = tmpdir / "activity_rows.xml"
+        raw_spool = tmpdir / "raw_rows.xml"
 
+        with zipfile.ZipFile(source_file, "r") as zf:
+            sheet_paths = _m2c_sheet_paths_from_zip(zf)
+            activity_sheet_path = sheet_paths.get(ACTIVITY_SHEET_NAME)
+            raw_sheet_path = sheet_paths.get(RAW_MATERIAL_SHEET_NAME)
+            if not activity_sheet_path:
+                raise ValueError(f"找不到 raw material bulk 分頁：{ACTIVITY_SHEET_NAME}")
+            if not raw_sheet_path:
+                raise ValueError(f"找不到 raw material bulk 分頁：{RAW_MATERIAL_SHEET_NAME}")
+            shared = _m2c_shared_strings(zf)
+            supplier_options = _m2c_supplier_options_from_zip(zf, sheet_paths, shared)
+            (
+                raw_header_rows,
+                raw_header_styles,
+                raw_row3_styles,
+                raw_cols,
+                raw_width,
+                description_map,
+            ) = _m2c_raw_context_and_descriptions(zf, raw_sheet_path, shared)
+
+            row_maps: dict[int, dict[int, Any]] = {1: {}, 2: {}}
+            header_styles: dict[int, dict[int, str]] = {1: {}, 2: {}}
+            activity_row3_styles: dict[int, str] = {}
+            activity_formula_templates: dict[int, str] = {}
+            activity_formula_row_templates: dict[int, str] = {}
+            activity_cols: dict[str, int] | None = None
+            activity_header_rows: list[list[Any]] = []
+            activity_width = max(max(M2_ACTIVITY_HELPER_FORMULA_COLS), max(_ACTIVITY_VISIBLE_DEFAULT_COLS.values()))
+            needed_cols: set[int] | None = None
+            write_plan: list[tuple[int, int]] = []
+
+            with activity_spool.open("wb") as activity_out:
+                for _event, row_el in ET.iterparse(zf.open(activity_sheet_path), events=("end",)):
+                    if row_el.tag != f"{_XLSX_MAIN_TAG}row":
+                        continue
+                    row_idx = int(row_el.attrib.get("r", "0") or 0)
+                    if row_idx in (1, 2):
+                        for cell in row_el.findall(f"{_XLSX_MAIN_TAG}c"):
+                            col_idx = _xlsx_col_to_index(cell.attrib.get("r", "")) + 1
+                            activity_width = max(activity_width, col_idx)
+                            row_maps[row_idx][col_idx] = _m2c_cell_value(cell, shared)
+                            header_styles[row_idx][col_idx] = cell.attrib.get("s", "0")
+                        if row_idx == 2:
+                            activity_header_rows, _ = _m2c_header_rows_and_styles(row_maps, header_styles, activity_width)
+                            activity_cols = {
+                                "raw_name": _bulk_find_col_from_rows(activity_header_rows, RAW_MATERIAL_NAME_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["raw_name"]),
+                                "raw_code": _bulk_find_col_from_rows(activity_header_rows, RAW_MATERIAL_CODE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["raw_code"]),
+                                "start_date": _bulk_find_col_from_rows(activity_header_rows, DOC_START_DATE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["start_date"]),
+                                "end_date": _bulk_find_col_from_rows(activity_header_rows, DOC_END_DATE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["end_date"]),
+                                "document_type": _bulk_find_col_from_rows(activity_header_rows, DOCUMENT_TYPE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["document_type"]),
+                                "document_number": _bulk_find_col_from_rows(activity_header_rows, DOCUMENT_NUMBER_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["document_number"]),
+                                "usage": _bulk_find_col_from_rows(activity_header_rows, USAGE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["usage"]),
+                                "unit": _bulk_find_col_from_rows(activity_header_rows, ACTIVITY_DATA_UNIT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["unit"]),
+                                "data_source": _bulk_find_col_from_rows(activity_header_rows, DATA_SOURCE_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["data_source"]),
+                                "data_source_other": _bulk_find_col_from_rows(activity_header_rows, DATA_SOURCE_OTHER_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["data_source_other"]),
+                                "calculate_transportation_emissions": _bulk_find_col_from_rows(activity_header_rows, CALCULATE_TRANSPORTATION_EMISSIONS_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["calculate_transportation_emissions"]),
+                                "supplier_name": _bulk_find_col_from_rows(activity_header_rows, SUPPLIER_NAME_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["supplier_name"]),
+                                "transport_origin": _bulk_find_col_from_rows(activity_header_rows, TRANSPORT_ORIGIN_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["transport_origin"]),
+                                "transport_destination": _bulk_find_col_from_rows(activity_header_rows, TRANSPORT_DESTINATION_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["transport_destination"]),
+                                "target_product": _bulk_find_col_from_rows(activity_header_rows, PRODUCT_LINK_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["target_product"]),
+                                "comment": _bulk_find_col_from_rows(activity_header_rows, COMMENT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["comment"]),
+                                "material_group": _bulk_find_col_from_rows(activity_header_rows, MATERIAL_GROUP_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["material_group"]),
+                                "net_weight": _bulk_find_col_from_rows(activity_header_rows, NET_WEIGHT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["net_weight"]),
+                                "gross_weight": _bulk_find_col_from_rows(activity_header_rows, GROSS_WEIGHT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["gross_weight"]),
+                                "weight_unit": _bulk_find_col_from_rows(activity_header_rows, WEIGHT_UNIT_ALIASES, _ACTIVITY_VISIBLE_DEFAULT_COLS["weight_unit"]),
+                            }
+                            activity_header_rows = _ensure_bulk_visible_header_row(activity_header_rows, activity_cols, _ACTIVITY_VISIBLE_HEADERS)
+                            needed_cols = {int(v) for v in activity_cols.values() if v}
+                            # Tuple positions generated below. Sort once by real template column.
+                            field_keys = [
+                                "raw_name", "raw_code", "start_date", "end_date", "document_type", "document_number",
+                                "usage", "unit", "data_source", "data_source_other", "calculate_transportation_emissions",
+                                "supplier_name", "transport_origin", "transport_destination", "target_product", "comment",
+                                "material_group", "net_weight", "gross_weight", "weight_unit",
+                            ]
+                            write_plan = sorted((int(activity_cols[key]), idx) for idx, key in enumerate(field_keys) if activity_cols.get(key))
+                    elif row_idx >= DATA_START_ROW:
+                        if activity_cols is None or needed_cols is None:
+                            raise ValueError("M2C 無法解析 Activity Data 表頭。")
+                        if row_idx == DATA_START_ROW:
+                            for cell in row_el.findall(f"{_XLSX_MAIN_TAG}c"):
+                                col_idx = _xlsx_col_to_index(cell.attrib.get("r", "")) + 1
+                                activity_width = max(activity_width, col_idx)
+                                activity_row3_styles[col_idx] = cell.attrib.get("s", "0")
+                                if col_idx in M2_ACTIVITY_HELPER_FORMULA_COLS:
+                                    formula_el = cell.find(f"{_XLSX_MAIN_TAG}f")
+                                    if formula_el is not None and formula_el.text:
+                                        activity_formula_templates[col_idx] = "=" + formula_el.text
+                            missing = [col for col in M2_ACTIVITY_HELPER_FORMULA_COLS if col not in activity_formula_templates]
+                            if missing:
+                                missing_letters = ", ".join(_xlsx_index_to_col_letter(col) for col in missing)
+                                raise ValueError(f"M2C 輸入的 Raw Material Bulk 第 3 列缺少 AB～AI 公式：{missing_letters}")
+                            activity_formula_row_templates = {
+                                col_idx: _m2c_compile_formula_template(formula)
+                                for col_idx, formula in activity_formula_templates.items()
+                            }
+                            for col_idx in range(1, activity_width + 1):
+                                activity_row3_styles.setdefault(col_idx, "0")
+
+                        values = _m2c_row_cell_map(row_el, shared, needed_cols)
+                        raw_material = _safe_text(values.get(activity_cols["raw_code"], "")) or _safe_text(values.get(activity_cols["raw_name"], ""))
+                        target_product = _safe_text(values.get(activity_cols["target_product"], ""))
+                        unit = _safe_text(values.get(activity_cols["unit"], ""))
+                        usage = _fast_number(values.get(activity_cols["usage"], ""))
+                        if not raw_material and not target_product and not unit and usage == 0:
+                            row_el.clear()
+                            continue
+                        if not raw_material or not target_product:
+                            row_el.clear()
+                            continue
+
+                        input_rows += 1
+                        raw_key = _normalize_material_key(raw_material)
+                        destination = _safe_text(values.get(activity_cols["transport_destination"], ""))
+                        base = {
+                            "raw_material": raw_material,
+                            "target_product": target_product,
+                            "usage": usage,
+                            "unit": unit,
+                            "description": description_map.get(raw_material) or description_map.get(raw_key) or "",
+                            "material_group": _safe_text(values.get(activity_cols["material_group"], "")),
+                            "valid_from": values.get(activity_cols["start_date"], ""),
+                            "transport_destination": destination,
+                            "document_type": _safe_text(values.get(activity_cols["document_type"], "")),
+                            "data_source": _safe_text(values.get(activity_cols["data_source"], "")),
+                            "calculate_transportation_emissions": _safe_text(values.get(activity_cols["calculate_transportation_emissions"], "")),
+                            "net_weight": _fast_number(values.get(activity_cols["net_weight"], "")) if activity_cols.get("net_weight") else "",
+                            "gross_weight": _fast_number(values.get(activity_cols["gross_weight"], "")) if activity_cols.get("gross_weight") else "",
+                            "weight_uom": _safe_text(values.get(activity_cols["weight_unit"], "")) if activity_cols.get("weight_unit") else "",
+                        }
+                        suppliers = supplier_map.get(raw_key) or []
+                        source_supplier_count = len(suppliers)
+                        if source_supplier_count > 1:
+                            split_usage = _split_usage_evenly_by_supplier_count(usage, source_supplier_count)
+                            supplier_usage_split_source_rows += 1
+                            supplier_usage_split_output_rows += source_supplier_count
+                            supplier_usage_total_before_split += usage
+                            supplier_usage_total_after_split += split_usage * source_supplier_count
+
+                        start_date_value, end_date_value = _m2c_year_bounds(base["valid_from"])
+                        for variant, matched, name_ok, used_tbc in _m2c_supplier_variants(base, suppliers, supplier_options, tbc_supplier_map):
+                            if matched:
+                                matched_source_rows += 1
+                                supplier_expanded_rows += 1
+                            if name_ok:
+                                supplier_name_matched += 1
+                            else:
+                                supplier_name_missing += 1
+                            if used_tbc:
+                                tbc_fallback_rows += 1
+
+                            field_values = (
+                                raw_material,
+                                raw_material,
+                                start_date_value,
+                                end_date_value,
+                                base["document_type"] or "Bill of Materials (BOM)",
+                                "",
+                                _fast_number(variant["usage"]),
+                                unit,
+                                base["data_source"] or "SAP",
+                                "",
+                                base["calculate_transportation_emissions"] or "Yes",
+                                variant["supplier_name"],
+                                variant["transport_origin"],
+                                destination,
+                                target_product,
+                                "",
+                                base["material_group"],
+                                base["net_weight"],
+                                base["gross_weight"],
+                                base["weight_uom"],
+                            )
+                            excel_row = DATA_START_ROW + actual_mapped_rows
+                            col_values = [(col_idx, field_values[field_idx]) for col_idx, field_idx in write_plan]
+                            row_text = str(excel_row)
+                            formula_map = {
+                                col_idx: activity_formula_row_templates[col_idx].replace("{ROW}", row_text)
+                                for col_idx in M2_ACTIVITY_HELPER_FORMULA_COLS
+                            }
+                            # Visible columns are before AB; helper cells can be appended without sorting.
+                            col_values.extend((col_idx, "") for col_idx in M2_ACTIVITY_HELPER_FORMULA_COLS)
+                            activity_out.write(_m2c_row_xml(
+                                excel_row,
+                                col_values,
+                                activity_row3_styles,
+                                formula_map,
+                                width=activity_width,
+                            ))
+
+                            if raw_material not in raw_seen:
+                                raw_seen.add(raw_material)
+                                raw_descriptions[raw_material] = base["description"]
+                            supplier_code = _normalize_vendor_code(variant["supplier_code"])
+                            if supplier_code:
+                                supplier_unique.add((
+                                    _supplier_bulk_name_only(
+                                        variant["supplier_master_name"],
+                                        variant["supplier_name"],
+                                        supplier_code,
+                                        destination,
+                                    ),
+                                    supplier_code,
+                                    _safe_text(variant["supplier_country_area"]),
+                                    _safe_text(variant["supplier_address"]) or _safe_text(variant["transport_origin"]),
+                                    destination,
+                                ))
+                            actual_mapped_rows += 1
+
+                        if progress_callback and (input_rows == 1 or input_rows % progress_every == 0):
+                            progress_callback(
+                                step=f"Streaming OpenXML Supplier mapping: {current_file or source_file.name}",
+                                processed=actual_mapped_rows,
+                                total=0,
+                                progress=30,
+                                current_file=current_file or source_file.name,
+                                input_rows=input_rows,
+                                output_rows=actual_mapped_rows,
+                            )
+                    row_el.clear()
+
+        if not activity_header_rows or activity_cols is None:
+            raise ValueError("M2C 無法解析 Activity Data 表頭。")
+
+        with raw_spool.open("wb") as raw_out:
+            for offset, raw_material in enumerate(sorted(raw_seen)):
+                excel_row = DATA_START_ROW + offset
+                field_values = {
+                    int(raw_cols["raw_name"]): raw_material,
+                    int(raw_cols["raw_code"]): raw_material,
+                    int(raw_cols["description"]): raw_descriptions.get(raw_material, ""),
+                }
+                raw_out.write(_m2c_row_xml(
+                    excel_row,
+                    sorted(field_values.items()),
+                    raw_row3_styles,
+                    width=raw_width,
+                ))
+
+        if progress_callback:
+            progress_callback(
+                step=f"Packaging Streaming OpenXML: {current_file or source_file.name}",
+                processed=actual_mapped_rows,
+                total=actual_mapped_rows,
+                progress=82,
+                current_file=current_file or source_file.name,
+            )
+        package_started = time.perf_counter()
+        _m2c_build_output_package(
+            source_file=source_file,
+            output_path=output_path,
+            activity_sheet_path=activity_sheet_path,
+            raw_sheet_path=raw_sheet_path,
+            activity_headers=activity_header_rows,
+            activity_header_styles=header_styles,
+            activity_spool=activity_spool,
+            activity_count=actual_mapped_rows,
+            activity_width=activity_width,
+            raw_headers=raw_header_rows,
+            raw_header_styles=raw_header_styles,
+            raw_spool=raw_spool,
+            raw_count=len(raw_seen),
+            raw_width=raw_width,
+        )
+        package_seconds = time.perf_counter() - package_started
+
+    total_seconds = time.perf_counter() - started
     return {
         "input_filename": source_file.name,
         "activity_rows_read": int(input_rows),
@@ -5730,7 +6399,11 @@ def _write_supplier_mapped_bulk_streaming(
         "site_tbc_supplier_count": int(len({id(v) for v in tbc_supplier_map.values()})),
         "tbc_fallback_policy": "prefer_uploaded_plant_tbc_then_system_fallback",
         "m2c_large_dataset_mode": True,
-        "m2c_template_policy": "Row-2 headers plus hidden AB~AI formulas are preserved from row 3 through each actual data row (maximum 50,000); N is fixed to Yes.",
+        "m2c_writer": "complete_streaming_openxml_package",
+        "m2c_xlsx_compression_level": int(M2C_XLSX_COMPRESSION_LEVEL),
+        "m2c_total_seconds": round(total_seconds, 3),
+        "m2c_package_seconds": round(package_seconds, 3),
+        "m2c_template_policy": "Row-2 headers and row-3 styles plus hidden AB~AI formulas are preserved in a lightweight Streaming OpenXML workbook; full dropdown/validation package is restored by M3A.",
         "calculate_transportation_emissions_value": "Preserved from M2B template (YES semantic)",
         "helper_formula_columns": ["AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI"],
         "helper_formula_rows": int(actual_mapped_rows),
@@ -5744,7 +6417,7 @@ def _write_supplier_bulk_create_file_from_unique_rows(supplier_rows: set[tuple[s
     supplier_bulk_template_path = Path(supplier_bulk_template_path)
     output_path = Path(output_path)
     if not supplier_bulk_template_path.exists():
-        return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": "", "supplier_bulk_error": f"找不到內建供應商 Bulk Template：{supplier_bulk_template_path.name}"}
+        return {"supplier_bulk_rows": 0, "supplier_bulk_filename": "", "supplier_bulk_download_url": "", "supplier_bulk_error": f"找不到 Supplier Bulk Template：{supplier_bulk_template_path.name}"}
     # Supplier list is much smaller than activity data. Preserve the existing supplier bulk template here.
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb_meta = load_workbook(supplier_bulk_template_path, read_only=True, data_only=False)
@@ -5779,15 +6452,13 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     supplier_bulk_output_path: str | Path | None = None,
     progress_callback=None,
 ) -> Dict[str, Any]:
-    """Apply Module 2C supplier mapping to Module 2B Raw Material Bulk ZIP.
+    """Apply Module 2C supplier mapping with complete Streaming OpenXML.
 
-    Large Dataset Mode:
-    - Streams each Module 2B workbook from the ZIP in read-only mode.
-    - Applies supplier mapping row-by-row without building exploded/site DataFrames.
-    - Writes supplier-mapped output with xlsxwriter constant_memory or openpyxl write_only.
-    - Does not copy bulk template styles/dropdowns/validations/formulas at M2C, because the
-      same template-copy pattern is the memory crash source for 200k+ row files.
+    Each Module 2B XLSX member is copied from the source ZIP one at a time,
+    transformed without openpyxl/XlsxWriter activity-cell objects, and added to
+    the result ZIP using ZIP_STORED because XLSX is already compressed.
     """
+    started = time.perf_counter()
     source_zip = Path(raw_material_bulk_zip_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -5802,6 +6473,8 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
 
     zip_filename = f"supplier_mapped_raw_material_bulk_by_site_{token}.zip"
     zip_path = output_dir / zip_filename
+    partial_zip_path = zip_path.with_suffix(zip_path.suffix + ".partial")
+    partial_zip_path.unlink(missing_ok=True)
     generated_files: list[dict[str, Any]] = []
     input_files = 0
     total_input_rows = 0
@@ -5815,90 +6488,118 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     supplier_usage_total_before_split = 0.0
     supplier_usage_total_after_split = 0.0
     supplier_options_total = 0
+    m2c_writer_seconds_total = 0.0
+    m2c_package_seconds_total = 0.0
     combined_supplier_rows: set[tuple[str, str, str, str, str]] = set()
 
-    with tempfile.TemporaryDirectory(prefix="cmp_module2c_") as tmp:
-        tmpdir = Path(tmp)
-        with zipfile.ZipFile(source_zip, "r") as zf:
-            members = [m for m in zf.namelist() if m.lower().endswith((".xlsx", ".xlsm")) and not Path(m).name.startswith("~$")]
-            if not members:
-                raise ValueError("Module 2B ZIP 中找不到 Raw Material Bulk Excel 檔案。")
-            for member in members:
-                zf.extract(member, tmpdir)
+    try:
+        with tempfile.TemporaryDirectory(prefix="dip_module2c_openxml_") as tmp:
+            tmpdir = Path(tmp)
+            with zipfile.ZipFile(source_zip, "r") as source_bundle:
+                members = [
+                    m for m in source_bundle.namelist()
+                    if m.lower().endswith((".xlsx", ".xlsm")) and not Path(m).name.startswith("~$")
+                ]
+                if not members:
+                    raise ValueError("Module 2B ZIP 中找不到 Raw Material Bulk Excel 檔案。")
 
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as out_zip:
-            for idx, member in enumerate(members, start=1):
-                source_file = tmpdir / member
-                if not source_file.exists():
-                    source_file = tmpdir / Path(member).name
-                current_name = Path(member).name
-                if progress_callback:
-                    progress_callback(
-                        step=f"Applying Supplier mapping: {current_name}",
-                        processed=0,
-                        total=0,
-                        progress=min(90, 12 + int((idx - 1) / max(len(members), 1) * 70)),
-                        current_file=current_name,
-                    )
-                safe_name = _sanitize_filename_part(Path(member).stem)
-                output_path = output_dir / f"supplier_mapped_{safe_name}_{token}.xlsx"
-                write_summary, supplier_unique = _write_supplier_mapped_bulk_streaming(
-                    source_file=source_file,
-                    output_path=output_path,
-                    supplier_map=supplier_map,
-                    tbc_supplier_map=tbc_supplier_map,
-                    progress_callback=progress_callback,
-                    current_file=current_name,
-                )
-                combined_supplier_rows.update(supplier_unique)
-                input_files += 1
-                input_rows = int(write_summary.get("activity_rows_read", 0))
-                output_rows = int(write_summary.get("activity_rows", 0))
-                total_input_rows += input_rows
-                total_output_rows += output_rows
-                supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
-                supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
-                supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
-                supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
-                supplier_usage_split_source_total += int(write_summary.get("supplier_usage_split_source_rows", 0))
-                supplier_usage_split_output_total += int(write_summary.get("supplier_usage_split_output_rows", 0))
-                supplier_usage_total_before_split += float(write_summary.get("supplier_usage_total_before_split", 0.0) or 0.0)
-                supplier_usage_total_after_split += float(write_summary.get("supplier_usage_total_after_split", 0.0) or 0.0)
-                supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
-                out_zip.write(output_path, arcname=output_path.name)
-                generated_files.append({
-                    "source_filename": current_name,
-                    "filename": output_path.name,
-                    "input_rows": input_rows,
-                    "activity_rows": output_rows,
-                    "raw_materials": int(write_summary.get("raw_materials", 0)),
-                    "supplier_matched_rows": int(write_summary.get("supplier_matched_rows", 0)),
-                    "supplier_expanded_rows": int(write_summary.get("supplier_expanded_rows", 0)),
-                    "supplier_name_missing_rows": int(write_summary.get("supplier_name_missing_rows", 0)),
-                    "supplier_usage_split_source_rows": int(write_summary.get("supplier_usage_split_source_rows", 0)),
-                    "supplier_usage_split_output_rows": int(write_summary.get("supplier_usage_split_output_rows", 0)),
-                    "supplier_usage_total_before_split": float(write_summary.get("supplier_usage_total_before_split", 0.0) or 0.0),
-                    "supplier_usage_total_after_split": float(write_summary.get("supplier_usage_total_after_split", 0.0) or 0.0),
-                })
+                with zipfile.ZipFile(partial_zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as out_zip:
+                    for idx, member in enumerate(members, start=1):
+                        current_name = Path(member).name
+                        source_file = tmpdir / f"{idx:03d}_{current_name}"
+                        with source_bundle.open(member, "r") as src, source_file.open("wb") as dst:
+                            shutil.copyfileobj(src, dst, length=M2C_COPY_BUFFER_BYTES)
 
-            supplier_bulk_summary: Dict[str, Any] = {}
-            if supplier_bulk_template_path and supplier_bulk_output_path:
-                if progress_callback:
-                    progress_callback(step="Writing Supplier Bulk Create file", processed=total_output_rows, total=total_output_rows, progress=92)
-                supplier_bulk_summary = _write_supplier_bulk_create_file_from_unique_rows(combined_supplier_rows, supplier_bulk_template_path, supplier_bulk_output_path)
-                supplier_bulk_filename = str(supplier_bulk_summary.get("supplier_bulk_filename") or "")
-                if supplier_bulk_filename:
-                    supplier_bulk_path = Path(supplier_bulk_output_path)
-                    if supplier_bulk_path.exists():
-                        out_zip.write(supplier_bulk_path, arcname=supplier_bulk_path.name)
+                        if progress_callback:
+                            progress_callback(
+                                step=f"Streaming OpenXML Supplier mapping: {current_name}",
+                                processed=0,
+                                total=0,
+                                progress=min(88, 12 + int((idx - 1) / max(len(members), 1) * 72)),
+                                current_file=current_name,
+                            )
+                        safe_name = _sanitize_filename_part(Path(member).stem)
+                        output_path = tmpdir / f"supplier_mapped_{safe_name}_{token}.xlsx"
+                        write_summary, supplier_unique = _write_supplier_mapped_bulk_streaming(
+                            source_file=source_file,
+                            output_path=output_path,
+                            supplier_map=supplier_map,
+                            tbc_supplier_map=tbc_supplier_map,
+                            progress_callback=progress_callback,
+                            current_file=current_name,
+                        )
+                        combined_supplier_rows.update(supplier_unique)
+                        input_files += 1
+                        input_rows = int(write_summary.get("activity_rows_read", 0))
+                        output_rows = int(write_summary.get("activity_rows", 0))
+                        total_input_rows += input_rows
+                        total_output_rows += output_rows
+                        supplier_matched_total += int(write_summary.get("supplier_matched_rows", 0))
+                        supplier_expanded_total += int(write_summary.get("supplier_expanded_rows", 0))
+                        supplier_name_matched_total += int(write_summary.get("supplier_name_matched_rows", 0))
+                        supplier_name_missing_total += int(write_summary.get("supplier_name_missing_rows", 0))
+                        supplier_usage_split_source_total += int(write_summary.get("supplier_usage_split_source_rows", 0))
+                        supplier_usage_split_output_total += int(write_summary.get("supplier_usage_split_output_rows", 0))
+                        supplier_usage_total_before_split += float(write_summary.get("supplier_usage_total_before_split", 0.0) or 0.0)
+                        supplier_usage_total_after_split += float(write_summary.get("supplier_usage_total_after_split", 0.0) or 0.0)
+                        supplier_options_total = max(supplier_options_total, int(write_summary.get("supplier_name_options", 0)))
+                        m2c_writer_seconds_total += float(write_summary.get("m2c_total_seconds", 0.0) or 0.0)
+                        m2c_package_seconds_total += float(write_summary.get("m2c_package_seconds", 0.0) or 0.0)
+                        out_zip.write(output_path, arcname=output_path.name, compress_type=zipfile.ZIP_DEFLATED)
+                        generated_files.append({
+                            "source_filename": current_name,
+                            "filename": output_path.name,
+                            "input_rows": input_rows,
+                            "activity_rows": output_rows,
+                            "raw_materials": int(write_summary.get("raw_materials", 0)),
+                            "supplier_matched_rows": int(write_summary.get("supplier_matched_rows", 0)),
+                            "supplier_expanded_rows": int(write_summary.get("supplier_expanded_rows", 0)),
+                            "supplier_name_missing_rows": int(write_summary.get("supplier_name_missing_rows", 0)),
+                            "supplier_usage_split_source_rows": int(write_summary.get("supplier_usage_split_source_rows", 0)),
+                            "supplier_usage_split_output_rows": int(write_summary.get("supplier_usage_split_output_rows", 0)),
+                            "supplier_usage_total_before_split": float(write_summary.get("supplier_usage_total_before_split", 0.0) or 0.0),
+                            "supplier_usage_total_after_split": float(write_summary.get("supplier_usage_total_after_split", 0.0) or 0.0),
+                            "m2c_writer": write_summary.get("m2c_writer", "complete_streaming_openxml_package"),
+                            "m2c_total_seconds": float(write_summary.get("m2c_total_seconds", 0.0) or 0.0),
+                            "m2c_package_seconds": float(write_summary.get("m2c_package_seconds", 0.0) or 0.0),
+                        })
+                        output_path.unlink(missing_ok=True)
+                        source_file.unlink(missing_ok=True)
+
+                    supplier_bulk_summary: Dict[str, Any] = {}
+                    if supplier_bulk_template_path and supplier_bulk_output_path:
+                        if progress_callback:
+                            progress_callback(
+                                step="Writing Supplier Bulk Create file",
+                                processed=total_output_rows,
+                                total=total_output_rows,
+                                progress=94,
+                            )
+                        supplier_bulk_summary = _write_supplier_bulk_create_file_from_unique_rows(
+                            combined_supplier_rows,
+                            supplier_bulk_template_path,
+                            supplier_bulk_output_path,
+                        )
+                        supplier_bulk_filename = str(supplier_bulk_summary.get("supplier_bulk_filename") or "")
+                        if supplier_bulk_filename:
+                            supplier_bulk_path = Path(supplier_bulk_output_path)
+                            if supplier_bulk_path.exists():
+                                out_zip.write(supplier_bulk_path, arcname=supplier_bulk_path.name, compress_type=zipfile.ZIP_DEFLATED)
+        os.replace(partial_zip_path, zip_path)
+    except Exception:
+        partial_zip_path.unlink(missing_ok=True)
+        raise
 
     result: Dict[str, Any] = {
         "output_filename": zip_filename,
         "download_url": f"/download/{zip_filename}",
         "module2b_raw_bulk_source_filename": source_zip.name,
-        "module2c_rule": "Read Module 2B ZIP -> stream supplier mapping -> expand one row per unique supplier -> divide original usage equally by supplier count.",
+        "module2c_rule": "Read Module 2B ZIP -> direct worksheet XML streaming -> supplier expansion -> direct OpenXML package output; original usage is divided equally by supplier count.",
         "module2c_large_dataset_mode": True,
-        "module2c_template_policy": "Row-2 headers and hidden AB~AI formulas are preserved from row 3 through each actual data row (maximum 50,000); N is fixed to Yes.",
+        "module2c_writer": "complete_streaming_openxml_package",
+        "module2c_outer_zip": "ZIP_DEFLATED_level_1",
+        "module2c_xlsx_compression_level": int(M2C_XLSX_COMPRESSION_LEVEL),
+        "module2c_template_policy": "Row-2 headers and row-3 styles plus hidden AB~AI formulas are preserved; full dropdown/validation package is restored by M3A.",
         "input_files": int(input_files),
         "input_rows": int(total_input_rows),
         "activity_rows": int(total_output_rows),
@@ -5917,6 +6618,9 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
         "supplier_name_options": int(supplier_options_total),
         "supplier_status": "Generated",
         "supplier_bulk_generated": False,
+        "m2c_writer_seconds": round(m2c_writer_seconds_total, 3),
+        "m2c_package_seconds": round(m2c_package_seconds_total, 3),
+        "m2c_total_seconds": round(time.perf_counter() - started, 3),
     }
     result.update(supplier_summary)
     if 'supplier_bulk_summary' in locals():
@@ -5927,4 +6631,4 @@ def generate_supplier_mapped_raw_material_bulk_from_zip(
     return result
 
 
-BOM_FORMATTER_VERSION = "DIP_V28_5_DROPDOWN_CACHE_LOCALIZED_20260723"
+BOM_FORMATTER_VERSION = "DIP_V29_M2C_STREAMING_OPENXML_20260724"

@@ -573,6 +573,7 @@ def _run_module2c_supplier_mapping_job(
     job_id: str,
     raw_bulk_zip_path: Path,
     supplier_paths: list[Path],
+    supplier_bulk_template_path: Path,
     output_dir: Path,
     token: str,
     step1_source: Dict[str, str],
@@ -607,15 +608,17 @@ def _run_module2c_supplier_mapping_job(
             module1_step1_source=step1_source,
             module2b_raw_bulk_source=raw_bulk_source,
             supplier_upload_files=len(supplier_paths),
+            supplier_bulk_template_filename=supplier_bulk_template_path.name,
         )
-        supplier_bulk_template_path = BASE_DIR / "templates" / "supplier_bulk_create_template_v1.xlsx"
+        if not supplier_bulk_template_path.exists():
+            raise FileNotFoundError(f"找不到已上傳的 Supplier Bulk Template：{supplier_bulk_template_path.name}")
         supplier_bulk_output_path = output_dir / f"supplier_bulk_create_{token}.xlsx"
         summary = generate_supplier_mapped_raw_material_bulk_from_zip(
             raw_material_bulk_zip_path=raw_bulk_zip_path,
             supplier_paths=supplier_paths,
             output_dir=output_dir,
             token=token,
-            supplier_bulk_template_path=supplier_bulk_template_path if supplier_bulk_template_path.exists() else None,
+            supplier_bulk_template_path=supplier_bulk_template_path,
             supplier_bulk_output_path=supplier_bulk_output_path,
             progress_callback=progress_callback,
         )
@@ -623,8 +626,9 @@ def _run_module2c_supplier_mapping_job(
         if output_path.exists():
             MODULE2_RAW_MATERIAL_BULK_PATH = output_path
             _register_workspace_output(output_path, workspace_id)
-            shutil.copy2(output_path, MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH)
-            _register_workspace_output(MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH, workspace_id)
+            summary["latest_alias_mode"] = _refresh_latest_output_alias(output_path, MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH)
+            if MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH.exists() or MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH.is_symlink():
+                _register_workspace_output(MODULE2C_SUPPLIER_MAPPED_BULK_ZIP_LATEST_PATH, workspace_id)
         if supplier_bulk_output_path.exists():
             _register_workspace_output(supplier_bulk_output_path, workspace_id)
         summary["module1_step1_source"] = step1_source
@@ -4075,6 +4079,14 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
 
     if not supplier_uploads:
         return JSONResponse({"ok": False, "message": "請上傳供應商資料 Excel 檔案。"}, status_code=400)
+
+    supplier_bulk_template_upload = form.get("module2c_supplier_bulk_template") or form.get("supplier_bulk_template_file")
+    if not is_upload_file_like(supplier_bulk_template_upload):
+        return JSONResponse({"ok": False, "message": "請上傳正式 Supplier Bulk Template。"}, status_code=400)
+    supplier_bulk_template_filename = str(getattr(supplier_bulk_template_upload, "filename", "") or "supplier_bulk_template.xlsx")
+    if not supplier_bulk_template_filename.lower().endswith((".xlsx", ".xlsm")):
+        return JSONResponse({"ok": False, "message": f"{supplier_bulk_template_filename} 不是有效的 Supplier Bulk Template（僅支援 .xlsx/.xlsm）。"}, status_code=400)
+
     for supplier_file in supplier_uploads:
         filename = str(getattr(supplier_file, "filename", "") or "")
         if not filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
@@ -4096,6 +4108,9 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
         supplier_path = UPLOAD_DIR / f"module2c_supplier_{token}_{idx}_{Path(filename).name}"
         supplier_path.write_bytes(await supplier_file.read())
         supplier_paths.append(supplier_path)
+
+    supplier_bulk_template_path = UPLOAD_DIR / f"module2c_supplier_bulk_template_{token}_{Path(supplier_bulk_template_filename).name}"
+    supplier_bulk_template_path.write_bytes(await supplier_bulk_template_upload.read())
 
     step1_source = {
         "filename": step1_path.name,
@@ -4121,6 +4136,8 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
         module1_step1_source=step1_source,
         module2b_raw_bulk_source=raw_bulk_source,
         supplier_upload_files=len(supplier_paths),
+        supplier_bulk_template_filename=supplier_bulk_template_path.name,
+        supplier_bulk_template_original_filename=supplier_bulk_template_filename,
         workspace_id=workspace_id,
     )
     MODULE2C_EXECUTOR.submit(
@@ -4128,6 +4145,7 @@ async def module2c_supplier_mapping_bulk_job(request: Request):
         job_id,
         raw_bulk_zip,
         supplier_paths,
+        supplier_bulk_template_path,
         OUTPUT_DIR,
         token,
         step1_source,
