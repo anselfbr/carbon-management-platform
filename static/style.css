@@ -4076,3 +4076,29 @@ body.m5-active .content{background:#061a2a}
   .m5-dashboard-head h2 { font-size: 27px; }
   .m5-dashboard-head p { font-size: 14px; }
 }
+
+/* Module 5 streaming analysis progress */
+.m5-progress{margin:10px 0 4px;padding:10px 14px;border:1px solid rgba(61,214,255,.18);border-radius:12px;background:rgba(5,20,35,.56);box-shadow:inset 0 0 20px rgba(14,165,233,.035)}
+.m5-progress-track{height:8px;overflow:hidden;border-radius:999px;background:rgba(148,163,184,.16)}
+.m5-progress-track span{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#0ea5e9,#22d3ee,#34d399);box-shadow:0 0 14px rgba(34,211,238,.55);transition:width .35s ease}
+.m5-progress-meta{display:flex;justify-content:space-between;gap:16px;margin-top:7px;color:#9fb7c9;font-size:12px}
+#m5ProgressPhase{color:#d7f8ff;font-weight:650}
+@media(max-width:720px){.m5-progress-meta{align-items:flex-start;flex-direction:column;gap:3px}}
+
+/* Module 5 floating analysis overlay — 2026-07-25 */
+.m5-analysis-overlay{position:fixed;inset:0;z-index:2600;display:grid;place-items:center;padding:24px;background:rgba(1,10,18,.64);backdrop-filter:blur(8px);opacity:1;transition:opacity .28s ease,visibility .28s ease}
+.m5-analysis-overlay.hidden{display:none!important}.m5-analysis-overlay.is-complete{opacity:0;visibility:hidden}
+.m5-analysis-dialog{position:relative;width:min(430px,calc(100vw - 36px));padding:34px 34px 28px;border:1px solid rgba(68,222,242,.45);border-radius:20px;background:radial-gradient(circle at 50% 0,rgba(17,145,171,.2),transparent 42%),linear-gradient(150deg,rgba(4,26,42,.985),rgba(7,45,64,.985));box-shadow:0 30px 90px rgba(0,0,0,.58),0 0 42px rgba(34,211,238,.11),inset 0 1px rgba(255,255,255,.045);text-align:center;color:#eaf9ff;overflow:hidden}
+.m5-analysis-dialog:before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(110deg,transparent 20%,rgba(103,232,249,.055) 45%,transparent 70%);transform:translateX(-100%);animation:m5OverlaySweep 2.8s ease-in-out infinite}
+.m5-analysis-orbit{position:relative;width:70px;height:70px;margin:0 auto 18px;border-radius:50%;border:2px solid rgba(81,222,239,.16);box-shadow:inset 0 0 24px rgba(34,211,238,.08),0 0 28px rgba(34,211,238,.08)}
+.m5-analysis-orbit:before,.m5-analysis-orbit:after{content:"";position:absolute;border-radius:50%;inset:8px;border:2px solid transparent;border-top-color:#54e6f4;border-right-color:rgba(84,230,244,.35);animation:m5OverlaySpin 1.05s linear infinite}.m5-analysis-orbit:after{inset:19px;border-top-color:#34d399;border-right-color:transparent;animation-duration:.78s;animation-direction:reverse}
+.m5-analysis-orbit span{position:absolute;inset:28px;border-radius:50%;background:#67e8f9;box-shadow:0 0 18px rgba(103,232,249,.8);animation:m5OverlayPulse 1.2s ease-in-out infinite}.m5-analysis-orbit i{position:absolute;width:8px;height:8px;border-radius:50%;right:4px;top:17px;background:#34d399;box-shadow:0 0 14px rgba(52,211,153,.9)}
+.m5-analysis-kicker{display:block;margin-bottom:8px;color:#57e6f3;font-size:10px;font-weight:900;letter-spacing:.22em}.m5-analysis-dialog h3{position:relative;margin:0;color:#f4fbff;font-size:21px;line-height:1.25}.m5-analysis-dialog>p{position:relative;margin:8px 0 0;color:#a9c7d5;font-size:13px;line-height:1.55}
+.m5-analysis-progress{position:relative;height:7px;margin:24px 0 10px;overflow:hidden;border-radius:999px;background:rgba(148,163,184,.14);box-shadow:inset 0 1px 5px rgba(0,0,0,.28)}.m5-analysis-progress span{display:block;width:2%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#0ea5e9,#22d3ee 55%,#34d399);box-shadow:0 0 16px rgba(34,211,238,.68);transition:width .35s ease}
+.m5-analysis-stats{position:relative;display:flex;justify-content:space-between;gap:12px;color:#9bb9c8;font-size:11px}.m5-analysis-stats strong{color:#5eeaf6;font-size:12px}.m5-analysis-dialog .m5-analysis-hint{margin-top:18px;color:#6f94a7;font-size:10px}.m5-analysis-close{position:relative;margin-top:18px;min-width:120px;padding:9px 18px;border:1px solid rgba(73,211,232,.5);border-radius:999px;background:rgba(8,103,128,.55);color:#e7fbff;font-weight:800;cursor:pointer}.m5-analysis-close:hover{background:rgba(10,137,164,.72);box-shadow:0 0 20px rgba(34,211,238,.15)}
+.m5-analysis-overlay.is-error .m5-analysis-dialog{border-color:rgba(248,113,113,.48);box-shadow:0 30px 90px rgba(0,0,0,.58),0 0 36px rgba(248,113,113,.1)}.m5-analysis-overlay.is-error .m5-analysis-orbit:before,.m5-analysis-overlay.is-error .m5-analysis-orbit:after{animation:none;border-color:rgba(248,113,113,.32)}.m5-analysis-overlay.is-error .m5-analysis-orbit span{background:#f87171;box-shadow:0 0 18px rgba(248,113,113,.75);animation:none}.m5-analysis-overlay.is-error .m5-analysis-kicker,.m5-analysis-overlay.is-error .m5-analysis-stats strong{color:#fca5a5}
+body.m5-analysis-busy{overflow:hidden}
+/* Keep operational progress out of the dashboard document flow. */
+.m5-progress{display:none!important}
+@keyframes m5OverlaySpin{to{transform:rotate(360deg)}}@keyframes m5OverlayPulse{50%{transform:scale(.72);opacity:.58}}@keyframes m5OverlaySweep{0%,55%{transform:translateX(-110%)}100%{transform:translateX(110%)}}
+@media(max-width:560px){.m5-analysis-dialog{padding:28px 22px 24px}.m5-analysis-dialog h3{font-size:19px}.m5-analysis-stats{align-items:center;flex-direction:column;gap:5px}}

@@ -4382,6 +4382,134 @@ async def process_bom_expansion(request: Request):
 # Module 5 · Carbon Analytics Center
 from module5_analytics import analyze_bulk_many
 
+MODULE5_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+MODULE5_JOBS: Dict[str, Dict[str, Any]] = {}
+MODULE5_JOB_LOCK = Lock()
+
+
+def _module5_job_snapshot(job_id: str) -> Dict[str, Any]:
+    with MODULE5_JOB_LOCK:
+        job = MODULE5_JOBS.get(job_id)
+        if not job:
+            return {}
+        return {key: value for key, value in job.items() if key not in {"result", "saved_paths"}}
+
+
+def _run_module5_job(job_id: str) -> None:
+    with MODULE5_JOB_LOCK:
+        job = MODULE5_JOBS[job_id]
+        saved_paths = list(job.get("saved_paths", []))
+        upload_count = int(job.get("upload_count", 0))
+        job.update({"state": "running", "phase": "scan", "message": "準備分析檔案…", "started_at": time.time()})
+
+    def on_progress(payload: Dict[str, Any]) -> None:
+        with MODULE5_JOB_LOCK:
+            current = MODULE5_JOBS.get(job_id)
+            if current is None:
+                return
+            current.update(payload)
+            current["state"] = "running"
+            current["updated_at"] = time.time()
+
+    try:
+        result = analyze_bulk_many(saved_paths, progress_callback=on_progress)
+        result["summary"]["upload_count"] = upload_count
+        with MODULE5_JOB_LOCK:
+            MODULE5_JOBS[job_id].update({
+                "state": "done",
+                "phase": "done",
+                "message": "分析完成",
+                "result": result,
+                "finished_at": time.time(),
+                "updated_at": time.time(),
+            })
+    except Exception as exc:
+        traceback.print_exc()
+        with MODULE5_JOB_LOCK:
+            MODULE5_JOBS[job_id].update({
+                "state": "error",
+                "phase": "error",
+                "message": str(exc),
+                "finished_at": time.time(),
+                "updated_at": time.time(),
+            })
+    finally:
+        for saved in saved_paths:
+            try:
+                Path(saved).unlink(missing_ok=True)
+            except OSError:
+                pass
+        with MODULE5_JOB_LOCK:
+            if job_id in MODULE5_JOBS:
+                MODULE5_JOBS[job_id]["saved_paths"] = []
+
+
+@app.post("/module5/analyze/start")
+async def module5_analyze_start(files: list[UploadFile] = File(...)):
+    if not files:
+        return JSONResponse({"ok": False, "message": "請至少上傳一個分析檔案。"}, status_code=400)
+    saved_paths: list[Path] = []
+    try:
+        for upload in files:
+            suffix = Path(upload.filename or "bulk.xlsx").suffix.lower()
+            if suffix not in {".zip", ".xlsx", ".xlsm"}:
+                raise ValueError(f"{upload.filename}：僅支援 ZIP、XLSX、XLSM。")
+            saved = UPLOAD_DIR / f"module5_{uuid.uuid4().hex}{suffix}"
+            with saved.open("wb") as out:
+                shutil.copyfileobj(upload.file, out, length=1024 * 1024)
+            saved_paths.append(saved)
+        job_id = uuid.uuid4().hex
+        with MODULE5_JOB_LOCK:
+            MODULE5_JOBS[job_id] = {
+                "job_id": job_id,
+                "state": "queued",
+                "phase": "queued",
+                "message": "已加入分析佇列",
+                "upload_count": len(files),
+                "saved_paths": saved_paths,
+                "file_current": 0,
+                "file_total": 0,
+                "rows_current": 0,
+                "rows_total": 0,
+                "valid_rows": 0,
+                "invalid_rows": 0,
+                "created_at": time.time(),
+                "updated_at": time.time(),
+            }
+        MODULE5_EXECUTOR.submit(_run_module5_job, job_id)
+        return {"ok": True, "job_id": job_id}
+    except Exception as exc:
+        for saved in saved_paths:
+            try:
+                saved.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+
+
+@app.get("/module5/analyze/status/{job_id}")
+def module5_analyze_status(job_id: str):
+    snapshot = _module5_job_snapshot(job_id)
+    if not snapshot:
+        return JSONResponse({"ok": False, "message": "找不到分析工作。"}, status_code=404)
+    return {"ok": True, **snapshot}
+
+
+@app.get("/module5/analyze/result/{job_id}")
+def module5_analyze_result(job_id: str):
+    with MODULE5_JOB_LOCK:
+        job = MODULE5_JOBS.get(job_id)
+        if not job:
+            return JSONResponse({"ok": False, "message": "找不到分析工作。"}, status_code=404)
+        state = job.get("state")
+        if state == "error":
+            return JSONResponse({"ok": False, "message": job.get("message", "分析失敗")}, status_code=400)
+        if state != "done":
+            return JSONResponse({"ok": False, "message": "分析尚未完成。"}, status_code=409)
+        return JSONResponse(job["result"])
+
+
+# Backward-compatible synchronous endpoint. New UI uses the job endpoints above.
 @app.post("/module5/analyze")
 async def module5_analyze(files: list[UploadFile] = File(...)):
     if not files:
@@ -4394,7 +4522,7 @@ async def module5_analyze(files: list[UploadFile] = File(...)):
                 return JSONResponse({"ok": False, "message": f"{upload.filename}：僅支援 ZIP、XLSX、XLSM。"}, status_code=400)
             saved = UPLOAD_DIR / f"module5_{uuid.uuid4().hex}{suffix}"
             with saved.open("wb") as out:
-                shutil.copyfileobj(upload.file, out)
+                shutil.copyfileobj(upload.file, out, length=1024 * 1024)
             saved_paths.append(saved)
         result = analyze_bulk_many(saved_paths)
         result["summary"]["upload_count"] = len(files)
@@ -4404,5 +4532,7 @@ async def module5_analyze(files: list[UploadFile] = File(...)):
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
     finally:
         for saved in saved_paths:
-            try: saved.unlink(missing_ok=True)
-            except OSError: pass
+            try:
+                saved.unlink(missing_ok=True)
+            except OSError:
+                pass
